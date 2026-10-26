@@ -338,6 +338,7 @@ try {
   await page.reload();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '听书音色：旁白', exact: true }).click();
+  await page.getByRole('radio', { name: '选择 Ryan', exact: true, checked: true }).waitFor();
   assert.equal(await page.getByRole('radio', { name: '选择 Ryan', exact: true }).getAttribute('aria-checked'), 'true');
   await page.getByText('完成', { exact: true }).click();
   await page.getByRole('button', { name: '教材', exact: true }).click();

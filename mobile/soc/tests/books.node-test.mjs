@@ -258,3 +258,17 @@ test('queued page transitions trigger deferred analysis without a new play/load 
   engine.tick(0.2, 8, true, false, 'book-a/2/0/true');
   assert.equal(engine.getState().bookmark.page, 2); assert.ok(starts.includes(2)); engine.dispose();
 });
+
+test('changing voice while paused replaces the native source without starting playback', async () => {
+  let voice = 'Cherry', starts = 0, clears = 0;
+  const loads = [];
+  const { engine } = fixture({
+    audio: async () => ({ uri: voice, duration: 8 }),
+    player: { async load(uri) { loads.push(uri); }, clear() { clears++; }, play() { starts++; }, pause() {}, async seek() {}, rate() {}, release() {} },
+  });
+  await engine.open(); await engine.play(); engine.pause();
+  voice = 'Ryan'; await engine.refreshAudio();
+  assert.equal(loads.at(-1), 'Ryan'); assert.equal(starts, 1); assert.equal(clears, 1); assert.equal(engine.getState().status, 'paused');
+  // A subsequent native play event now refers to the replacement, rather than the old voice.
+  engine.tick(1, 8, true, false); assert.equal(engine.getState().status, 'playing'); engine.dispose();
+});

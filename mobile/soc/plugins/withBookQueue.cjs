@@ -42,6 +42,9 @@ module.exports = function withBookQueue(config) {
       patch(path.join(base, 'AudioModule.kt'), [
         ['    Class(AudioPlayer::class) {', `    // Soc book queue
     Class(AudioPlayer::class) {
+      Function("bookClear") { player: AudioPlayer ->
+        runOnMain { player.ref.pause(); player.ref.clearMediaItems(); player.bookKeys.clear(); player.bookRates.clear() }
+      }
       Function("bookReplace") { player: AudioPlayer, source: AudioSource, key: String, rate: Float ->
         runOnMain {
           createMediaItem(source)?.let { media ->
@@ -73,6 +76,9 @@ module.exports = function withBookQueue(config) {
         ['  var shouldCorrectPitch = true', `  // Soc book queue
   private var bookEntries: [ObjectIdentifier: (key: String, rate: Float)] = [:]
   private var lastBookKey = ""
+  func bookClear() {
+    ref.pause(); (ref as? AVQueuePlayer)?.removeAllItems(); bookEntries.removeAll(); lastBookKey = ""
+  }
   var bookKey: String {
     guard let item = ref.currentItem else { return lastBookKey }
     return bookEntries[ObjectIdentifier(item)]?.key ?? ""
@@ -126,6 +132,7 @@ module.exports = function withBookQueue(config) {
       patch(path.join(base, 'AudioModule.swift'), [
         ['    Class(AudioPlayer.self) {', `    // Soc book queue
     Class(AudioPlayer.self) {
+      Function("bookClear") { (player: AudioPlayer) in player.bookClear() }
       Function("bookReplace") { (player: AudioPlayer, source: AudioSource, key: String, rate: Float) in
         player.bookReplace(source: source, key: key, rate: rate)
       }

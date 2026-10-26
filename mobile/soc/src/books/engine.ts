@@ -6,6 +6,7 @@ export type BookState = { page: BookPage | null; bookmark: Bookmark | null; stat
 export type BookAudio = {
   load(uri: string, seconds: number, rate: number, key?: string): Promise<void>;
   enqueue?(uri: string, key: string, rate: number): void;
+  clear?(): void;
   play(): void; pause(): void; seek(seconds: number): Promise<void>; rate(value: number): void;
   release(): void;
 };
@@ -159,16 +160,16 @@ export class BookEngine {
       if (play) await this.play();
     } catch (error) { if (this.current(seq)) this.fail(error); }
   }
-  async play() {
+  async play(autoplay = true) {
     const { page, bookmark: b } = this.state;
     if (!page || !b || this.disposed || this.state.status === 'loading') return;
     if (this.state.status === 'ended') { await this.go(1, 0, true); return; }
-    this.deps.focus();
+    if (autoplay) this.deps.focus();
     if (!page.passages.length) {
-      if (page.page < page.total) { await this.go(page.page + 1, 0, true); return; }
+      if (page.page < page.total) { await this.go(page.page + 1, 0, autoplay); return; }
       this.patch({ status: 'ended' }); return;
     }
-    if (!isSpeakable(page.passages[b.passage].text)) { await this.next(1); return; }
+    if (!isSpeakable(page.passages[b.passage].text)) { if (autoplay) await this.next(1); return; }
     const seq = this.sequence;
     const key = this.key(page, b.passage);
     this.prefetchFailed.delete(key);
@@ -185,10 +186,10 @@ export class BookEngine {
         this.queue = [{ page, index: b.passage, key, clip }]; this.timelineBase = 0;
       }
       this.deps.player.rate((this.state.bookmark?.speed || b.speed) * toneRate(page.passages[b.passage].tone));
-      this.deps.player.play();
+      if (autoplay) this.deps.player.play();
       this.movedAt = Date.now(); this.lastPosition = b.seconds;
-      this.patch({ status: 'playing', duration: clip.duration, buffered: this.bufferSeconds() }); this.transition = false;
-      this.deps.started?.(page, this.controller.signal);
+      this.patch({ status: autoplay ? 'playing' : 'paused', duration: clip.duration, buffered: this.bufferSeconds() }); this.transition = false;
+      if (autoplay) this.deps.started?.(page, this.controller.signal);
       // Never await LLM analysis or later audio before starting the current phrase.
       void this.fill();
     } catch (error) { this.jobs.delete(key); if (this.current(seq)) this.fail(error); }
@@ -283,8 +284,9 @@ export class BookEngine {
     if (this.disposed) return;
     const playing = this.state.status === 'playing' || this.state.status === 'loading';
     this.invalidate(); this.clearBuffer();
+    this.deps.player.clear?.();
     this.patch({ status: 'paused', duration: 0, buffered: 0, error: '', bookmark: this.state.bookmark ? { ...this.state.bookmark, seconds: 0 } : null });
-    if (playing && this.state.page) await this.play();
+    if (this.state.page) await this.play(playing);
   }
   async mode(dramatic: boolean) {
     const b = this.state.bookmark;

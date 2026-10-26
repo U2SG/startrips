@@ -12,6 +12,7 @@ type Player = {
   bookReplace?(source: { uri: string }, key: string, rate: number): void;
   bookAppend?(source: { uri: string }, key: string, rate: number): void;
   bookRate?(rate: number): void;
+  bookClear?(): void;
 };
 
 /** Keep the native media session alive across phrases and page/LLM gaps. */
@@ -87,6 +88,12 @@ export function createBookAudio(deps: {
       if (released || !player) return;
       if (player.bookAppend) player.bookAppend({ uri }, key, speed);
       else pending.push({ uri, key, rate: speed });
+    },
+    clear() {
+      ++generation; loading = false; wanted = false; starting = false; pending = []; currentKey = '';
+      player?.pause();
+      if (player?.bookClear) player.bookClear();
+      else player?.replace({ uri: '' });
     },
     play() { if (released) return; deps.guard(); starting = true; wanted = true; player?.setActiveForLockScreen(true, deps.metadata()); player?.play(); },
     pause() { ++generation; loading = false; starting = false; wanted = false; player?.pause(); },
