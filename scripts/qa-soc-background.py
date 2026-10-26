@@ -75,4 +75,6 @@ finally:
     (root / 'background-requests.json').write_text(json.dumps(requests, indent=2), encoding='utf-8')
     adb('shell', 'input', 'keyevent', 'KEYCODE_WAKEUP')
     adb('shell', 'wm', 'dismiss-keyguard')
+    adb('shell', 'uiautomator', 'dump', '/sdcard/soc-background.xml')
+    (root / 'background-ui.xml').write_text(adb('shell', 'cat', '/sdcard/soc-background.xml'), encoding='utf-8')
     server.shutdown()

@@ -15,6 +15,8 @@ export default function AudioQueueQA() {
     const audio = createBookAudio({
       create: () => {
         const player = createAudioPlayer(null, { updateInterval: 250, keepAudioSessionActive: true });
+        console.info('SOC_QA_PLAYER', typeof (player as unknown as { bookAppend?: unknown }).bookAppend);
+        player.addListener('playbackStatusUpdate', (s) => console.info('SOC_QA_NATIVE', JSON.stringify(s)));
         if (!(player as unknown as { bookAppend?: unknown }).bookAppend) throw new Error('Native book queue missing');
         return player;
       },
@@ -32,11 +34,14 @@ export default function AudioQueueQA() {
       },
       async audio(page, index, signal) {
         const uri = await files.storeAudio(`ci-${page.page}-${index}`, `http://10.0.2.2:18991/clip/${page.page}/${index}.wav`, signal);
-        return { uri, duration: await files.audioDuration(uri) };
+        console.info('SOC_QA_FILE', uri);
+        const duration = await files.audioDuration(uri); console.info('SOC_QA_DURATION', duration);
+        return { uri, duration };
       },
     });
     const unsubscribe = engine.subscribe(() => {
       const state = engine.getState();
+      console.info('SOC_QA_ENGINE', JSON.stringify({ status: state.status, error: state.error, passage: state.bookmark?.passage }));
       setLabel(state.error || `${state.status} ${state.bookmark?.page}/${state.bookmark?.passage}`);
     });
     void engine.open().then(() => engine.play());
