@@ -4,6 +4,7 @@ const { withDangerousMod } = require('expo/config-plugins');
 
 // Expo 56's AudioPlayer already owns the foreground media session (and AVQueuePlayer).
 // Add append-only book tracks to that player so native code advances while JS is asleep.
+// package.json opts expo-audio out of precompiled binaries on both native platforms.
 // Fail on SDK drift rather than silently shipping the old one-phrase implementation.
 function patch(file, edits) {
   let source = fs.readFileSync(file, 'utf8');
