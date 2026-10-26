@@ -23,12 +23,12 @@ export function BookPlayer({ expanded, onExpand, onCollapse, busy, error, retry 
   </>;
 }
 
-function Control({ children, label, onPress, primary, disabled, selected, choice, toggle }: {
-  children: React.ReactNode; label: string; onPress(): void; primary?: boolean; disabled?: boolean; selected?: boolean; choice?: boolean; toggle?: boolean;
+function Control({ children, label, onPress, primary, disabled, selected, choice, toggle, expanded }: {
+  children: React.ReactNode; label: string; onPress(): void; primary?: boolean; disabled?: boolean; selected?: boolean; choice?: boolean; toggle?: boolean; expanded?: boolean;
 }) {
   const { ink } = useTheme();
   return <Pressable accessibilityRole={choice ? 'radio' : toggle ? 'switch' : 'button'} accessibilityLabel={label} accessibilityState={{ disabled: !!disabled, checked: choice || toggle ? !!selected : undefined }}
-    aria-checked={choice || toggle ? !!selected : undefined} aria-disabled={!!disabled}
+    aria-checked={choice || toggle ? !!selected : undefined} aria-disabled={!!disabled} aria-expanded={expanded}
     disabled={disabled} onPress={onPress} style={({ pressed }) => ({
       minHeight: primary ? 64 : 44, minWidth: primary ? 64 : 44, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center',
       borderRadius: primary ? 32 : 12, backgroundColor: primary ? ink.accent : selected ? ink.accentSoft : 'transparent', opacity: disabled || pressed ? 0.45 : 1,
@@ -65,6 +65,7 @@ function Reader({ book, onCollapse }: { book: ListeningBook; onCollapse(): void 
   const positions = useRef<Record<number, number>>({});
   const [number, setNumber] = useState('');
   const [settings, setSettings] = useState(false);
+  const [speedOpen, setSpeedOpen] = useState(false);
   const [trackWidth, setTrackWidth] = useState(1);
   const [jumpError, setJumpError] = useState('');
   const [downloadOpen, setDownloadOpen] = useState(false);
@@ -89,7 +90,7 @@ function Reader({ book, onCollapse }: { book: ListeningBook; onCollapse(): void 
     <View style={[styles.row, styles.header]}>
       <Control label="收起听书" onPress={onCollapse}>⌄</Control>
       <Text numberOfLines={1} style={{ flex: 1, textAlign: 'center', color: ink.fg, fontFamily: font.bold, fontSize: 17 }}>{book.textbook.title}</Text>
-      <Control label="听书设置" selected={settings} onPress={() => setSettings(!settings)}>···</Control>
+      <Control label="听书设置" selected={settings} onPress={() => { setSettings(!settings); setSpeedOpen(false); }}>···</Control>
     </View>
     <ScrollView ref={scroll} style={{ flex: 1 }} contentContainerStyle={styles.paper}>
       {!page && busy ? <ActivityIndicator color={ink.accent} style={{ marginTop: 64 }} /> : null}
@@ -106,7 +107,6 @@ function Reader({ book, onCollapse }: { book: ListeningBook; onCollapse(): void 
       {state.error || state.syncError || jumpError ? <Text accessibilityRole="alert" style={{ color: ink.red, fontFamily: font.sans, fontSize: 13 }}>{state.error || state.syncError || jumpError}</Text> : null}
       {page?.notice ? <Text style={{ color: ink.muted, fontFamily: font.sans, fontSize: 12 }}>{page.notice}</Text> : null}
       {settings ? <View style={{ gap: 8 }}>
-        <View style={styles.row} accessibilityRole="radiogroup" accessibilityLabel="播放速度">{[0.75, 1, 1.25, 1.5, 2].map((speed) => <Control choice key={speed} label={`${speed} 倍速`} selected={b?.speed === speed} onPress={() => engine.speed(speed)}>{speed}×</Control>)}</View>
         <View style={styles.row} accessibilityRole="radiogroup" accessibilityLabel="定时停止">{[0, 15, 30, 60].map((minutes) => <Control choice key={minutes} label={minutes ? `${minutes} 分钟后停止` : '关闭定时'} selected={minutes === 0 ? !state.sleepAt : !!state.sleepAt && Math.abs((state.sleepAt - Date.now()) / 60000 - minutes) < 1}
           onPress={() => engine.sleep(minutes)}>{minutes ? `${minutes} 分钟` : '不定时'}</Control>)}</View>
         <View style={styles.row}>
@@ -145,9 +145,14 @@ function Reader({ book, onCollapse }: { book: ListeningBook; onCollapse(): void 
         onPress={(e) => void engine.seek((e.nativeEvent.locationX / trackWidth) * state.duration)} style={{ minHeight: 44, justifyContent: 'center' }}>
         <View style={{ height: 4, backgroundColor: ink.sunken, borderRadius: 2 }}><View style={{ height: 4, width: `${ratio * 100}%`, backgroundColor: ink.accent, borderRadius: 2 }} /></View>
       </Pressable>
+      {speedOpen ? <View style={styles.row} accessibilityRole="radiogroup" accessibilityLabel="播放速度">
+        {[0.75, 1, 1.25, 1.5, 2].map((speed) => <Control choice key={speed} label={`${speed} 倍速`} selected={b?.speed === speed}
+          onPress={() => { engine.speed(speed); setSpeedOpen(false); }}>{speed}×</Control>)}
+      </View> : null}
       <View style={[styles.row, { marginTop: -12 }]}>
-        <Text style={{ color: ink.muted, fontSize: 12 }}>{clock(b?.seconds || 0)} / {clock(state.duration)}</Text>
-        <Text style={{ color: ink.muted, fontSize: 12 }}>{busy ? '准备朗读…' : state.status === 'ended' ? '全书已听完' : page?.passages[b?.passage || 0]?.speaker || ''}{state.sleepAt ? '  ◷' : ''}</Text>
+        <Text style={{ flex: 1, color: ink.muted, fontSize: 12 }}>{clock(b?.seconds || 0)} / {clock(state.duration)}</Text>
+        <Control label="调整播放倍速" disabled={!b} selected={speedOpen} expanded={speedOpen} onPress={() => { setSpeedOpen(!speedOpen); setSettings(false); }}>{b?.speed || 1}×</Control>
+        <Text numberOfLines={1} style={{ flex: 1, color: ink.muted, fontSize: 12, textAlign: 'right' }}>{busy ? '准备朗读…' : state.status === 'ended' ? '全书已听完' : page?.passages[b?.passage || 0]?.speaker || ''}{state.sleepAt ? '  ◷' : ''}</Text>
       </View>
       <View style={styles.row}>
         <Control label="上一段" disabled={busy || !page} onPress={() => void engine.next(-1)}>Ⅰ‹</Control>

@@ -226,10 +226,12 @@ try {
   await page.getByRole('button', { name: '从第 2 段朗读', exact: true }).click();
   await page.getByRole('button', { name: '暂停听书', exact: true }).waitFor();
   await page.waitForFunction(() => Number(document.querySelector('[aria-label="本句播放进度"]')?.getAttribute('aria-valuenow')) >= 1);
+  await page.getByRole('button', { name: '调整播放倍速', exact: true }).click();
+  await page.getByRole('radio', { name: '1.5 倍速', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: '调整播放倍速', exact: true }).innerText(), '1.5×');
   await page.getByRole('button', { name: '暂停听书', exact: true }).click();
   await page.getByRole('button', { name: '播放听书', exact: true }).waitFor();
   await page.getByRole('button', { name: '听书设置', exact: true }).click();
-  await page.getByRole('radio', { name: '1.5 倍速', exact: true }).click();
   await page.getByRole('radio', { name: '30 分钟后停止', exact: true }).click();
   await page.screenshot({ path: path.join(artifacts, 'listening-reader.png') });
   await page.getByLabel('听书页码', { exact: true }).fill('2');
@@ -250,7 +252,7 @@ try {
   await page.getByRole('button', { name: '听书：手机教材', exact: true }).click();
   await page.getByText('第二页原文。', { exact: true }).waitFor();
   assert.equal(await page.getByLabel('听书页码', { exact: true }).inputValue(), '2');
-  await page.getByRole('button', { name: '听书设置', exact: true }).click();
+  await page.getByRole('button', { name: '调整播放倍速', exact: true }).click();
   assert.equal(await page.getByRole('radio', { name: '1.5 倍速', exact: true }).getAttribute('aria-checked'), 'true');
   assert.ok(listeningWrites > 0);
   assert.ok(narrations.some((request) => request.text === '第二段原文！'), 'The actual TTS request must preserve the source phrase');
