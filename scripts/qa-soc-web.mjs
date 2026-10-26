@@ -294,7 +294,10 @@ try {
   await page.getByRole('button', { name: '听书音色：旁白', exact: true }).click();
   await page.getByRole('radio', { name: '选择 Ryan', exact: true }).click();
   for (let attempt = 0; attempt < 100 && !narrations.slice(beforeVoice).some((request) => request.voice === 'Ryan'); attempt++) await page.waitForTimeout(50);
-  assert.ok(narrations.slice(beforeVoice).some((request) => request.voice === 'Ryan'), 'A voice change must regenerate current speech');
+  if (!narrations.slice(beforeVoice).some((request) => request.voice === 'Ryan')) {
+    await page.screenshot({ path: path.join(artifacts, 'voice-change-failure.png') });
+    throw new Error(`Voice change did not regenerate speech: ${JSON.stringify({ requests: narrations.slice(beforeVoice), selected: await page.getByRole('radio', { name: '选择 Ryan', exact: true }).getAttribute('aria-checked'), text: await page.locator('body').innerText() })}`);
+  }
   await page.getByText('完成', { exact: true }).click();
   await page.getByRole('button', { name: '展开听书', exact: true }).click();
   await page.getByRole('button', { name: '暂停听书', exact: true }).click();
