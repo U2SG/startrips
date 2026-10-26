@@ -95,6 +95,7 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
     metadata: () => ({ title: textbook.title, artist: `第 ${engine.getState().page?.page || 1} 页`, albumTitle: '听书' }),
   });
   const analyses = new Map<BookPage, (signal: AbortSignal) => Promise<void>>();
+  let analysisQueue: Promise<void> = Promise.resolve();
   const requested = new WeakMap<BookPage, Set<number>>();
   const loadPage = async (number: number, dramatic: boolean, signal: AbortSignal): Promise<BookPage> => {
       guard();
@@ -103,7 +104,11 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
         if (!page) throw new Error(`第 ${number} 页尚未下载，请联网下载后再听`);
         return page;
       }
-      const result = await api.extractPdf(path, number, number, true, signal);
+      const planPath = `${dir}/listening-${number}-${dramatic ? 'cast' : 'plain'}.json`;
+      const [result, saved] = await Promise.all([
+        api.extractPdf(path, number, number, true, signal),
+        api.readJsonOrNull<BookPage & { profile: string }>(planPath),
+      ]);
       guard(); if (signal.aborted) throw new Error('已取消');
       if (number > result.numPages) throw new Error(`教材共 ${result.numPages} 页，请重新选择页码`);
       const source = result.pages[0]?.text || '';
@@ -111,8 +116,6 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
       const legacyIndices = legacyPassageIndices(source, texts);
       const signature = result.sourceSig;
       if (!signature) throw new Error('服务器需要更新后才能保存听书位置');
-      const planPath = `${dir}/listening-${number}-${dramatic ? 'cast' : 'plain'}.json`;
-      const saved = await api.readJsonOrNull<BookPage & { profile: string }>(planPath);
       guard(); if (signal.aborted) throw new Error('已取消');
       const profileKey = profile ? `${profile.name}/${profile.model}` : '';
       if (saved?.signature === signature && saved.profile === profileKey && saved.passages.length === texts.length
@@ -121,6 +124,7 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
       const page: BookPage = { page: number, total: result.numPages, signature, passages: plain.passages, legacyIndices };
       // The first sound must not wait for an entire page of LLM analysis or cache writes.
       const analyze = async (signal: AbortSignal) => {
+      if (signal.aborted) return;
       const previous = await api.readJsonOrNull<{ signature: string; cast: Record<string, string> }>(castPath);
       guard(); if (signal.aborted) return;
       let annotations: unknown = null;
@@ -154,7 +158,10 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
       };
       const run = async (signal: AbortSignal) => {
         analyses.delete(page);
-        try { await analyze(signal); }
+        // Page analyses share a cast file; serialize them without blocking speech preparation.
+        const work = analysisQueue.then(() => analyze(signal));
+        analysisQueue = work.catch(() => {});
+        try { await work; }
         catch { /* Provider errors already select original-text narration. */ }
         finally { if (signal.aborted && !analyses.has(page)) analyses.set(page, run); }
       };
