@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ParagraphCache } from '../src/books/paragraphCache.ts';
-import { wavDuration } from '../src/books/wav.ts';
+import { normalizeWav, wavDuration } from '../src/books/wav.ts';
 
 function fixture() {
   let raw = null, writes = 0;
@@ -24,6 +24,21 @@ test('cached paragraphs survive reopening; changing voice/source/model does not 
   assert.equal(calls, 1);
   for (const key of ['book-a/model/Ryan/original', 'book-b/model/Cherry/original', 'book-a/other-model/Cherry/original']) await f.cache.get(key, signal, generate);
   assert.equal(calls, 4);
+});
+
+test('complete Qwen streaming WAVs use actual PCM length and repair only size markers', () => {
+  const header = Buffer.from('52494646bfffff7f57415645666d74201000000001000100c05d000080bb000002001000646174619bffff7f', 'hex');
+  const bytes = Buffer.concat([header, Buffer.alloc(103680, 37)]);
+  assert.equal(wavDuration(bytes), 2.16);
+  const fixed = normalizeWav(bytes);
+  const view = new DataView(fixed.buffer, fixed.byteOffset, fixed.byteLength);
+  assert.equal(view.getUint32(4, true), bytes.length - 8);
+  assert.equal(view.getUint32(40, true), 103680);
+  assert.ok(Buffer.from(fixed.subarray(44)).equals(bytes.subarray(44)));
+  assert.equal(bytes.readUInt32LE(4), 0x7fffffbf);
+  assert.equal(wavDuration(fixed), 2.16);
+  assert.throws(() => normalizeWav(bytes.subarray(0, bytes.length - 1)), /不完整/);
+  assert.throws(() => normalizeWav(fixed.subarray(0, 100)), /不完整/);
 });
 
 test('duplicate requests share one job and a missing audio file is regenerated', async () => {

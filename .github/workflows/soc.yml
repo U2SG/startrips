@@ -117,7 +117,10 @@ jobs:
           set -euo pipefail
           tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
           apk=android/app/build/outputs/apk/release/app-release.apk
-          "$tools/apksigner" verify --print-certs "$apk" | tee "$RUNNER_TEMP/soc-android-signature.txt"
+          "$tools/apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/soc-android-signature.txt"
+          grep -q 'Verified using v1 scheme (JAR signing): true' "$RUNNER_TEMP/soc-android-signature.txt"
+          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' "$RUNNER_TEMP/soc-android-signature.txt"
+          grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' "$RUNNER_TEMP/soc-android-signature.txt"
           grep -iq 'fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c' "$RUNNER_TEMP/soc-android-signature.txt"
           "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest print "$apk" > "$RUNNER_TEMP/soc-android-manifest.xml"
           python3 - <<'PY'
@@ -125,7 +128,7 @@ jobs:
           a = '{http://schemas.android.com/apk/res/android}'
           root = ET.parse(pathlib.Path(os.environ['RUNNER_TEMP']) / 'soc-android-manifest.xml').getroot()
           assert root.get('package') == 'com.socratopia.mobile'
-          assert int(root.get(a + 'versionCode')) == 7
+          assert int(root.get(a + 'versionCode')) == 8
           assert root.find('application').get(a + 'debuggable') != 'true'
           permissions = {p.get(a + 'name') for p in root.findall('uses-permission')}
           assert 'android.permission.RECORD_AUDIO' in permissions
@@ -140,14 +143,14 @@ jobs:
               for method in [b'bookAppend', b'bookReplace', b'bookClear', b'bookRate', b'bookSeek', b'bookKey']:
                   assert method in dex, f'Patched native audio is missing from the APK: {method!r}'
           PY
-          cp "$apk" "$RUNNER_TEMP/Soc-android-1.0.6.apk"
-          sha256sum "$RUNNER_TEMP/Soc-android-1.0.6.apk" > "$RUNNER_TEMP/Soc-android-1.0.6.apk.sha256"
+          cp "$apk" "$RUNNER_TEMP/Soc-android-1.0.7.apk"
+          sha256sum "$RUNNER_TEMP/Soc-android-1.0.7.apk" > "$RUNNER_TEMP/Soc-android-1.0.7.apk.sha256"
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: Soc-android
           path: |
-            ${{ runner.temp }}/Soc-android-1.0.6.apk
-            ${{ runner.temp }}/Soc-android-1.0.6.apk.sha256
+            ${{ runner.temp }}/Soc-android-1.0.7.apk
+            ${{ runner.temp }}/Soc-android-1.0.7.apk.sha256
             ${{ runner.temp }}/soc-android-signature.txt
             ${{ runner.temp }}/soc-android-manifest.xml
           if-no-files-found: error

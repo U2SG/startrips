@@ -14,6 +14,7 @@ import { resetShelf, shelf } from './offline';
 import { audioKey, pageKey, completePages, type DownloadedBook } from './offlineStore';
 import * as offlineFiles from './offlineFiles';
 import { ParagraphCache } from './paragraphCache';
+import { syncProgress } from './progress';
 
 export type ListeningBook = { worldId: string; textbook: data.TextbookEntry; engine: BookEngine; offline: boolean; stopSync(): void; download(start: number, end: number): Promise<void> };
 type DownloadState = { active: boolean; page: number; end: number; done: number; total: number; error: string };
@@ -83,7 +84,6 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
   let ticker: ReturnType<typeof setInterval> | undefined;
   let serverSaved = 0;
   let localSavedAt = 0;
-  let syncConflict = false;
   let allowRemote = !downloaded;
   const syncController = new AbortController();
   const castPath = `${dir}/listening-cast.json`;
@@ -203,13 +203,16 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
       }
       guard();
       if (downloaded || localOnly || !allowRemote) return;
-      if (syncConflict) throw new Error('另一台设备更新了进度，请重新打开教材；本机位置已保存');
       if (engine.getState().status === 'playing' && Date.now() - serverSaved < 15000) return;
-      try { await api.writeJson(progressPath, next, syncController.signal); serverSaved = Date.now(); }
-      catch (error) {
+      try {
+        await syncProgress(next, {
+          read: () => api.readJsonOrNull<Bookmark>(progressPath),
+          write: async (bookmark) => { guard(); if (allowRemote) await api.writeJson(progressPath, bookmark, syncController.signal); },
+        });
+        serverSaved = Date.now();
+      } catch {
         if (!allowRemote) return;
-        if ((error as { status?: number }).status === 409) syncConflict = true;
-        throw new Error('进度已保存在本机，服务器同步失败，请检查网络后重试');
+        throw new Error('进度已保存在本机，稍后自动重试同步');
       }
     },
     player: {
