@@ -118,9 +118,10 @@ jobs:
           tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
           apk=android/app/build/outputs/apk/release/app-release.apk
           "$tools/apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/soc-android-signature.txt"
-          grep -q 'Verified using v1 scheme (JAR signing): true' "$RUNNER_TEMP/soc-android-signature.txt"
           grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' "$RUNNER_TEMP/soc-android-signature.txt"
           grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' "$RUNNER_TEMP/soc-android-signature.txt"
+          "$tools/apksigner" verify --verbose --min-sdk-version 23 --max-sdk-version 23 "$apk" | tee "$RUNNER_TEMP/soc-android-v1-signature.txt"
+          grep -q 'Verified using v1 scheme (JAR signing): true' "$RUNNER_TEMP/soc-android-v1-signature.txt"
           grep -iq 'fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c' "$RUNNER_TEMP/soc-android-signature.txt"
           "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest print "$apk" > "$RUNNER_TEMP/soc-android-manifest.xml"
           python3 - <<'PY'
@@ -152,6 +153,7 @@ jobs:
             ${{ runner.temp }}/Soc-android-1.0.7.apk
             ${{ runner.temp }}/Soc-android-1.0.7.apk.sha256
             ${{ runner.temp }}/soc-android-signature.txt
+            ${{ runner.temp }}/soc-android-v1-signature.txt
             ${{ runner.temp }}/soc-android-manifest.xml
           if-no-files-found: error
           retention-days: 30
