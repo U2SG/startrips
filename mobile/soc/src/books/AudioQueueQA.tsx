@@ -23,7 +23,7 @@ export default function AudioQueueQA() {
       guard() {}, configure: () => setAudioModeAsync({ shouldPlayInBackground: true, playsInSilentMode: true, interruptionMode: 'doNotMix' }),
       metadata: () => ({ title: 'Soc CI background playback' }),
       status(s) {
-        console.info('SOC_BOOK_QA', JSON.stringify({ key: s.bookKey, seconds: s.currentTime, playing: s.playing }));
+        console.info('SOC_BOOK_QA ' + JSON.stringify({ key: s.bookKey, seconds: s.currentTime, playing: s.playing }));
         engine.tick(s.currentTime, s.duration, s.playing, s.didJustFinish, s.bookKey);
       },
     });
@@ -33,7 +33,7 @@ export default function AudioQueueQA() {
         return { page: number, total: 6, signature: 'ci-background', passages: Array.from({ length: 8 }, (_, i) => ({ text: `CI phrase ${number}-${i}`, speaker: 'narrator', voice: 'Cherry', tone: 'neutral' })) };
       },
       async audio(page, index, signal) {
-        const uri = await files.storeAudio(`ci-${page.page}-${index}`, `http://10.0.2.2:18991/clip/${page.page}/${index}.wav`, signal);
+        const uri = await files.storeAudio(`ci-${page.page}-${index}`, `http://127.0.0.1:18991/clip/${page.page}/${index}.wav`, signal);
         console.info('SOC_QA_FILE', uri);
         const duration = await files.audioDuration(uri); console.info('SOC_QA_DURATION', duration);
         return { uri, duration };

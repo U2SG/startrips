@@ -47,6 +47,8 @@ def playback_logs():
 server = ThreadingHTTPServer(('0.0.0.0', 18991), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 try:
+    adb('reverse', 'tcp:18991', 'tcp:18991')
+    (root / 'background-port.txt').write_text(adb('reverse', '--list'), encoding='utf-8')
     adb('shell', 'am', 'force-stop', 'com.socratopia.mobile')
     adb('logcat', '-c')
     adb('shell', 'input', 'keyevent', 'KEYCODE_WAKEUP')
