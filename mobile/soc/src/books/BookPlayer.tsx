@@ -85,7 +85,7 @@ function Reader({ book, onCollapse }: { book: ListeningBook; onCollapse(): void 
     if (!Number.isInteger(target) || target < 1 || (page && target > page.total)) { setJumpError('请输入有效页码'); return; }
     setJumpError(''); void engine.go(target, 0, playing);
   }
-  const ratio = state.duration ? Math.min(1, (b?.seconds || 0) / state.duration) : 0;
+  const ratio = state.length ? Math.min(1, state.elapsed / state.length) : 0;
   return <View testID="listening-reader" style={{ flex: 1, backgroundColor: ink.canvas, paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 8) }}>
     <View style={[styles.row, styles.header]}>
       <Control label="收起听书" onPress={onCollapse}>⌄</Control>
@@ -138,11 +138,11 @@ function Reader({ book, onCollapse }: { book: ListeningBook; onCollapse(): void 
         </View>
         <Control label="下一页" disabled={busy || !page || page.page >= page.total} onPress={() => void engine.go((page?.page || 1) + 1, 0, playing)}>›</Control>
       </View>
-      <Pressable accessibilityRole="adjustable" accessibilityLabel="本句播放进度" accessibilityValue={{ min: 0, max: Math.round(state.duration), now: Math.round(b?.seconds || 0) }}
-        aria-valuemin={0} aria-valuemax={Math.round(state.duration)} aria-valuenow={Math.round(b?.seconds || 0)}
-        accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]} onAccessibilityAction={(e) => void engine.seek((b?.seconds || 0) + (e.nativeEvent.actionName === 'increment' ? 5 : -5))}
-        disabled={busy || !state.duration} onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
-        onPress={(e) => void engine.seek((e.nativeEvent.locationX / trackWidth) * state.duration)} style={{ minHeight: 44, justifyContent: 'center' }}>
+      <Pressable accessibilityRole="adjustable" accessibilityLabel="播放进度" accessibilityValue={{ min: 0, max: Math.round(state.length), now: Math.round(state.elapsed) }}
+        aria-valuemin={0} aria-valuemax={Math.round(state.length)} aria-valuenow={Math.round(state.elapsed)}
+        accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]} onAccessibilityAction={(e) => void engine.skip(e.nativeEvent.actionName === 'increment' ? 5 : -5)}
+        disabled={busy || !state.length} onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
+        onPress={(e) => void engine.seekTimeline((e.nativeEvent.locationX / trackWidth) * state.length)} style={{ minHeight: 44, justifyContent: 'center' }}>
         <View style={{ height: 4, backgroundColor: ink.sunken, borderRadius: 2 }}><View style={{ height: 4, width: `${ratio * 100}%`, backgroundColor: ink.accent, borderRadius: 2 }} /></View>
       </Pressable>
       {speedOpen ? <View style={styles.row} accessibilityRole="radiogroup" accessibilityLabel="播放速度">
@@ -150,20 +150,20 @@ function Reader({ book, onCollapse }: { book: ListeningBook; onCollapse(): void 
           onPress={() => { engine.speed(speed); setSpeedOpen(false); }}>{speed}×</Control>)}
       </View> : null}
       <View style={[styles.row, { marginTop: -12 }]}>
-        <Text style={{ flex: 1, color: ink.muted, fontSize: 12 }}>{clock(b?.seconds || 0)} / {clock(state.duration)}</Text>
+        <Text style={{ flex: 1, color: ink.muted, fontSize: 12 }}>{clock(state.elapsed)} / {clock(state.length)}</Text>
         <Control label="调整播放倍速" disabled={!b} selected={speedOpen} expanded={speedOpen} onPress={() => { setSpeedOpen(!speedOpen); setSettings(false); }}>{b?.speed || 1}×</Control>
         <Text numberOfLines={1} style={{ flex: 1, color: ink.muted, fontSize: 12, textAlign: 'right' }}>{busy ? '准备朗读…' : state.status === 'ended' ? '全书已听完' : page?.passages[b?.passage || 0]?.speaker || ''}{state.sleepAt ? '  ◷' : ''}</Text>
       </View>
       <View style={styles.row}>
         <Control label="上一段" disabled={busy || !page} onPress={() => void engine.next(-1)}>Ⅰ‹</Control>
-        <Control label="后退 15 秒" disabled={busy || !state.duration} onPress={() => void engine.seek((b?.seconds || 0) - 15)}>↶ 15</Control>
+        <Control label="后退 15 秒" disabled={busy || !state.duration} onPress={() => void engine.skip(-15)}>↶ 15</Control>
         <Control primary label={busy || playing ? '暂停听书' : state.status === 'error' ? '重试朗读' : '播放听书'} onPress={() => {
           if (busy || playing) engine.pause();
           else if (!page) void engine.open(b);
           else if (state.status === 'ended') void engine.go(1, 0, true);
           else void engine.play();
         }}>{busy ? '···' : playing ? 'Ⅱ' : '▶'}</Control>
-        <Control label="前进 15 秒" disabled={busy || !state.duration} onPress={() => void engine.seek((b?.seconds || 0) + 15)}>15 ↷</Control>
+        <Control label="前进 15 秒" disabled={busy || !state.duration} onPress={() => void engine.skip(15)}>15 ↷</Control>
         <Control label="下一段" disabled={busy || !page} onPress={() => void engine.next(1)}>›Ⅰ</Control>
       </View>
     </View>

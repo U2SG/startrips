@@ -2,7 +2,7 @@
   "expo": {
     "name": "小苏",
     "slug": "startrips-soc",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "com.socratopia.mobile",
-      "versionCode": 5,
+      "versionCode": 6,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -31,7 +31,8 @@
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.WAKE_LOCK"
       ]
     },
     "web": {
@@ -69,7 +70,8 @@
         }
       ],
       "expo-secure-store",
-      "./plugins/withPersonalIOS.cjs"
+      "./plugins/withPersonalIOS.cjs",
+      "./plugins/withBookQueue.cjs"
     ],
     "scheme": "startrips-soc",
     "experiments": {

@@ -63,7 +63,7 @@ test('hot voice changes discard current and prefetched audio, preserve position,
   assert.equal(played[0].uri, 'Ryan-0.wav');
   assert.ok(removed.includes('old-Cherry.wav'));
   engine.tick(3, 10, true, false); voice = 'Serena'; await engine.refreshAudio();
-  assert.equal(played.at(-1).uri, 'Serena-0.wav'); assert.equal(played.at(-1).seconds, 3);
+  assert.equal(played.at(-1).uri, 'Serena-0.wav'); assert.equal(played.at(-1).seconds, 0);
   engine.pause(); voice = 'Ethan'; await engine.refreshAudio();
   assert.equal(engine.getState().status, 'paused'); engine.dispose();
 });
@@ -190,4 +190,50 @@ test('pausing the initial resume load retains the saved position for retry', asy
   await engine.open(engine.getState().bookmark); await engine.play();
   assert.equal(engine.getState().bookmark.page, 2); assert.equal(engine.getState().bookmark.passage, 1);
   assert.deepEqual(played[0], { uri: '2-1.wav', seconds: 7, rate: 1.5 }); engine.dispose();
+});
+
+test('first playback does not await look-ahead and native transitions do not reload a source', async () => {
+  const next = deferred(), queued = [], starts = [];
+  const { engine } = fixture({
+    audio: async (p, i) => i === 0 ? { uri: 'first', duration: 8 } : next.promise,
+    player: { async load(uri) { starts.push(uri); }, enqueue(uri, key) { queued.push({ uri, key }); }, play() {}, pause() {}, async seek() {}, rate() {}, release() {} },
+  });
+  await engine.open(); await engine.play();
+  assert.equal(engine.getState().status, 'playing'); assert.deepEqual(starts, ['first']);
+  next.resolve({ uri: 'second', duration: 30 }); await setImmediate();
+  assert.equal(queued.length, 1);
+  engine.tick(0.25, 30, true, false, queued[0].key);
+  assert.equal(engine.getState().bookmark.passage, 1); assert.equal(engine.getState().bookmark.seconds, 0.25);
+  assert.deepEqual(starts, ['first']); assert.equal(engine.getState().length, 38); engine.dispose();
+});
+
+test('fifteen-second skips cross short phrases and page boundaries without regenerating heard audio', async () => {
+  const calls = [];
+  const { engine, played } = fixture({ audio: async (p, i) => { calls.push(`${p.page}-${i}`); return { uri: `${p.page}-${i}`, duration: 4 }; } });
+  await engine.open(); await engine.play(); await setImmediate();
+  engine.tick(2, 4, true, false);
+  await engine.skip(15);
+  assert.equal(engine.getState().bookmark.page, 2); assert.equal(engine.getState().bookmark.passage, 1); assert.equal(engine.getState().bookmark.seconds, 1);
+  await engine.skip(-15);
+  assert.equal(engine.getState().bookmark.page, 1); assert.equal(engine.getState().bookmark.passage, 0); assert.equal(engine.getState().bookmark.seconds, 2);
+  assert.equal(calls.filter((key) => key === '1-0').length, 1);
+  assert.equal(played.at(-1).uri, '1-0'); assert.equal(played.at(-1).seconds, 2); engine.dispose();
+});
+
+test('paused cross-phrase scrubbing remains paused', async () => {
+  const { engine } = fixture({ audio: async (p, i) => ({ uri: `${p.page}-${i}`, duration: 8 }) });
+  await engine.open(); await engine.play(); await setImmediate(); engine.pause();
+  await engine.skip(15);
+  assert.equal(engine.getState().status, 'paused'); assert.equal(engine.getState().bookmark.passage, 1); assert.equal(engine.getState().bookmark.seconds, 7); engine.dispose();
+});
+
+test('look-ahead is bounded by audio duration and does not repeatedly call a failing provider', async () => {
+  let calls = 0;
+  const { engine } = fixture({
+    page: async () => ({ ...page(), total: 1, passages: Array.from({ length: 100 }, () => page().passages[0]) }),
+    audio: async (_p, i) => { calls++; if (i === 3) throw new Error('provider unavailable'); return { uri: String(i), duration: 2 }; },
+  });
+  await engine.open(); await engine.play(); await setImmediate();
+  for (let i = 0; i < 10; i++) { engine.tick(i / 10, 2, true, false); await setImmediate(); }
+  assert.equal(calls, 4); assert.equal(engine.getState().status, 'playing'); engine.dispose();
 });

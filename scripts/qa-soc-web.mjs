@@ -20,6 +20,7 @@ let importFailure = true;
 const uploads = [];
 const listeningFiles = new Map();
 const narrations = [];
+let analysisCompleted = false;
 let listeningWrites = 0;
 const wav = Buffer.alloc(44 + 8000 * 2 * 8);
 wav.write('RIFF', 0); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
@@ -62,7 +63,16 @@ const server = http.createServer(async (request, response) => {
     if (!authenticated) return json(401, { error: 'AUTH_REQUIRED' });
     if (url.pathname.endsWith('/session')) return json(200, { user: { id: 'ci-study', name: 'Study', email: 'study@example.test' } });
     if (url.pathname.endsWith('/ping')) return json(200, { ok: true, root: '' });
-    if (url.pathname.endsWith('/models')) return json(200, { active: '', profiles: [] });
+    if (url.pathname.endsWith('/models')) return json(200, { active: 'CI', profiles: [{ name: 'CI', model: 'ci-model' }] });
+    if (url.pathname.endsWith('/llm')) {
+      let body = ''; for await (const chunk of request) body += chunk;
+      const passages = JSON.parse(JSON.parse(body).messages.at(-1).content).passages;
+      const timer = setTimeout(() => {
+        analysisCompleted = true;
+        json(200, { choices: [{ message: { content: JSON.stringify({ annotations: passages.map(({ index }) => ({ index, speaker: '旁白', tone: 'neutral' })) }) } }] });
+      }, 6000);
+      response.once('close', () => clearTimeout(timer)); return;
+    }
     if (url.pathname.endsWith('/textbooks/import')) {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
@@ -223,9 +233,16 @@ try {
   await page.getByRole('button', { name: '听书：手机教材', exact: true }).click();
   await page.getByTestId('listening-reader').waitFor();
   await page.getByRole('button', { name: '从第 2 段朗读', exact: true }).waitFor();
+  const firstAudioStarted = Date.now();
   await page.getByRole('button', { name: '从第 2 段朗读', exact: true }).click();
   await page.getByRole('button', { name: '暂停听书', exact: true }).waitFor();
-  await page.waitForFunction(() => Number(document.querySelector('[aria-label="本句播放进度"]')?.getAttribute('aria-valuenow')) >= 1);
+  await page.waitForFunction(() => Number(document.querySelector('[aria-label="播放进度"]')?.getAttribute('aria-valuenow')) >= 1);
+  assert.ok(Date.now() - firstAudioStarted < 4500, 'First sound must not wait for six-second page analysis');
+  assert.equal(analysisCompleted, false, 'Playback must start while LLM analysis is still pending');
+  const repeatCount = narrations.filter((r) => r.text === '第二段原文！').length;
+  await page.getByRole('button', { name: '从第 2 段朗读', exact: true }).click();
+  await page.waitForFunction(() => Number(document.querySelector('[aria-label="播放进度"]')?.getAttribute('aria-valuenow')) >= 1);
+  assert.equal(narrations.filter((r) => r.text === '第二段原文！').length, repeatCount, 'Replaying a heard paragraph must reuse audio');
   await page.getByRole('button', { name: '调整播放倍速', exact: true }).click();
   await page.getByRole('radio', { name: '1.5 倍速', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: '调整播放倍速', exact: true }).innerText(), '1.5×');
@@ -293,8 +310,8 @@ try {
   await page.getByRole('button', { name: '继续听书', exact: true }).click();
   await page.getByRole('button', { name: '暂停听书', exact: true }).waitFor();
   await page.getByRole('button', { name: '展开听书', exact: true }).click();
-  const voiceStart = Number(await page.getByLabel('本句播放进度', { exact: true }).getAttribute('aria-valuenow'));
-  await page.waitForFunction((start) => Number(document.querySelector('[aria-label="本句播放进度"]')?.getAttribute('aria-valuenow')) > start + 0.5, voiceStart);
+  const voiceStart = Number(await page.getByLabel('播放进度', { exact: true }).getAttribute('aria-valuenow'));
+  await page.waitForFunction((start) => Number(document.querySelector('[aria-label="播放进度"]')?.getAttribute('aria-valuenow')) > start + 0.5, voiceStart);
   await page.getByRole('button', { name: '收起听书', exact: true }).click();
   const beforeVoice = narrations.length;
   await page.getByRole('button', { name: '听书音色：旁白', exact: true }).click();
@@ -324,10 +341,10 @@ try {
   await context.setOffline(true);
   await page.getByRole('button', { name: '离线听：手机教材', exact: true }).click();
   await page.getByText('第二页原文。', { exact: true }).waitFor();
-  const offlineStart = Number(await page.getByLabel('本句播放进度', { exact: true }).getAttribute('aria-valuenow'));
+  const offlineStart = Number(await page.getByLabel('播放进度', { exact: true }).getAttribute('aria-valuenow'));
   await page.getByRole('button', { name: '播放听书', exact: true }).click();
   await page.waitForFunction((start) => {
-    const track = document.querySelector('[aria-label="本句播放进度"]');
+    const track = document.querySelector('[aria-label="播放进度"]');
     return Number(track?.getAttribute('aria-valuemax')) > 0 && Number(track?.getAttribute('aria-valuenow')) > start + 1;
   }, offlineStart);
   await page.getByRole('button', { name: '暂停听书', exact: true }).click();
