@@ -2,10 +2,10 @@ name: soc
 
 on:
   pull_request:
-    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', 'server/app.ts', 'server/tests/soc-auth.integration.test.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'scripts/qa-soc-android.py', 'deploy/Caddyfile']
+    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', 'server/app.ts', 'server/tests/soc-auth.integration.test.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'scripts/qa-soc-*.py', 'deploy/Caddyfile']
   push:
     branches: [main]
-    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', 'server/app.ts', 'server/tests/soc-auth.integration.test.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'scripts/qa-soc-android.py', 'deploy/Caddyfile']
+    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', 'server/app.ts', 'server/tests/soc-auth.integration.test.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'scripts/qa-soc-*.py', 'deploy/Caddyfile']
   workflow_dispatch:
     inputs:
       live:
@@ -125,7 +125,7 @@ jobs:
           a = '{http://schemas.android.com/apk/res/android}'
           root = ET.parse(pathlib.Path(os.environ['RUNNER_TEMP']) / 'soc-android-manifest.xml').getroot()
           assert root.get('package') == 'com.socratopia.mobile'
-          assert int(root.get(a + 'versionCode')) == 5
+          assert int(root.get(a + 'versionCode')) == 6
           assert root.find('application').get(a + 'debuggable') != 'true'
           permissions = {p.get(a + 'name') for p in root.findall('uses-permission')}
           assert 'android.permission.RECORD_AUDIO' in permissions
@@ -136,15 +136,18 @@ jobs:
           assert service_type == 'mediaPlayback' or int(service_type, 0) & 2, f'Invalid playback service type: {service_type}'
           with zipfile.ZipFile('android/app/build/outputs/apk/release/app-release.apk') as apk:
               assert 'assets/index.android.bundle' in apk.namelist(), 'Release must run without Metro'
+              dex = b''.join(apk.read(name) for name in apk.namelist() if name.endswith('.dex'))
+              for method in [b'bookAppend', b'bookReplace', b'bookClear', b'bookRate', b'bookSeek', b'bookKey']:
+                  assert method in dex, f'Patched native audio is missing from the APK: {method!r}'
           PY
-          cp "$apk" "$RUNNER_TEMP/Soc-android-1.0.4.apk"
-          sha256sum "$RUNNER_TEMP/Soc-android-1.0.4.apk" > "$RUNNER_TEMP/Soc-android-1.0.4.apk.sha256"
+          cp "$apk" "$RUNNER_TEMP/Soc-android-1.0.5.apk"
+          sha256sum "$RUNNER_TEMP/Soc-android-1.0.5.apk" > "$RUNNER_TEMP/Soc-android-1.0.5.apk.sha256"
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: Soc-android
           path: |
-            ${{ runner.temp }}/Soc-android-1.0.4.apk
-            ${{ runner.temp }}/Soc-android-1.0.4.apk.sha256
+            ${{ runner.temp }}/Soc-android-1.0.5.apk
+            ${{ runner.temp }}/Soc-android-1.0.5.apk.sha256
             ${{ runner.temp }}/soc-android-signature.txt
             ${{ runner.temp }}/soc-android-manifest.xml
           if-no-files-found: error
@@ -163,6 +166,28 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: python3 scripts/qa-soc-android.py
+      - name: Build a separate background-audio QA fixture
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          entry = pathlib.Path('audio-qa-entry.ts')
+          entry.write_text("import { registerRootComponent } from 'expo';\nimport QA from './src/books/AudioQueueQA';\nregisterRootComponent(QA);\n", encoding='utf-8')
+          package = pathlib.Path('package.json')
+          value = json.loads(package.read_text(encoding='utf-8'))
+          value['main'] = str(entry)
+          package.write_text(json.dumps(value), encoding='utf-8')
+          PY
+          cd android
+          ./gradlew assembleRelease -PreactNativeArchitectures=x86_64 --max-workers=2 --no-daemon --no-build-cache
+      - name: Verify native queue replenishment with the screen locked
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: adb install -r mobile/soc/android/app/build/outputs/apk/release/app-release.apk && python3 scripts/qa-soc-background.py
       - uses: actions/upload-artifact@v7.0.1
         if: always()
         with:
@@ -217,6 +242,7 @@ jobs:
             -archivePath "$RUNNER_TEMP/Soc.xcarchive" archive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
             > "$RUNNER_TEMP/soc-xcodebuild.log" 2>&1 || { tail -n 100 "$RUNNER_TEMP/soc-xcodebuild.log"; exit 1; }
+          grep -q 'AudioPlayer.swift' "$RUNNER_TEMP/soc-xcodebuild.log" || { echo 'Patched audio module was not built from source'; exit 1; }
           mkdir -p "$RUNNER_TEMP/soc-export/Payload"
           cp -R "$RUNNER_TEMP/Soc.xcarchive/Products/Applications/"*.app "$RUNNER_TEMP/soc-export/Payload/"
           python3 - <<'PY'

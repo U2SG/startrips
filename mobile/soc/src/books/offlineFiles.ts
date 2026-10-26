@@ -1,5 +1,6 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import { fetch } from 'expo/fetch';
+import { wavDuration } from './wav';
 
 export async function storeAudio(_key: string, url: string, signal: AbortSignal) {
   const directory = new Directory(Paths.document, 'listening');
@@ -16,6 +17,8 @@ export async function storeAudio(_key: string, url: string, signal: AbortSignal)
   } catch (error) { if (file.exists) file.delete(); throw error; }
 }
 export async function readAudio(uri: string) { return new File(uri).exists ? uri : null; }
+export async function audioExists(uri: string) { return new File(uri).exists; }
+export async function audioDuration(uri: string) { return wavDuration(await new File(uri).bytes()); }
 export async function deleteAudio(uri: string) {
   const root = new Directory(Paths.document, 'listening').uri;
   if (!uri.startsWith(`${root.replace(/\/$/, '')}/`)) return;

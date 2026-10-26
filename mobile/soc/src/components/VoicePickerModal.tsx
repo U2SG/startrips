@@ -4,7 +4,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Companion } from '../data';
 import { font, Ink, tnum, useTheme } from '../theme';
-import { getCompanionVoice, resolveVoiceCreds, setCompanionVoice, synthesizeChunk, VOICE_GROUPS } from '../voice';
+import { getCompanionVoice, setCompanionVoice, VOICE_GROUPS } from '../voice';
+import { voiceSample } from '../voiceSamples';
+import { releaseAudio } from '../books/offlineFiles';
 import { GlassPanel, GradientButton } from './Glass';
 import { claimAudioFocus, registerAudioFocus } from '../audioFocus';
 
@@ -25,21 +27,23 @@ export function VoicePickerModal(props: {
   const [preview, setPreview] = useState<string | null>(null);
   const [err, setErr] = useState('');
   const generation = useRef(0);
-  useEffect(() => registerAudioFocus('preview', () => { ++generation.current; player.pause(); }), [player]);
+  const request = useRef<AbortController | null>(null);
+  const sampleUri = useRef<string | null>(null);
+  useEffect(() => registerAudioFocus('preview', () => { ++generation.current; request.current?.abort(); player.pause(); }), [player]);
 
   useEffect(() => {
     const seq = ++generation.current;
     if (visible && target) setCur(target.voice);
     else if (visible && worldId && companion) getCompanionVoice(worldId, companion).then((voice) => { if (seq === generation.current) setCur(voice); }).catch(() => {});
     if (!visible) { setErr(''); setPreview(null); }
-    return () => { ++generation.current; try { player.pause(); } catch {} };
-  }, [visible, worldId, companion, target?.name]);
+    return () => { ++generation.current; request.current?.abort(); try { player.pause(); } catch {} if (sampleUri.current) { releaseAudio(sampleUri.current); sampleUri.current = null; } };
+  }, [visible, worldId, companion, target?.name, target?.voice]);
 
-  function stop() { try { player.pause(); } catch { /* ignore */ } }
+  function stop() { request.current?.abort(); try { player.pause(); } catch { /* ignore */ } }
   function close() { ++generation.current; stop(); onClose(); }
 
   async function pick(v: string) {
-    setErr('');
+    ++generation.current; stop(); setPreview(null); setErr('');
     try {
       if (target) await target.save(v);
       else if (worldId && companion) await setCompanionVoice(worldId, companion, v);
@@ -51,14 +55,15 @@ export function VoicePickerModal(props: {
     stop();
     claimAudioFocus('preview');
     const seq = ++generation.current;
+    const controller = new AbortController(); request.current = controller;
     setPreview(v);
     setErr('');
     try {
-      const creds = await resolveVoiceCreds();
-      if (!creds) throw new Error('未配置 Qwen / DashScope，无法试听');
-      const url = await synthesizeChunk(creds, target ? '你好，接下来由我为你朗读。' : `你好，我是${companion!.name}。`, v);
-      if (seq !== generation.current) return;
-      player.replace(url);
+      const clip = await voiceSample(v, controller.signal);
+      if (seq !== generation.current) { releaseAudio(clip.uri); return; }
+      if (sampleUri.current) releaseAudio(sampleUri.current);
+      sampleUri.current = clip.uri;
+      player.replace(clip.uri);
       player.play();
     } catch (e: any) {
       if (seq === generation.current) setErr(String(e.message));

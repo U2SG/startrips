@@ -2,6 +2,12 @@
   "name": "startrips-soc",
   "version": "1.0.0",
   "main": "index.ts",
+  "expo": {
+    "autolinking": {
+      "android": { "buildFromSource": ["expo-audio"] },
+      "ios": { "buildFromSource": ["expo-audio"] }
+    }
+  },
   "dependencies": {
     "@expo-google-fonts/jetbrains-mono": "^0.4.1",
     "@expo-google-fonts/noto-sans-sc": "^0.4.3",

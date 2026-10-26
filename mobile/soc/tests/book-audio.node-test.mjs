@@ -12,11 +12,12 @@ function setup(configure = async () => {}) {
     async seekTo(seconds) { events.push(['seek', seconds]); },
     setPlaybackRate(rate) { events.push(['rate', rate]); },
     setActiveForLockScreen(active) { events.push(['lockScreen', active]); },
+    updateLockScreenMetadata(metadata) { events.push(['metadata', metadata]); },
     clearLockScreenControls() { events.push(['clearLockScreen']); },
     remove() { events.push(['remove']); },
   };
   const audio = createBookAudio({ create: () => { created++; return player; }, configure, guard() {}, status: (s) => status.push(s), metadata: () => ({ title: 'Book' }) });
-  return { audio, events, status, emit: (s) => listener(s), created: () => created };
+  return { audio, player, events, status, emit: (s) => listener(s), created: () => created };
 }
 
 test('phrase changes retain one native player and lock-screen session until disposal', async () => {
@@ -24,6 +25,8 @@ test('phrase changes retain one native player and lock-screen session until disp
   await f.audio.load('first.wav', 4, 1); f.audio.play(); f.audio.pause();
   await f.audio.load('second.wav', 0, 1.5); f.audio.play();
   assert.equal(f.created(), 1);
+  assert.deepEqual(f.events.filter((e) => e[0] === 'lockScreen'), [['lockScreen', true]]);
+  assert.equal(f.events.filter((e) => e[0] === 'metadata').length, 1);
   assert.deepEqual(f.events.filter((e) => e[0] === 'source'), [['source', 'first.wav'], ['source', 'second.wav']]);
   assert.equal(f.events.some((e) => ['remove', 'clearLockScreen', 'unsubscribe'].includes(e[0])), false);
   f.audio.release(); f.audio.release();
@@ -39,8 +42,8 @@ test('an obsolete load cannot seek or replace metadata after a newer phrase is r
   const first = f.audio.load('old.wav', 7, 1);
   await f.audio.load('new.wav', 0, 1.25);
   resolve(); await assert.rejects(first, /已取消/);
-  assert.deepEqual(f.events.filter((e) => e[0] === 'seek'), [['seek', 0]]);
-  assert.equal(f.events.filter((e) => e[0] === 'lockScreen').length, 1);
+  assert.deepEqual(f.events.filter((e) => e[0] === 'seek'), []);
+  assert.equal(f.events.filter((e) => e[0] === 'lockScreen').length, 0);
   f.audio.release();
 });
 
@@ -62,4 +65,25 @@ test('delayed replace pauses cannot stop a new source before its first playing e
   f.emit({ currentTime: 2.2, duration: 12, playing: true, didJustFinish: false });
   f.emit({ currentTime: 3, duration: 12, playing: false, didJustFinish: false });
   assert.deepEqual(f.status.map((s) => s.playing), [true, true, false]); f.audio.release();
+});
+
+test('native readiness completes loading even when UI timeout callbacks do not run', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = setup(); f.player.isLoaded = false;
+  const loading = f.audio.load('background.wav', 2, 1);
+  await Promise.resolve(); await Promise.resolve();
+  f.player.isLoaded = true;
+  f.emit({ currentTime: 0, duration: 12, playing: false, didJustFinish: false });
+  await loading;
+  assert.ok(f.events.some((e) => e[0] === 'seek' && e[1] === 2)); f.audio.release();
+});
+
+test('fresh sources do not seek and Android resumes without awaiting a paused SDK seek', async () => {
+  const f = setup();
+  f.player.seekTo = () => new Promise(() => {});
+  f.player.bookSeek = (seconds) => f.events.push(['nativeSeek', seconds]);
+  await f.audio.load('fresh.wav', 0, 1);
+  assert.equal(f.events.some((e) => e[0] === 'nativeSeek'), false);
+  await f.audio.load('resume.wav', 3, 1); await f.audio.seek(7);
+  assert.deepEqual(f.events.filter((e) => e[0] === 'nativeSeek'), [['nativeSeek', 3], ['nativeSeek', 7]]); f.audio.release();
 });

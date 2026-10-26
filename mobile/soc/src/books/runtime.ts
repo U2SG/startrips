@@ -3,9 +3,7 @@ import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import * as api from '../api';
 import * as data from '../data';
 import { chatJson } from '../llm';
-import Storage from '../storage';
-import { cacheAudio, removeAudio } from '../speech/audioCache';
-import { fetchChunkFile } from '../speech/chunkFile';
+import Storage, { storageScope } from '../storage';
 import { synthesizeChunk } from '../voice';
 import { claimAudioFocus, registerAudioFocus } from '../audioFocus';
 import { BookEngine } from './engine';
@@ -15,6 +13,7 @@ import { getVoices, loadVoices, passageVoice, resetVoices, subscribeVoices } fro
 import { resetShelf, shelf } from './offline';
 import { audioKey, pageKey, completePages, type DownloadedBook } from './offlineStore';
 import * as offlineFiles from './offlineFiles';
+import { ParagraphCache } from './paragraphCache';
 
 export type ListeningBook = { worldId: string; textbook: data.TextbookEntry; engine: BookEngine; offline: boolean; stopSync(): void; download(start: number, end: number): Promise<void> };
 type DownloadState = { active: boolean; page: number; end: number; done: number; total: number; error: string };
@@ -32,9 +31,9 @@ export const subscribe = (fn: () => void) => { listeners.add(fn); return () => {
 export const getBook = () => active;
 const notify = () => listeners.forEach((fn) => fn());
 registerAudioFocus('book', () => active?.engine.pause());
-AppState.addEventListener('change', (state) => { if (state !== 'active') active?.engine.checkpoint(); });
+AppState.addEventListener('change', (state) => { active?.engine.setBackground(state !== 'active'); if (state !== 'active') active?.engine.checkpoint(); });
 
-subscribeVoices(() => { cancelDownload(); if (active && !active.offline) void active.engine.refreshAudio(); });
+subscribeVoices(() => { cancelDownload(); if (active) void active.engine.refreshAudio(); });
 export function reset() { ++opening; cancelDownload(); active?.engine.dispose(); active = null; resetVoices(); resetShelf(); notify(); }
 
 export async function openOffline(book: DownloadedBook) {
@@ -51,6 +50,12 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
   guard(); if (seq !== opening) return null;
   await loadVoices(); guard();
   const localShelf = shelf();
+  const paragraphCache = new ParagraphCache({
+    guard, namespace: `${storageScope()}/paragraphs`,
+    read: () => Storage.getItem('listening/paragraph-cache'), write: (value) => Storage.setItem('listening/paragraph-cache', value),
+    store: offlineFiles.storeAudio, open: offlineFiles.readAudio, duration: offlineFiles.audioDuration,
+    remove: offlineFiles.deleteAudio, release: offlineFiles.releaseAudio,
+  });
   const dir = downloaded?.dir || await data.textbookDir(worldId, textbook);
   guard();
   const path = downloaded ? '' : await data.textbookPdfPath(worldId, textbook);
@@ -83,12 +88,15 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
   const syncController = new AbortController();
   const castPath = `${dir}/listening-cast.json`;
   const audio = createBookAudio({
-    create: () => createAudioPlayer(null, { updateInterval: 250 }),
+    create: () => createAudioPlayer(null, { updateInterval: 250, keepAudioSessionActive: true }),
     configure: () => setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' }),
     guard,
-    status: (s) => engine.tick(s.currentTime, s.duration, s.playing, s.didJustFinish),
+    status: (s) => engine.tick(s.currentTime, s.duration, s.playing, s.didJustFinish, s.bookKey),
     metadata: () => ({ title: textbook.title, artist: `第 ${engine.getState().page?.page || 1} 页`, albumTitle: '听书' }),
   });
+  const analyses = new Map<BookPage, (signal: AbortSignal) => Promise<void>>();
+  let analysisQueue: Promise<void> = Promise.resolve();
+  const requested = new WeakMap<BookPage, Set<number>>();
   const loadPage = async (number: number, dramatic: boolean, signal: AbortSignal): Promise<BookPage> => {
       guard();
       if (downloaded) {
@@ -96,7 +104,11 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
         if (!page) throw new Error(`第 ${number} 页尚未下载，请联网下载后再听`);
         return page;
       }
-      const result = await api.extractPdf(path, number, number, true, signal);
+      const planPath = `${dir}/listening-${number}-${dramatic ? 'cast' : 'plain'}.json`;
+      const [result, saved] = await Promise.all([
+        api.extractPdf(path, number, number, true, signal),
+        api.readJsonOrNull<BookPage & { profile: string }>(planPath),
+      ]);
       guard(); if (signal.aborted) throw new Error('已取消');
       if (number > result.numPages) throw new Error(`教材共 ${result.numPages} 页，请重新选择页码`);
       const source = result.pages[0]?.text || '';
@@ -104,14 +116,17 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
       const legacyIndices = legacyPassageIndices(source, texts);
       const signature = result.sourceSig;
       if (!signature) throw new Error('服务器需要更新后才能保存听书位置');
-      const planPath = `${dir}/listening-${number}-${dramatic ? 'cast' : 'plain'}.json`;
-      const saved = await api.readJsonOrNull<BookPage & { profile: string }>(planPath);
       guard(); if (signal.aborted) throw new Error('已取消');
       const profileKey = profile ? `${profile.name}/${profile.model}` : '';
       if (saved?.signature === signature && saved.profile === profileKey && saved.passages.length === texts.length
         && saved.passages.every((p, i) => p.text === texts[i])) return { ...saved, total: result.numPages, legacyIndices };
+      const plain = annotatePassages(texts, null, {});
+      const page: BookPage = { page: number, total: result.numPages, signature, passages: plain.passages, legacyIndices };
+      // The first sound must not wait for an entire page of LLM analysis or cache writes.
+      const analyze = async (signal: AbortSignal) => {
+      if (signal.aborted) return;
       const previous = await api.readJsonOrNull<{ signature: string; cast: Record<string, string> }>(castPath);
-      guard(); if (signal.aborted) throw new Error('已取消');
+      guard(); if (signal.aborted) return;
       let annotations: unknown = null;
       let notice = '';
       if (dramatic && texts.length && profile) {
@@ -129,37 +144,57 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
       guard(); if (signal.aborted) throw new Error('已取消');
       const annotated = annotatePassages(texts, annotations, previous?.signature === signature ? previous.cast : {});
       if (dramatic && annotations && !annotated.valid) notice = '人物标注不完整，本页使用单人原文朗读。';
-      const page: BookPage = { page: number, total: result.numPages, signature, passages: annotated.passages, legacyIndices, ...(notice ? { notice } : {}) };
+      const refined: BookPage = { ...page, passages: annotated.passages, ...(notice ? { notice } : {}) };
+      // Never change the voice of a phrase already generated or handed to the player.
+      page.passages = refined.passages.map((p, i) => requested.get(page)?.has(i) ? page.passages[i] : p);
+      if (notice) page.notice = notice;
       // Cache only successful analysis. Temporary provider errors can be retried next time.
       if (!notice) {
         await api.writeJson(castPath, { signature, cast: annotated.cast });
         guard(); if (signal.aborted) throw new Error('已取消');
-        await api.writeJson(planPath, { ...page, profile: profileKey });
+        await api.writeJson(planPath, { ...refined, profile: profileKey });
       }
-      guard(); return page;
+      guard();
+      };
+      const run = async (signal: AbortSignal) => {
+        analyses.delete(page);
+        // Page analyses share a cast file; serialize them without blocking speech preparation.
+        const work = analysisQueue.then(() => analyze(signal));
+        analysisQueue = work.catch(() => {});
+        try { await work; }
+        catch { /* Provider errors already select original-text narration. */ }
+        finally { if (signal.aborted && !analyses.has(page)) analyses.set(page, run); }
+      };
+      analyses.set(page, run);
+      return page;
   };
   engine = new BookEngine({
     focus: () => { guard(); claimAudioFocus('book'); },
+    started: (page, signal) => { void analyses.get(page)?.(signal); },
     page: loadPage,
     async audio(page, index, signal) {
       guard();
       const passage = page.passages[index];
+      if (!requested.has(page)) requested.set(page, new Set());
+      requested.get(page)!.add(index);
       const dramatic = engine.getState().bookmark?.dramatic !== false;
-      const voice = downloaded ? passage.voice : passageVoice(passage.speaker, passage.voice, dramatic);
+      const voice = passageVoice(passage.speaker, passage.voice, dramatic);
       const key = audioKey(page, index, voice);
       const book = downloaded || (await localShelf.list()).find((entry) => entry.dir === dir && entry.signature === page.signature);
       guard();
       if (book?.audio[key]) {
         const cached = await offlineFiles.readAudio(book.audio[key]); guard();
-        if (cached) return cached;
+        if (cached) return { uri: cached, duration: await offlineFiles.audioDuration(cached) };
       }
-      if (downloaded) throw new Error(`第 ${page.page} 页语音尚未下载完整`);
-      return fetchChunkFile(`book_${Date.now()}_${index}.wav`, {
-        signal, cache: cacheAudio, remove: removeAudio,
-        synthesize: (abort) => synthesizeChunk({ model: 'qwen3-tts-flash' }, passage.text, voice, abort),
-      }, 45000);
+      const clip = await paragraphCache.get(JSON.stringify([dir, 'qwen3-tts-flash', key]), signal, async () => {
+        if (downloaded && voice === passage.voice) throw new Error('本页语音尚未下载完整，请联网重新下载');
+        try { return await synthesizeChunk({ model: 'qwen3-tts-flash' }, passage.text, voice, signal); }
+        catch (error) { if (downloaded && !signal.aborted) throw new Error('切换到此音色需要联网，原音色下载仍保留'); throw error; }
+      });
+      return clip;
     },
-    remove: (uri) => { offlineFiles.releaseAudio(uri); if (!uri.includes('/listening/')) removeAudio(uri); },
+    remove: offlineFiles.releaseAudio,
+    exists: offlineFiles.audioExists,
     async save(next, localOnly) {
       guard();
       if (next.savedAt >= localSavedAt) {
@@ -196,6 +231,7 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
       for (let number = start; number <= end; number++) {
         guard(); if (signal.aborted) break;
         const page = await loadPage(number, dramatic, signal);
+        await analyses.get(page)?.(signal);
         const book = await localShelf.ensure(worldId, textbook, dir, page.signature);
         const localPage = { ...page, passages: page.passages.map((p) => ({ ...p, voice: dramatic ? selected[p.speaker] || (p.speaker === '旁白' ? selected['旁白'] || p.voice : p.voice) : selected['旁白'] || 'Cherry' })) };
         updateDownload({ page: number, done: 0, total: localPage.passages.length });

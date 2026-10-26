@@ -1,3 +1,5 @@
+import { wavDuration } from './wav';
+
 function database(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open('startrips-soc-listening', 1);
@@ -32,4 +34,7 @@ export async function readAudio(key: string) {
   return blob ? URL.createObjectURL(blob) : null;
 }
 export async function deleteAudio(key: string) { await transaction('readwrite', (store) => store.delete(key)); }
+// Object URLs retain their Blob even if the durable IndexedDB entry is evicted.
+export async function audioExists(uri: string) { return uri.startsWith('blob:'); }
+export async function audioDuration(uri: string) { return wavDuration(new Uint8Array(await (await fetch(uri)).arrayBuffer())); }
 export function releaseAudio(uri: string) { if (uri.startsWith('blob:')) URL.revokeObjectURL(uri); }
