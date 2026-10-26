@@ -125,7 +125,7 @@ jobs:
           a = '{http://schemas.android.com/apk/res/android}'
           root = ET.parse(pathlib.Path(os.environ['RUNNER_TEMP']) / 'soc-android-manifest.xml').getroot()
           assert root.get('package') == 'com.socratopia.mobile'
-          assert int(root.get(a + 'versionCode')) == 6
+          assert int(root.get(a + 'versionCode')) == 7
           assert root.find('application').get(a + 'debuggable') != 'true'
           permissions = {p.get(a + 'name') for p in root.findall('uses-permission')}
           assert 'android.permission.RECORD_AUDIO' in permissions
@@ -140,14 +140,14 @@ jobs:
               for method in [b'bookAppend', b'bookReplace', b'bookClear', b'bookRate', b'bookSeek', b'bookKey']:
                   assert method in dex, f'Patched native audio is missing from the APK: {method!r}'
           PY
-          cp "$apk" "$RUNNER_TEMP/Soc-android-1.0.5.apk"
-          sha256sum "$RUNNER_TEMP/Soc-android-1.0.5.apk" > "$RUNNER_TEMP/Soc-android-1.0.5.apk.sha256"
+          cp "$apk" "$RUNNER_TEMP/Soc-android-1.0.6.apk"
+          sha256sum "$RUNNER_TEMP/Soc-android-1.0.6.apk" > "$RUNNER_TEMP/Soc-android-1.0.6.apk.sha256"
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: Soc-android
           path: |
-            ${{ runner.temp }}/Soc-android-1.0.5.apk
-            ${{ runner.temp }}/Soc-android-1.0.5.apk.sha256
+            ${{ runner.temp }}/Soc-android-1.0.6.apk
+            ${{ runner.temp }}/Soc-android-1.0.6.apk.sha256
             ${{ runner.temp }}/soc-android-signature.txt
             ${{ runner.temp }}/soc-android-manifest.xml
           if-no-files-found: error

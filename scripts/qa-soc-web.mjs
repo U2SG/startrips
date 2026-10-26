@@ -387,6 +387,11 @@ try {
   await page.getByText('第二页原文。', { exact: true }).waitFor();
   await page.getByRole('button', { name: '收起听书', exact: true }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
+  // Prime the in-memory sample cache in this session before invalidating its guard.
+  await page.getByRole('button', { name: '听书音色：旁白', exact: true }).click();
+  await page.getByRole('button', { name: '试听 Ryan', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="试听 Ryan"]')?.textContent?.includes('▷'));
+  await page.getByText('完成', { exact: true }).click();
   await page.getByTestId('listening-mini').getByRole('button', { name: '继续听书', exact: true }).click();
   await page.getByTestId('listening-mini').getByRole('button', { name: '暂停听书', exact: true }).waitFor();
   expireSession = true;
@@ -400,6 +405,13 @@ try {
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByText('刷新', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '听书音色：旁白', exact: true }).click();
+  const reloginSamples = narrations.length;
+  await page.getByRole('button', { name: '试听 Ryan', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="试听 Ryan"]')?.textContent?.includes('▷'));
+  assert.equal(await page.getByText('账号已切换，请重新打开这节课', { exact: true }).count(), 0, 'Reauthentication must renew the sample cache guard');
+  assert.equal(narrations.length, reloginSamples, 'Reauthentication must retain durable sample audio');
+  await page.getByText('完成', { exact: true }).click();
   await page.getByText('退出', { exact: true }).click();
   await page.getByLabel('邮箱', { exact: true }).waitFor();
   assert.deepEqual(errors, [], 'The shared learning UI must not crash in a mobile browser');
