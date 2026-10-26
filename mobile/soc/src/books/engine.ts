@@ -121,7 +121,7 @@ export class BookEngine {
       // Duration, rather than a fixed phrase count, matters for very short sentences.
       while (this.current(seq) && this.state.status === 'playing' && this.bufferSeconds() < 20 * (this.state.bookmark?.speed || 1)) {
         const at = this.queue.findIndex((track) => track.key === this.loaded);
-        if (this.queue.length - at >= 12) break;
+        if (this.queue.length - at >= 24) break;
         const last = this.queue.at(-1)!;
         const next = await this.adjacent(last.page, last.index, 1);
         if (!next || !this.current(seq)) break;

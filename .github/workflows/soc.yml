@@ -164,12 +164,18 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: python3 scripts/qa-soc-android.py
       - name: Build a separate background-audio QA fixture
-        env:
-          EXPO_PUBLIC_SOC_AUDIO_QA: '1'
         run: |
-          rm android/app/build/generated/assets/react/release/index.android.bundle
+          python3 - <<'PY'
+          import json, pathlib
+          entry = pathlib.Path('audio-qa-entry.ts')
+          entry.write_text("import { registerRootComponent } from 'expo';\nimport QA from './src/books/AudioQueueQA';\nregisterRootComponent(QA);\n", encoding='utf-8')
+          package = pathlib.Path('package.json')
+          value = json.loads(package.read_text(encoding='utf-8'))
+          value['main'] = str(entry)
+          package.write_text(json.dumps(value), encoding='utf-8')
+          PY
           cd android
-          ./gradlew assembleRelease -PreactNativeArchitectures=x86_64 --max-workers=2 --no-daemon
+          ./gradlew assembleRelease -PreactNativeArchitectures=x86_64 --max-workers=2 --no-daemon --no-build-cache
       - name: Verify native queue replenishment with the screen locked
         uses: reactivecircus/android-emulator-runner@v2
         with:

@@ -272,3 +272,13 @@ test('changing voice while paused replaces the native source without starting pl
   // A subsequent native play event now refers to the replacement, rather than the old voice.
   engine.tick(1, 8, true, false); assert.equal(engine.getState().status, 'playing'); engine.dispose();
 });
+
+test('very short phrases still prepare enough duration for a cross-phrase fifteen-second seek', async () => {
+  const { engine } = fixture({
+    page: async () => ({ ...page(), total: 1, passages: Array.from({ length: 100 }, () => page().passages[0]) }),
+    audio: async (_p, i) => ({ uri: String(i), duration: 1 }),
+  });
+  await engine.open(); await engine.play(); await setImmediate();
+  assert.equal(engine.getState().buffered, 20); assert.equal(engine.getState().length, 20);
+  await engine.skip(15); assert.equal(engine.getState().bookmark.passage, 15); engine.dispose();
+});
