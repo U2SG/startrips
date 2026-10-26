@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as api from '../api';
 import { Avatar } from '../components/Avatar';
@@ -13,6 +13,10 @@ import { ErrorNote } from '../ui';
 import { requestSignOut } from '../AuthGate';
 import { Linking } from 'react-native';
 import StudyStatsScreen from './StudyStatsScreen';
+import { OfflineLibrary } from '../books/OfflineLibrary';
+import type { DownloadedBook } from '../books/offlineStore';
+import { getBook, subscribe } from '../books/runtime';
+import { getVoices, loadVoices as loadBookVoices, setVoice, subscribeVoices } from '../books/preferences';
 
 type Co = NonNullable<Companion>;
 
@@ -23,6 +27,7 @@ type Props = {
   profileName: string | null;
   onSaved: (s: Settings) => Promise<void>;
   onProfileChange: (name: string) => void;
+  onOfflineListen: (book: DownloadedBook) => void;
 };
 
 const THEME_OPTS: { v: ThemeMode; label: string }[] = [
@@ -31,7 +36,7 @@ const THEME_OPTS: { v: ThemeMode; label: string }[] = [
   { v: 'dark', label: '深色' },
 ];
 
-export default function SettingsScreen({ settings, worldId, llmConfig, profileName, onSaved, onProfileChange }: Props) {
+export default function SettingsScreen({ settings, worldId, llmConfig, profileName, onSaved, onProfileChange, onOfflineListen }: Props) {
   const { ink, mode, setMode } = useTheme();
   const s = useMemo(() => makeStyles(ink), [ink]);
   const [status, setStatus] = useState('');
@@ -42,6 +47,15 @@ export default function SettingsScreen({ settings, worldId, llmConfig, profileNa
   const [voiceAvail, setVoiceAvail] = useState(false);
   const [voiceCo, setVoiceCo] = useState<Co | null>(null); // 正在设置音色的伙伴（开弹窗）
   const [showStats, setShowStats] = useState(false); // 学习数据子页面
+  const [showDownloads, setShowDownloads] = useState(false);
+  const [bookSpeaker, setBookSpeaker] = useState<string | null>(null);
+  const book = useSyncExternalStore(subscribe, getBook);
+  const bookState = useSyncExternalStore(book?.engine.subscribe || emptySubscribe, book?.engine.getState || emptyState);
+  const bookVoices = useSyncExternalStore(subscribeVoices, getVoices);
+  const [, setVoiceReady] = useState(false);
+  useEffect(() => { void loadBookVoices().then(() => setVoiceReady(true)).catch((e: Error) => setError(e.message)); }, []);
+  const speakers = ['旁白', ...new Set(bookState?.page?.passages.map((passage) => passage.speaker).filter((speaker) => speaker !== '旁白') || [])];
+  const speakerVoice = (speaker: string) => bookVoices[speaker] || bookState?.page?.passages.find((passage) => passage.speaker === speaker)?.voice || 'Cherry';
 
   const coKey = (c: Co) => c.candidateId || c.name;
 
@@ -85,6 +99,7 @@ export default function SettingsScreen({ settings, worldId, llmConfig, profileNa
   if (showStats) {
     return <StudyStatsScreen worldId={worldId} onClose={() => setShowStats(false)} />;
   }
+  if (showDownloads) return <OfflineLibrary onClose={() => setShowDownloads(false)} onOpen={onOfflineListen} />;
 
   return (
     <View style={s.root}>
@@ -102,6 +117,7 @@ export default function SettingsScreen({ settings, worldId, llmConfig, profileNa
         </View>
 
         <View style={s.group}>
+          <Pressable accessibilityRole="button" accessibilityLabel="离线书库" style={s.navRow} onPress={() => setShowDownloads(true)}><Text style={s.navRowText}>离线书库</Text><Text style={s.navChevron}>›</Text></Pressable>
           <Pressable style={s.navRow} onPress={() => void onSave()}><Text style={s.navRowText}>刷新</Text></Pressable>
           <Pressable style={s.navRow} onPress={() => void Linking.openURL(settings.serverUrl)}><Text style={s.navRowText}>Startrips</Text></Pressable>
           <Pressable style={s.navRow} onPress={() => void requestSignOut().catch((failure: Error) => setError(failure.message))}><Text style={[s.navRowText, { color: ink.red }]}>退出</Text></Pressable>
@@ -150,7 +166,15 @@ export default function SettingsScreen({ settings, worldId, llmConfig, profileNa
           )}
         </View>
 
-        {/* 音色：逐伙伴设置朗读音色（仅本机，不回写桌面） */}
+        <View>
+          <Text style={s.groupLabel}>听书音色</Text>
+          <View style={s.group}>{speakers.map((speaker, i) => <Pressable key={speaker} accessibilityRole="button" accessibilityLabel={`听书音色：${speaker}`}
+            onPress={() => setBookSpeaker(speaker)} style={[s.voiceRow, i > 0 && s.profileDivider]}>
+            <Text style={s.voiceName}>{speaker}</Text><Text style={s.voiceVal}>{speakerVoice(speaker)}</Text><Text style={s.voiceChevron}>›</Text>
+          </Pressable>)}</View>
+        </View>
+
+        {/* Existing lesson companion voices remain independent from audiobook casting. */}
         {voiceAvail && companions.length ? (
           <View>
             <Text style={s.groupLabel}>音色</Text>
@@ -178,9 +202,14 @@ export default function SettingsScreen({ settings, worldId, llmConfig, profileNa
         companion={voiceCo}
         onClose={() => { const c = voiceCo; setVoiceCo(null); if (c) loadVoices(companions); }}
       />
+      <VoicePickerModal visible={!!bookSpeaker} worldId={worldId} companion={null}
+        target={bookSpeaker ? { name: bookSpeaker, voice: speakerVoice(bookSpeaker), save: (voice) => setVoice(bookSpeaker, voice) } : undefined}
+        onClose={() => setBookSpeaker(null)} />
     </View>
   );
 }
+const emptySubscribe = (_fn: () => void) => () => {};
+const emptyState = () => null;
 
 const makeStyles = (ink: Ink) => StyleSheet.create({
   root: { flex: 1, backgroundColor: ink.canvas },

@@ -31,6 +31,7 @@ import { loadSettings, saveSettings, Settings } from './src/settings';
 import { font, Ink, motion, ThemeMode, ThemeProvider, useTheme } from './src/theme';
 import { BookPlayer } from './src/books/BookPlayer';
 import * as listening from './src/books/runtime';
+import type { DownloadedBook } from './src/books/offlineStore';
 
 const TABS = ['教材', '上课', '群聊', '闪卡', '设置'] as const;
 type Tab = (typeof TABS)[number];
@@ -190,11 +191,20 @@ function AppInner(props: {
   const [listeningBusy, setListeningBusy] = useState(false);
   const [listeningError, setListeningError] = useState('');
   const listeningTarget = useRef<{ sel: ActiveSel; tb: data.TextbookEntry } | null>(null);
+  const offlineTarget = useRef<DownloadedBook | null>(null);
   async function listen(sel: ActiveSel, tb: data.TextbookEntry) {
+    offlineTarget.current = null;
     listeningTarget.current = { sel, tb };
     setListeningOpen(true); setListeningBusy(true); setListeningError('');
     try { await listening.openBook(sel.worldId, tb, profile); }
     catch (error) { setListeningError(error instanceof Error ? error.message : '听书打开失败，请重试'); }
+    finally { setListeningBusy(false); }
+  }
+  async function listenOffline(book: DownloadedBook) {
+    offlineTarget.current = book;
+    setListeningOpen(true); setListeningBusy(true); setListeningError('');
+    try { await listening.openOffline(book); }
+    catch (error) { setListeningError(error instanceof Error ? error.message : '离线听书打开失败'); }
     finally { setListeningBusy(false); }
   }
 
@@ -241,6 +251,7 @@ function AppInner(props: {
                 worldId={active?.worldId || null}
                 llmConfig={llmConfig}
                 profileName={profileName}
+                onOfflineListen={(book) => void listenOffline(book)}
                 onSaved={async (ns) => {
                   setSettings(ns);
                   await connect(ns);
@@ -252,7 +263,7 @@ function AppInner(props: {
               />
             ) : null}
           </View>
-          <BookPlayer expanded={listeningOpen} onExpand={() => setListeningOpen(true)} onCollapse={() => setListeningOpen(false)} busy={listeningBusy} error={listeningError} retry={() => { const target = listeningTarget.current; if (target) void listen(target.sel, target.tb); }} />
+          <BookPlayer expanded={listeningOpen} onExpand={() => setListeningOpen(true)} onCollapse={() => setListeningOpen(false)} busy={listeningBusy} error={listeningError} retry={() => { if (offlineTarget.current) void listenOffline(offlineTarget.current); else { const target = listeningTarget.current; if (target) void listen(target.sel, target.tb); } }} />
           <View
             onLayout={(e) => setTabBarH(e.nativeEvent.layout.height)}
             style={[s.tabBarWrap, { paddingBottom: Math.max(insets.bottom, 8) + 6, paddingHorizontal: compactNav ? 10 : 16 }]}

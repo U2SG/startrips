@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { font, useTheme } from '../theme';
-import { getBook, subscribe, type ListeningBook } from './runtime';
+import { getBook, subscribe, getDownload, subscribeDownload, cancelDownload, type ListeningBook } from './runtime';
 
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 export function BookPlayer({ expanded, onExpand, onCollapse, busy, error, retry }: {
@@ -67,6 +67,10 @@ function Reader({ book, onCollapse }: { book: ListeningBook; onCollapse(): void 
   const [settings, setSettings] = useState(false);
   const [trackWidth, setTrackWidth] = useState(1);
   const [jumpError, setJumpError] = useState('');
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const [downloadStart, setDownloadStart] = useState('1');
+  const [downloadEnd, setDownloadEnd] = useState('');
+  const download = useSyncExternalStore(subscribeDownload, getDownload);
   const busy = state.status === 'loading';
   const playing = state.status === 'playing';
   useEffect(() => {
@@ -109,6 +113,21 @@ function Reader({ book, onCollapse }: { book: ListeningBook; onCollapse(): void 
           <Control toggle label="切换人物分声" disabled={busy} selected={b?.dramatic} onPress={() => void engine.mode(!b?.dramatic)}>人物分声 {b?.dramatic ? '开' : '关'}</Control>
           <Control label="从头重听" disabled={busy} onPress={() => void engine.go(1, 0, true)}>从头重听</Control>
         </View>
+        {!book.offline ? <Control label="离线下载" selected={downloadOpen} onPress={() => { setDownloadOpen(!downloadOpen); setDownloadEnd(String(page?.total || book.textbook.numPages)); }}>↓ 离线下载</Control> : null}
+        {downloadOpen && !book.offline ? <>
+          <View style={[styles.row, { gap: 8 }]}>
+            <TextInput accessibilityLabel="下载起始页" keyboardType="number-pad" value={downloadStart} onChangeText={setDownloadStart} style={{ minWidth: 56, minHeight: 44, color: ink.fg, borderBottomWidth: 1, borderColor: ink.border, textAlign: 'center' }} />
+            <Text style={{ color: ink.muted }}>—</Text>
+            <TextInput accessibilityLabel="下载结束页" keyboardType="number-pad" value={downloadEnd} onChangeText={setDownloadEnd} style={{ minWidth: 56, minHeight: 44, color: ink.fg, borderBottomWidth: 1, borderColor: ink.border, textAlign: 'center' }} />
+            <Text style={{ color: ink.muted }}>页</Text>
+            <Control label={download.active ? '暂停下载' : '开始下载'} onPress={() => {
+              if (download.active) cancelDownload();
+              else { setJumpError(''); void book.download(Number(downloadStart), Number(downloadEnd)).catch((e: Error) => setJumpError(e.message)); }
+            }}>{download.active ? '暂停' : '下载'}</Control>
+          </View>
+          {download.page > 0 ? <Text accessibilityLiveRegion="polite" style={{ color: ink.muted, fontSize: 12 }}>第 {download.page} / {download.end} 页 · {download.done} / {download.total} 段</Text> : null}
+          {download.error ? <Text accessibilityRole="alert" style={{ color: ink.red }}>{download.error}</Text> : null}
+        </> : null}
       </View> : null}
       <View style={styles.row}>
         <Control label="上一页" disabled={busy || !page || page.page <= 1} onPress={() => void engine.go((page?.page || 1) - 1, 0, playing)}>‹</Control>

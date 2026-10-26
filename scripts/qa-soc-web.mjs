@@ -79,7 +79,7 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname.endsWith('/extract')) {
       const number = Number(url.searchParams.get('start'));
-      return json(200, { numPages: 2, sourceSig: 'ci-book-source', pages: [{ page: number, text: number === 1 ? '第一段原文。第二段原文！' : '第二页原文。最后一段。' }] });
+      return json(200, { numPages: 2, sourceSig: 'ci-book-source', pages: [{ page: number, text: number === 1 ? '第一段原文。\n”\n第二段原文！' : '第二页原文。最后一段。' }] });
     }
     if (url.pathname.endsWith('/file')) {
       const relative = url.searchParams.get('path');
@@ -287,6 +287,49 @@ try {
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByText('刷新', { exact: true }).waitFor();
   await page.screenshot({ path: path.join(artifacts, 'settings.png') });
+  // Changing the narrator invalidates both loaded and prefetched speech without a reload.
+  await page.getByRole('button', { name: '继续听书', exact: true }).click();
+  await page.getByRole('button', { name: '暂停听书', exact: true }).waitFor();
+  const beforeVoice = narrations.length;
+  await page.getByRole('button', { name: '听书音色：旁白', exact: true }).click();
+  await page.getByRole('radio', { name: '选择 Ryan', exact: true }).click();
+  for (let attempt = 0; attempt < 100 && !narrations.slice(beforeVoice).some((request) => request.voice === 'Ryan'); attempt++) await page.waitForTimeout(50);
+  assert.ok(narrations.slice(beforeVoice).some((request) => request.voice === 'Ryan'), 'A voice change must regenerate current speech');
+  await page.getByText('完成', { exact: true }).click();
+  await page.getByRole('button', { name: '展开听书', exact: true }).click();
+  await page.getByRole('button', { name: '暂停听书', exact: true }).click();
+  if (!await page.getByRole('button', { name: '离线下载', exact: true }).count()) await page.getByRole('button', { name: '听书设置', exact: true }).click();
+  await page.getByRole('button', { name: '离线下载', exact: true }).click();
+  await page.getByLabel('下载起始页', { exact: true }).fill('1');
+  await page.getByLabel('下载结束页', { exact: true }).fill('2');
+  await page.getByRole('button', { name: '开始下载', exact: true }).click();
+  await page.getByText('第 2 / 2 页 · 2 / 2 段', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '开始下载', exact: true }).waitFor();
+  assert.ok(narrations.every((request) => /[\p{L}\p{N}]/u.test(request.text)), 'Punctuation-only passages must never reach TTS');
+  await page.getByRole('button', { name: '收起听书', exact: true }).click();
+  await page.getByRole('button', { name: '离线书库', exact: true }).click();
+  await page.getByText('2 / 2 页', { exact: true }).waitFor();
+  let offlineApiCalls = 0;
+  const blockOffline = async (route) => { offlineApiCalls++; await route.abort(); };
+  await page.route('**/api/**', blockOffline);
+  await context.setOffline(true);
+  await page.getByRole('button', { name: '离线听：手机教材', exact: true }).click();
+  await page.getByText('第二页原文。', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '播放听书', exact: true }).click();
+  await page.waitForFunction(() => Number(document.querySelector('[aria-label="本句播放进度"]')?.getAttribute('aria-valuenow')) >= 1);
+  await page.getByRole('button', { name: '暂停听书', exact: true }).click();
+  await page.screenshot({ path: path.join(artifacts, 'offline-listening.png') });
+  assert.equal(offlineApiCalls, 0, 'Offline open, playback and checkpointing must use only local data');
+  await context.setOffline(false);
+  await page.unroute('**/api/**', blockOffline);
+  await page.getByRole('button', { name: '收起听书', exact: true }).click();
+  await page.getByRole('button', { name: '返回', exact: true }).click();
+  // Reopen online before exercising server-session expiry.
+  await page.getByRole('button', { name: '教材', exact: true }).click();
+  await page.getByRole('button', { name: '听书：手机教材', exact: true }).click();
+  await page.getByText('第二页原文。', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '收起听书', exact: true }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '继续听书', exact: true }).click();
   await page.getByRole('button', { name: '暂停听书', exact: true }).waitFor();
   expireSession = true;

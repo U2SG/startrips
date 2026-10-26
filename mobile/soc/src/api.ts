@@ -40,9 +40,9 @@ export async function authFetch(endpoint: string, init: RequestInit & { signal: 
   return response;
 }
 
-export async function authJson<T>(endpoint: string, init: RequestInit = {}): Promise<{ ok: boolean; status: number; value: T }> {
+export async function authJson<T>(endpoint: string, init: RequestInit = {}, timeoutMs = 180000): Promise<{ ok: boolean; status: number; value: T }> {
   const owner = new AbortController();
-  const deadline = setTimeout(() => owner.abort(), 180000);
+  const deadline = setTimeout(() => owner.abort(), timeoutMs);
   try {
     const response = await authFetch(endpoint, { ...init, signal: owner.signal });
     return { ok: response.ok, status: response.status, value: await response.json() as T };

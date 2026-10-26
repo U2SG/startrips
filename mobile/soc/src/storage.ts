@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 let scope = '';
+export const storageScope = () => scope;
 export function setStorageScope(origin: string, userId: string) { scope = `${origin}/${userId}`; }
 const key = (name: string) => {
   if (!scope) throw new Error('请先登录');

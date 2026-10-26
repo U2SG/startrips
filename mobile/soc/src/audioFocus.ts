@@ -1,4 +1,4 @@
-type Owner = 'speech' | 'book';
+type Owner = 'speech' | 'book' | 'preview';
 const handlers = new Map<Owner, Set<() => void>>();
 export function registerAudioFocus(owner: Owner, pause: () => void) {
   if (!handlers.has(owner)) handlers.set(owner, new Set());

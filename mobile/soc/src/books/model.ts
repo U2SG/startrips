@@ -1,23 +1,54 @@
 /** The source text is immutable: model output can annotate indices, never replace words. */
 export type Passage = { text: string; speaker: string; voice: string; tone: string };
-export type BookPage = { page: number; total: number; signature: string; passages: Passage[]; notice?: string };
-export type Bookmark = { version: 1; page: number; passage: number; seconds: number; signature: string; speed: number; dramatic: boolean; savedAt: number };
+export type BookPage = { page: number; total: number; signature: string; passages: Passage[]; notice?: string; legacyIndices?: number[] };
+export type Bookmark = { version: 1; page: number; passage: number; seconds: number; signature: string; speed: number; dramatic: boolean; savedAt: number; segmentation?: 2 };
 export const BOOK_VOICES = ['Cherry', 'Ethan', 'Serena', 'Ryan', 'Chelsie', 'Aiden', 'Bella', 'Kai'] as const;
 const TONES = ['neutral', 'gentle', 'excited', 'sad', 'tense'] as const;
 
+export const isSpeakable = (text: string) => /[\p{L}\p{N}]/u.test(text);
+
 export function splitBookText(text: string): string[] {
-  // Keep punctuation, Markdown and stage directions: those are part of the book.
-  const pieces = text.match(/[^。！？.!?\n]+[。！？.!?]?|[。！？.!?]+|\n+/gu) || [];
+  // Closing quotes belong to the sentence before them, including across line breaks.
+  const pieces = text.match(/[^。！？.!?\n]+[。！？.!?]*[”’」』）》】"]*|[。！？.!?]+[”’」』）》】"]*|\n+/gu) || [];
   const result: string[] = [];
+  let prefix = '';
   for (const piece of pieces) {
-    const chars = Array.from(piece);
+    if (!isSpeakable(piece)) {
+      if (result.length) result[result.length - 1] += piece;
+      else prefix += piece;
+      continue;
+    }
+    const chars = Array.from(prefix + piece); prefix = '';
     for (let i = 0; i < chars.length; i += 240) {
       const part = chars.slice(i, i + 240).join('');
-      if (part.trim()) result.push(part);
+      if (isSpeakable(part)) result.push(part);
       else if (result.length) result[result.length - 1] += part;
+      else prefix += part;
     }
   }
   return result;
+}
+
+/** Map checkpoints written by the old splitter without replaying the whole page. */
+export function legacyPassageIndices(text: string, passages: string[]): number[] {
+  const old = text.match(/[^。！？.!?\n]+[。！？.!?]?|[。！？.!?]+|\n+/gu) || [];
+  const legacy: string[] = [];
+  for (const piece of old) {
+    const chars = Array.from(piece);
+    for (let i = 0; i < chars.length; i += 240) {
+      const part = chars.slice(i, i + 240).join('');
+      if (part.trim()) legacy.push(part);
+      else if (legacy.length) legacy[legacy.length - 1] += part;
+    }
+  }
+  let offset = 0;
+  const ends = passages.map((part) => (offset += part.replace(/\s/gu, '').length));
+  offset = 0;
+  return legacy.map((part) => {
+    const index = ends.findIndex((end) => offset < end);
+    offset += part.replace(/\s/gu, '').length;
+    return index < 0 ? Math.max(0, passages.length - 1) : index;
+  });
 }
 
 export function annotatePassages(texts: string[], raw: unknown, previous: Record<string, string>) {
@@ -47,10 +78,12 @@ export function restoreBookmark(raw: unknown, page: BookPage): Bookmark {
   const b = raw as Partial<Bookmark> | null;
   const matches = b?.version === 1 && b.signature === page.signature && b.page === page.page;
   const number = (n: unknown, fallback: number) => typeof n === 'number' && Number.isFinite(n) ? n : fallback;
+  const oldIndex = Math.max(0, Math.trunc(number(b?.passage, 0)));
+  const mapped = b?.segmentation !== 2 ? page.legacyIndices?.[oldIndex] : undefined;
   return {
-    version: 1, page: page.page, signature: page.signature,
-    passage: matches ? Math.max(0, Math.min(Math.trunc(number(b?.passage, 0)), Math.max(0, page.passages.length - 1))) : 0,
-    seconds: matches ? Math.max(0, number(b?.seconds, 0)) : 0,
+    version: 1, segmentation: 2, page: page.page, signature: page.signature,
+    passage: matches ? Math.max(0, Math.min(mapped ?? oldIndex, Math.max(0, page.passages.length - 1))) : 0,
+    seconds: matches && mapped === undefined ? Math.max(0, number(b?.seconds, 0)) : 0,
     speed: Math.max(0.75, Math.min(2, number(b?.speed, 1))), dramatic: b?.dramatic !== false,
     savedAt: number(b?.savedAt, 0),
   };
