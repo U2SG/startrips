@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
+import { hideAsync } from 'expo-splash-screen';
 import { BookEngine } from './engine';
 import { createBookAudio } from './audio';
 import * as files from './offlineFiles';
@@ -9,6 +10,7 @@ import * as files from './offlineFiles';
 export default function AudioQueueQA() {
   const [label, setLabel] = useState('Preparing native audio queue');
   useEffect(() => {
+    void hideAsync();
     let engine: BookEngine;
     const audio = createBookAudio({
       create: () => {

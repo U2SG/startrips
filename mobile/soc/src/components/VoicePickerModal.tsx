@@ -37,7 +37,7 @@ export function VoicePickerModal(props: {
     else if (visible && worldId && companion) getCompanionVoice(worldId, companion).then((voice) => { if (seq === generation.current) setCur(voice); }).catch(() => {});
     if (!visible) { setErr(''); setPreview(null); }
     return () => { ++generation.current; request.current?.abort(); try { player.pause(); } catch {} if (sampleUri.current) { releaseAudio(sampleUri.current); sampleUri.current = null; } };
-  }, [visible, worldId, companion, target?.name]);
+  }, [visible, worldId, companion, target?.name, target?.voice]);
 
   function stop() { request.current?.abort(); try { player.pause(); } catch { /* ignore */ } }
   function close() { ++generation.current; stop(); onClose(); }

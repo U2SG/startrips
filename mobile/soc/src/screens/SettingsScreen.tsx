@@ -52,7 +52,7 @@ export default function SettingsScreen({ settings, worldId, llmConfig, profileNa
   const book = useSyncExternalStore(subscribe, getBook);
   const bookState = useSyncExternalStore(book?.engine.subscribe || emptySubscribe, book?.engine.getState || emptyState);
   const bookVoices = useSyncExternalStore(subscribeVoices, getVoices);
-  const [, setVoiceReady] = useState(false);
+  const [bookVoicesReady, setVoiceReady] = useState(false);
   useEffect(() => { void loadBookVoices().then(() => setVoiceReady(true)).catch((e: Error) => setError(e.message)); }, []);
   const speakers = ['旁白', ...new Set(bookState?.page?.passages.map((passage) => passage.speaker).filter((speaker) => speaker !== '旁白') || [])];
   const speakerVoice = (speaker: string) => bookVoices[speaker] || bookState?.page?.passages.find((passage) => passage.speaker === speaker)?.voice || 'Cherry';
@@ -169,6 +169,7 @@ export default function SettingsScreen({ settings, worldId, llmConfig, profileNa
         <View>
           <Text style={s.groupLabel}>听书音色</Text>
           <View style={s.group}>{speakers.map((speaker, i) => <Pressable key={speaker} accessibilityRole="button" accessibilityLabel={`听书音色：${speaker}`}
+            disabled={!bookVoicesReady} accessibilityState={{ disabled: !bookVoicesReady }}
             onPress={() => setBookSpeaker(speaker)} style={[s.voiceRow, i > 0 && s.profileDivider]}>
             <Text style={s.voiceName}>{speaker}</Text><Text style={s.voiceVal}>{speakerVoice(speaker)}</Text><Text style={s.voiceChevron}>›</Text>
           </Pressable>)}</View>
