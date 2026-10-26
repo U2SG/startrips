@@ -8,6 +8,7 @@ type Player = {
   addListener(event: 'playbackStatusUpdate', listener: (status: Status) => void): { remove(): void };
   play(): void; pause(): void; seekTo(seconds: number): Promise<void>; setPlaybackRate(rate: number): void;
   setActiveForLockScreen(active: boolean, metadata?: Metadata): void;
+  updateLockScreenMetadata?(metadata: Metadata): void;
   clearLockScreenControls(): void; remove(): void;
   bookReplace?(source: { uri: string }, key: string, rate: number): void;
   bookAppend?(source: { uri: string }, key: string, rate: number): void;
@@ -27,6 +28,7 @@ export function createBookAudio(deps: {
   let loading = false;
   let starting = false;
   let wanted = false;
+  let lockScreenActive = false;
   let currentKey = '';
   let pending: { uri: string; key: string; rate: number }[] = [];
   let ready: { resolve(): void; reject(error: Error): void } | null = null;
@@ -105,7 +107,6 @@ export function createBookAudio(deps: {
         else await current.seekTo(target);
       }
       assertCurrent(version);
-      current.setActiveForLockScreen(true, deps.metadata());
       loading = false;
     },
     enqueue(uri, key, speed) {
@@ -120,7 +121,16 @@ export function createBookAudio(deps: {
       if (player?.bookClear) player.bookClear();
       else player?.replace({ uri: '' });
     },
-    play() { if (released) return; deps.guard(); starting = true; wanted = true; player?.setActiveForLockScreen(true, deps.metadata()); player?.play(); },
+    play() {
+      if (released || !player) return;
+      deps.guard(); starting = true; wanted = true;
+      // Repeated activation rebuilds Android's MediaSession. Keep one session,
+      // including across source replacements, and only update its metadata.
+      if (!lockScreenActive) {
+        player.setActiveForLockScreen(true, deps.metadata()); lockScreenActive = true;
+      } else player.updateLockScreenMetadata?.(deps.metadata());
+      player.play();
+    },
     pause() { cancelReady(); ++generation; loading = false; starting = false; wanted = false; player?.pause(); },
     async seek(seconds) { if (player && !released) { if (player.bookSeek) player.bookSeek(seconds); else await player.seekTo(seconds); } },
     rate,

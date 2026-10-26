@@ -44,6 +44,34 @@ def playback_logs():
     return adb('logcat', '-d', '-b', 'main', '-s', 'ReactNativeJS:I')
 
 
+def diagnostics():
+    # JS can block inside a synchronous native call. Preserve the Android side
+    # as well, so a missing JS event does not hide a service crash or ANR.
+    for name, args in {
+        'crash': ('logcat', '-d', '-b', 'crash', '-t', '400'),
+        'system': ('logcat', '-d', '-b', 'system', '-t', '1500'),
+        'native': ('logcat', '-d', '-b', 'main', '-t', '1500'),
+        'anr': ('shell', 'dumpsys', 'activity', 'lastanr'),
+        'sessions': ('shell', 'dumpsys', 'media_session'),
+        'audio': ('shell', 'dumpsys', 'audio'),
+    }.items():
+        try:
+            result = subprocess.run(['adb', *args], capture_output=True, timeout=15)
+            (root / f'background-{name}.txt').write_bytes(result.stdout + result.stderr)
+        except subprocess.TimeoutExpired as error:
+            (root / f'background-{name}.txt').write_bytes((error.stdout or b'') + b'\nDiagnostic timed out')
+    if not (root / 'background.json').exists():
+        try:
+            adb('root'); adb('wait-for-device')
+            pid = adb('shell', 'pidof', 'com.socratopia.mobile').strip()
+            if pid.isdigit():
+                adb('shell', 'kill', '-3', pid)
+                time.sleep(2)
+            subprocess.run(['adb', 'pull', '/data/anr', str(root / 'native-traces')], capture_output=True, timeout=20)
+        except (subprocess.SubprocessError, OSError):
+            pass
+
+
 server = ThreadingHTTPServer(('0.0.0.0', 18991), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 try:
@@ -75,6 +103,7 @@ try:
 finally:
     (root / 'background-logcat.txt').write_text(playback_logs(), encoding='utf-8')
     (root / 'background-requests.json').write_text(json.dumps(requests, indent=2), encoding='utf-8')
+    diagnostics()
     adb('shell', 'input', 'keyevent', 'KEYCODE_WAKEUP')
     adb('shell', 'wm', 'dismiss-keyguard')
     adb('shell', 'uiautomator', 'dump', '/sdcard/soc-background.xml')

@@ -12,6 +12,7 @@ function setup(configure = async () => {}) {
     async seekTo(seconds) { events.push(['seek', seconds]); },
     setPlaybackRate(rate) { events.push(['rate', rate]); },
     setActiveForLockScreen(active) { events.push(['lockScreen', active]); },
+    updateLockScreenMetadata(metadata) { events.push(['metadata', metadata]); },
     clearLockScreenControls() { events.push(['clearLockScreen']); },
     remove() { events.push(['remove']); },
   };
@@ -24,6 +25,8 @@ test('phrase changes retain one native player and lock-screen session until disp
   await f.audio.load('first.wav', 4, 1); f.audio.play(); f.audio.pause();
   await f.audio.load('second.wav', 0, 1.5); f.audio.play();
   assert.equal(f.created(), 1);
+  assert.deepEqual(f.events.filter((e) => e[0] === 'lockScreen'), [['lockScreen', true]]);
+  assert.equal(f.events.filter((e) => e[0] === 'metadata').length, 1);
   assert.deepEqual(f.events.filter((e) => e[0] === 'source'), [['source', 'first.wav'], ['source', 'second.wav']]);
   assert.equal(f.events.some((e) => ['remove', 'clearLockScreen', 'unsubscribe'].includes(e[0])), false);
   f.audio.release(); f.audio.release();
@@ -40,7 +43,7 @@ test('an obsolete load cannot seek or replace metadata after a newer phrase is r
   await f.audio.load('new.wav', 0, 1.25);
   resolve(); await assert.rejects(first, /已取消/);
   assert.deepEqual(f.events.filter((e) => e[0] === 'seek'), []);
-  assert.equal(f.events.filter((e) => e[0] === 'lockScreen').length, 1);
+  assert.equal(f.events.filter((e) => e[0] === 'lockScreen').length, 0);
   f.audio.release();
 });
 
