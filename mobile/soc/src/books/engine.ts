@@ -68,12 +68,13 @@ export class BookEngine {
   private key(page: BookPage, index: number) { return `${page.signature}/${page.page}/${index}/${this.state.bookmark?.dramatic}`; }
   private async prepare(page: BookPage, index: number): Promise<CachedClip | null> {
     const key = this.key(page, index);
+    const signal = this.controller.signal;
     const cached = this.clips.get(key);
     if (cached && this.deps.exists && !await this.deps.exists(cached.uri) && this.clips.get(key) === cached) {
       this.clips.delete(key); this.jobs.delete(key); this.ready.delete(key); this.uris.delete(cached.uri); this.deps.remove(cached.uri);
     }
+    if (signal.aborted || this.disposed) return null;
     if (!this.jobs.has(key)) {
-      const signal = this.controller.signal;
       const job = this.deps.audio(page, index, signal).then((result) => {
         const clip = typeof result === 'string' ? { uri: result, duration: 0 } : result;
         if (signal.aborted || this.disposed) { if (clip) this.deps.remove(clip.uri); return null; }
@@ -96,11 +97,13 @@ export class BookEngine {
     return page;
   }
   private async adjacent(page: BookPage, index: number, delta: number): Promise<{ page: BookPage; index: number } | null> {
+    const seq = this.sequence;
     index += delta;
     while (index < 0 || index >= page.passages.length) {
       const number = page.page + delta;
       if (number < 1 || number > page.total) return null;
       page = await this.pageAt(number); index = delta > 0 ? 0 : page.passages.length - 1;
+      if (!this.current(seq)) throw new Error('已取消');
     }
     return { page, index };
   }

@@ -359,6 +359,7 @@ try {
   await page.getByRole('button', { name: '开始下载', exact: true }).waitFor();
   assert.ok(narrations.every((request) => /[\p{L}\p{N}]/u.test(request.text)), 'Punctuation-only passages must never reach TTS');
   await page.getByRole('button', { name: '收起听书', exact: true }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '离线书库', exact: true }).click();
   await page.getByText('2 / 2 页', { exact: true }).waitFor();
   let offlineApiCalls = 0;

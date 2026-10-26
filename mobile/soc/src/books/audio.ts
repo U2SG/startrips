@@ -28,6 +28,8 @@ export function createBookAudio(deps: {
   let wanted = false;
   let currentKey = '';
   let pending: { uri: string; key: string; rate: number }[] = [];
+  let ready: { resolve(): void; reject(error: Error): void } | null = null;
+  const cancelReady = () => { ready?.reject(new Error('音频加载已取消')); ready = null; };
   const valid = (version: number) => !released && version === generation;
   const assertCurrent = (version: number) => { if (!valid(version)) throw new Error('音频加载已取消'); deps.guard(); };
   const rate = (value: number) => {
@@ -43,6 +45,7 @@ export function createBookAudio(deps: {
   let currentRate = 1;
   return {
     async load(uri, seconds, speed, key = '') {
+      cancelReady();
       const version = ++generation;
       assertCurrent(version);
       loading = true; starting = false; wanted = false;
@@ -50,7 +53,12 @@ export function createBookAudio(deps: {
         const created = deps.create();
         player = created;
         subscription = created.addListener('playbackStatusUpdate', (status) => {
-          if (player !== created || released || loading) return;
+          if (player !== created || released) return;
+          if (loading) {
+            if (status.error) ready?.reject(new Error('音频加载失败，请重试'));
+            else if (created.isLoaded) ready?.resolve();
+            return;
+          }
           if (status.isBuffering && !status.didJustFinish) return;
           if (status.bookKey) currentKey = status.bookKey;
           // Browsers use the same bounded queue, with ended events instead of native transitions.
@@ -74,8 +82,17 @@ export function createBookAudio(deps: {
       else current.replace({ uri });
       await deps.configure();
       assertCurrent(version);
-      const started = Date.now();
-      while (!current.isLoaded && valid(version) && Date.now() - started < 10000) await new Promise((done) => setTimeout(done, 50));
+      if (!current.isLoaded) await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => finish(new Error('音频加载失败，请重试')), 10000);
+        const finish = (error?: Error) => {
+          clearTimeout(timer); if (ready === waiter) ready = null;
+          if (error) reject(error); else resolve();
+        };
+        const waiter = { resolve: () => finish(), reject: (error: Error) => finish(error) };
+        ready = waiter;
+        // Native status events keep working while React Native's UI timers are suspended.
+        if (current.isLoaded) finish();
+      });
       assertCurrent(version);
       if (!current.isLoaded) throw new Error('音频加载失败，请重试');
       rate(speed);
@@ -90,18 +107,20 @@ export function createBookAudio(deps: {
       else pending.push({ uri, key, rate: speed });
     },
     clear() {
+      cancelReady();
       ++generation; loading = false; wanted = false; starting = false; pending = []; currentKey = '';
       player?.pause();
       if (player?.bookClear) player.bookClear();
       else player?.replace({ uri: '' });
     },
     play() { if (released) return; deps.guard(); starting = true; wanted = true; player?.setActiveForLockScreen(true, deps.metadata()); player?.play(); },
-    pause() { ++generation; loading = false; starting = false; wanted = false; player?.pause(); },
+    pause() { cancelReady(); ++generation; loading = false; starting = false; wanted = false; player?.pause(); },
     async seek(seconds) { if (player && !released) await player.seekTo(seconds); },
     rate,
     release() {
       if (released) return;
       released = true; ++generation;
+      cancelReady();
       pending = [];
       const old = player; player = null;
       subscription?.remove(); subscription = null;

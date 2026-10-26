@@ -167,7 +167,7 @@ jobs:
         env:
           EXPO_PUBLIC_SOC_AUDIO_QA: '1'
         run: |
-          rm android/app/build/generated/assets/createBundleReleaseJsAndAssets/index.android.bundle
+          rm android/app/build/generated/assets/react/release/index.android.bundle
           cd android
           ./gradlew assembleRelease -PreactNativeArchitectures=x86_64 --max-workers=2 --no-daemon
       - name: Verify native queue replenishment with the screen locked

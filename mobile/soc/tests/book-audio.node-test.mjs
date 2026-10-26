@@ -16,7 +16,7 @@ function setup(configure = async () => {}) {
     remove() { events.push(['remove']); },
   };
   const audio = createBookAudio({ create: () => { created++; return player; }, configure, guard() {}, status: (s) => status.push(s), metadata: () => ({ title: 'Book' }) });
-  return { audio, events, status, emit: (s) => listener(s), created: () => created };
+  return { audio, player, events, status, emit: (s) => listener(s), created: () => created };
 }
 
 test('phrase changes retain one native player and lock-screen session until disposal', async () => {
@@ -62,4 +62,15 @@ test('delayed replace pauses cannot stop a new source before its first playing e
   f.emit({ currentTime: 2.2, duration: 12, playing: true, didJustFinish: false });
   f.emit({ currentTime: 3, duration: 12, playing: false, didJustFinish: false });
   assert.deepEqual(f.status.map((s) => s.playing), [true, true, false]); f.audio.release();
+});
+
+test('native readiness completes loading even when UI timeout callbacks do not run', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = setup(); f.player.isLoaded = false;
+  const loading = f.audio.load('background.wav', 2, 1);
+  await Promise.resolve(); await Promise.resolve();
+  f.player.isLoaded = true;
+  f.emit({ currentTime: 0, duration: 12, playing: false, didJustFinish: false });
+  await loading;
+  assert.ok(f.events.some((e) => e[0] === 'seek' && e[1] === 2)); f.audio.release();
 });
