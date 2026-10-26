@@ -1,4 +1,4 @@
-import { wavDuration } from './wav';
+import { normalizeWav, wavDuration } from './wav';
 
 function database(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -23,7 +23,8 @@ async function transaction<T>(mode: IDBTransactionMode, run: (store: IDBObjectSt
 export async function storeAudio(key: string, url: string, signal: AbortSignal) {
   const response = await fetch(url, { signal });
   if (!response.ok) throw new Error('语音下载失败');
-  const blob = await response.blob();
+  const bytes = normalizeWav(new Uint8Array(await response.arrayBuffer()));
+  const blob = new Blob([Uint8Array.from(bytes)], { type: 'audio/wav' });
   if (signal.aborted) throw new Error('下载已暂停');
   if (blob.size < 44) throw new Error('语音文件不完整');
   await transaction('readwrite', (store) => store.put(blob, key));

@@ -19,6 +19,9 @@ with wave.open(audio, 'wb') as stream:
     stream.setsampwidth(2)
     stream.setframerate(16000)
     stream.writeframes(struct.pack('<h', 400) * 32000)  # 2 seconds per phrase
+provider_wav = bytearray(audio.getvalue())
+struct.pack_into('<I', provider_wav, 4, 0x7fffffbf)
+struct.pack_into('<I', provider_wav, 40, 0x7fffff9b)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -27,9 +30,9 @@ class Handler(BaseHTTPRequestHandler):
         time.sleep(0.15)  # Simulate synthesis/download, rather than an already complete book.
         self.send_response(200)
         self.send_header('Content-Type', 'audio/wav')
-        self.send_header('Content-Length', str(len(audio.getvalue())))
+        self.send_header('Content-Length', str(len(provider_wav)))
         self.end_headers()
-        self.wfile.write(audio.getvalue())
+        self.wfile.write(provider_wav)
 
     def log_message(self, *args):
         pass

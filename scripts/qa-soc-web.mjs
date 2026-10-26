@@ -27,6 +27,10 @@ wav.write('RIFF', 0); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt '
 wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
 wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
 wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
+// Match the complete Qwen response observed in production, including its size markers.
+wav.writeUInt32LE(0x7fffffbf, 4); wav.writeUInt32LE(0x7fffff9b, 40);
+const listeningVersions = new Map();
+let progressConflict = false, progressRecovered = false;
 let cards = { textbookId: 'book', updatedAt: new Date().toISOString(), cards: [1, 2].map((number) => ({
   id: `card-${number}`, question: `CI question ${number}`, choices: [`CI answer ${number}`, 'Other'], correctIndex: 0,
   explanation: 'CI explanation', source: { textbook: 'CI book', chapter: 'CI chapter', textbookSlug: 'book' },
@@ -94,13 +98,26 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname.endsWith('/file')) {
       const relative = url.searchParams.get('path');
       if (relative?.includes('/listening-')) {
+        const tag = `"listening-${listeningVersions.get(relative) || 0}"`;
         if (request.method === 'PUT') {
           let text = ''; for await (const chunk of request) text += chunk;
+          if (relative.endsWith('/listening-progress.json') && !progressConflict) {
+            progressConflict = true;
+            const incoming = JSON.parse(text);
+            listeningFiles.set(relative, { ...incoming, savedAt: incoming.savedAt - 1 });
+            listeningVersions.set(relative, 1);
+            return json(409, { error: 'STUDY_FILE_CHANGED', message: 'Revision changed' });
+          }
+          if (listeningFiles.has(relative) ? request.headers['if-match'] !== tag : request.headers['if-none-match'] !== '*') {
+            return json(409, { error: 'STUDY_FILE_CHANGED', message: 'Revision changed' });
+          }
           listeningFiles.set(relative, JSON.parse(text)); listeningWrites++;
-          response.setHeader('ETag', `"listening-${listeningWrites}"`); return json(200, { ok: true });
+          listeningVersions.set(relative, (listeningVersions.get(relative) || 0) + 1);
+          if (relative.endsWith('/listening-progress.json')) progressRecovered = true;
+          response.setHeader('ETag', `"listening-${listeningVersions.get(relative)}"`); return json(200, { ok: true });
         }
         if (!listeningFiles.has(relative)) return json(404, { error: 'STUDY_FILE_NOT_FOUND' });
-        response.setHeader('ETag', `"listening-${listeningWrites}"`); return json(200, listeningFiles.get(relative));
+        response.setHeader('ETag', tag); return json(200, listeningFiles.get(relative));
       }
       if (relative?.endsWith('/worlds/active.json')) {
         if (request.method === 'PUT') {
@@ -425,6 +442,7 @@ try {
   await page.getByText('退出', { exact: true }).click();
   await page.getByLabel('邮箱', { exact: true }).waitFor();
   assert.deepEqual(errors, [], 'The shared learning UI must not crash in a mobile browser');
+  assert.ok(progressConflict && progressRecovered, 'Progress revision conflicts must recover without reopening the book');
   await context.close();
 } finally {
   await browser.close();

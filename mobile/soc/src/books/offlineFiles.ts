@@ -1,6 +1,6 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import { fetch } from 'expo/fetch';
-import { wavDuration } from './wav';
+import { normalizeWav, wavDuration } from './wav';
 
 export async function storeAudio(_key: string, url: string, signal: AbortSignal) {
   const directory = new Directory(Paths.document, 'listening');
@@ -9,7 +9,7 @@ export async function storeAudio(_key: string, url: string, signal: AbortSignal)
   try {
     const response = await fetch(url, { signal });
     if (!response.ok) throw new Error('语音下载失败');
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const bytes = normalizeWav(new Uint8Array(await response.arrayBuffer()));
     if (signal.aborted) throw new Error('下载已暂停');
     if (bytes.length < 44) throw new Error('语音文件不完整');
     file.create(); file.write(bytes);
