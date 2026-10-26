@@ -195,6 +195,14 @@ try {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
   const page = await context.newPage();
   const errors = [];
+  await page.addInitScript(() => {
+    window.socAudioStarts = 0;
+    const start = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = function (...args) {
+      window.socAudioStarts++;
+      return start.apply(this, args);
+    };
+  });
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${address.port}/soc/`);
   await page.getByLabel('邮箱', { exact: true }).waitFor({ timeout: 60000 });
@@ -407,7 +415,9 @@ try {
   await page.getByText('刷新', { exact: true }).waitFor();
   await page.getByRole('button', { name: '听书音色：旁白', exact: true }).click();
   const reloginSamples = narrations.length;
+  const reloginStarts = await page.evaluate(() => window.socAudioStarts);
   await page.getByRole('button', { name: '试听 Ryan', exact: true }).click();
+  await page.waitForFunction((before) => window.socAudioStarts > before, reloginStarts);
   await page.waitForFunction(() => document.querySelector('[aria-label="试听 Ryan"]')?.textContent?.includes('▷'));
   assert.equal(await page.getByText('账号已切换，请重新打开这节课', { exact: true }).count(), 0, 'Reauthentication must renew the sample cache guard');
   assert.equal(narrations.length, reloginSamples, 'Reauthentication must retain durable sample audio');
