@@ -123,6 +123,8 @@ export class BookEngine {
         const at = this.queue.findIndex((track) => track.key === this.loaded);
         if (this.queue.length - at >= 24) break;
         const last = this.queue.at(-1)!;
+        preparing = `after/${last.key}`;
+        if (this.prefetchFailed.has(preparing)) break;
         const next = await this.adjacent(last.page, last.index, 1);
         if (!next || !this.current(seq)) break;
         const key = this.key(next.page, next.index);

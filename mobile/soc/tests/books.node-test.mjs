@@ -282,3 +282,14 @@ test('very short phrases still prepare enough duration for a cross-phrase fiftee
   assert.equal(engine.getState().buffered, 20); assert.equal(engine.getState().length, 20);
   await engine.skip(15); assert.equal(engine.getState().bookmark.passage, 15); engine.dispose();
 });
+
+test('a failed future page is not requested again on every playback status event', async () => {
+  let requests = 0;
+  const { engine } = fixture({
+    page: async (n) => { if (n === 2) { requests++; throw new Error('page unavailable'); } return page(); },
+    audio: async (_p, i) => ({ uri: String(i), duration: 1 }),
+  });
+  await engine.open(); await engine.play(); await setImmediate();
+  for (let i = 0; i < 10; i++) { engine.tick(i / 20, 1, true, false); await setImmediate(); }
+  assert.equal(requests, 1); assert.equal(engine.getState().status, 'playing'); engine.dispose();
+});
