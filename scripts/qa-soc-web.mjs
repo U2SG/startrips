@@ -318,8 +318,12 @@ try {
   await context.setOffline(true);
   await page.getByRole('button', { name: '离线听：手机教材', exact: true }).click();
   await page.getByText('第二页原文。', { exact: true }).waitFor();
+  const offlineStart = Number(await page.getByLabel('本句播放进度', { exact: true }).getAttribute('aria-valuenow'));
   await page.getByRole('button', { name: '播放听书', exact: true }).click();
-  await page.waitForFunction(() => Number(document.querySelector('[aria-label="本句播放进度"]')?.getAttribute('aria-valuenow')) >= 1);
+  await page.waitForFunction((start) => {
+    const track = document.querySelector('[aria-label="本句播放进度"]');
+    return Number(track?.getAttribute('aria-valuemax')) > 0 && Number(track?.getAttribute('aria-valuenow')) > start + 1;
+  }, offlineStart);
   await page.getByRole('button', { name: '暂停听书', exact: true }).click();
   await page.screenshot({ path: path.join(artifacts, 'offline-listening.png') });
   assert.equal(offlineApiCalls, 0, 'Offline open, playback and checkpointing must use only local data');
