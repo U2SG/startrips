@@ -13,6 +13,7 @@ type Player = {
   bookAppend?(source: { uri: string }, key: string, rate: number): void;
   bookRate?(rate: number): void;
   bookClear?(): void;
+  bookSeek?(seconds: number): void;
 };
 
 /** Keep the native media session alive across phrases and page/LLM gaps. */
@@ -96,7 +97,13 @@ export function createBookAudio(deps: {
       assertCurrent(version);
       if (!current.isLoaded) throw new Error('音频加载失败，请重试');
       rate(speed);
-      await current.seekTo(Math.max(0, Math.min(seconds, Math.max(0, current.duration - 0.1))));
+      const target = Math.max(0, Math.min(seconds, Math.max(0, current.duration - 0.1)));
+      // Replacing a source already starts at zero. Android's native command avoids
+      // waiting for a paused ExoPlayer seek promise before play() can be requested.
+      if (target > 0) {
+        if (current.bookSeek) current.bookSeek(target);
+        else await current.seekTo(target);
+      }
       assertCurrent(version);
       current.setActiveForLockScreen(true, deps.metadata());
       loading = false;
@@ -115,7 +122,7 @@ export function createBookAudio(deps: {
     },
     play() { if (released) return; deps.guard(); starting = true; wanted = true; player?.setActiveForLockScreen(true, deps.metadata()); player?.play(); },
     pause() { cancelReady(); ++generation; loading = false; starting = false; wanted = false; player?.pause(); },
-    async seek(seconds) { if (player && !released) await player.seekTo(seconds); },
+    async seek(seconds) { if (player && !released) { if (player.bookSeek) player.bookSeek(seconds); else await player.seekTo(seconds); } },
     rate,
     release() {
       if (released) return;

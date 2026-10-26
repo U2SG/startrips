@@ -17,6 +17,10 @@ export default function AudioQueueQA() {
         const player = createAudioPlayer(null, { updateInterval: 250, keepAudioSessionActive: true });
         console.info('SOC_QA_PLAYER', typeof (player as unknown as { bookAppend?: unknown }).bookAppend);
         player.addListener('playbackStatusUpdate', (s) => console.info('SOC_QA_NATIVE', JSON.stringify(s)));
+        const start = player.play.bind(player);
+        player.play = () => { console.info('SOC_QA_START'); start(); console.info('SOC_QA_STARTED'); };
+        const lock = player.setActiveForLockScreen.bind(player);
+        player.setActiveForLockScreen = (...args) => { console.info('SOC_QA_ACTIVATE'); lock(...args); console.info('SOC_QA_ACTIVE'); };
         if (!(player as unknown as { bookAppend?: unknown }).bookAppend) throw new Error('Native book queue missing');
         return player;
       },
@@ -44,7 +48,7 @@ export default function AudioQueueQA() {
       console.info('SOC_QA_ENGINE', JSON.stringify({ status: state.status, error: state.error, passage: state.bookmark?.passage }));
       setLabel(state.error || `${state.status} ${state.bookmark?.page}/${state.bookmark?.passage}`);
     });
-    void engine.open().then(() => engine.play());
+    void engine.open({ version: 1, segmentation: 2, page: 1, passage: 0, seconds: 0.5, signature: 'ci-background', speed: 1, dramatic: true, savedAt: 0 }).then(() => engine.play());
     return () => { unsubscribe(); engine.dispose(); };
   }, []);
   return <View style={{ flex: 1, justifyContent: 'center', padding: 24 }}><Text accessibilityLabel="Native queue QA">{label}</Text></View>;

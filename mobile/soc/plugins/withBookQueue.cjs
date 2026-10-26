@@ -46,6 +46,9 @@ module.exports = function withBookQueue(config) {
       Function("bookClear") { player: AudioPlayer ->
         runOnMain { player.ref.pause(); player.ref.clearMediaItems(); player.bookKeys.clear(); player.bookRates.clear() }
       }
+      Function("bookSeek") { player: AudioPlayer, seconds: Double ->
+        runOnMain { player.ref.seekTo((seconds * 1000).toLong()) }
+      }
       Function("bookReplace") { player: AudioPlayer, source: AudioSource, key: String, rate: Float ->
         runOnMain {
           createMediaItem(source)?.let { media ->

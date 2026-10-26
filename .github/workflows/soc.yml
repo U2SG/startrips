@@ -137,7 +137,7 @@ jobs:
           with zipfile.ZipFile('android/app/build/outputs/apk/release/app-release.apk') as apk:
               assert 'assets/index.android.bundle' in apk.namelist(), 'Release must run without Metro'
               dex = b''.join(apk.read(name) for name in apk.namelist() if name.endswith('.dex'))
-              for method in [b'bookAppend', b'bookReplace', b'bookClear', b'bookRate', b'bookKey']:
+              for method in [b'bookAppend', b'bookReplace', b'bookClear', b'bookRate', b'bookSeek', b'bookKey']:
                   assert method in dex, f'Patched native audio is missing from the APK: {method!r}'
           PY
           cp "$apk" "$RUNNER_TEMP/Soc-android-1.0.5.apk"

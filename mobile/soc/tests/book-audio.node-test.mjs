@@ -39,7 +39,7 @@ test('an obsolete load cannot seek or replace metadata after a newer phrase is r
   const first = f.audio.load('old.wav', 7, 1);
   await f.audio.load('new.wav', 0, 1.25);
   resolve(); await assert.rejects(first, /已取消/);
-  assert.deepEqual(f.events.filter((e) => e[0] === 'seek'), [['seek', 0]]);
+  assert.deepEqual(f.events.filter((e) => e[0] === 'seek'), []);
   assert.equal(f.events.filter((e) => e[0] === 'lockScreen').length, 1);
   f.audio.release();
 });
@@ -73,4 +73,14 @@ test('native readiness completes loading even when UI timeout callbacks do not r
   f.emit({ currentTime: 0, duration: 12, playing: false, didJustFinish: false });
   await loading;
   assert.ok(f.events.some((e) => e[0] === 'seek' && e[1] === 2)); f.audio.release();
+});
+
+test('fresh sources do not seek and Android resumes without awaiting a paused SDK seek', async () => {
+  const f = setup();
+  f.player.seekTo = () => new Promise(() => {});
+  f.player.bookSeek = (seconds) => f.events.push(['nativeSeek', seconds]);
+  await f.audio.load('fresh.wav', 0, 1);
+  assert.equal(f.events.some((e) => e[0] === 'nativeSeek'), false);
+  await f.audio.load('resume.wav', 3, 1); await f.audio.seek(7);
+  assert.deepEqual(f.events.filter((e) => e[0] === 'nativeSeek'), [['nativeSeek', 3], ['nativeSeek', 7]]); f.audio.release();
 });
