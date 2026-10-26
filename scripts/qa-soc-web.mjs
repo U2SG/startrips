@@ -333,8 +333,8 @@ try {
   await page.getByText('第二页原文。', { exact: true }).waitFor();
   await page.getByRole('button', { name: '收起听书', exact: true }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('button', { name: '继续听书', exact: true }).click();
-  await page.getByRole('button', { name: '暂停听书', exact: true }).waitFor();
+  await page.getByTestId('listening-mini').getByRole('button', { name: '继续听书', exact: true }).click();
+  await page.getByTestId('listening-mini').getByRole('button', { name: '暂停听书', exact: true }).waitFor();
   expireSession = true;
   await page.getByText('刷新', { exact: true }).click();
   await page.getByLabel('邮箱', { exact: true }).waitFor();

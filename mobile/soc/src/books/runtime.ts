@@ -77,6 +77,7 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
   let engine: BookEngine;
   let ticker: ReturnType<typeof setInterval> | undefined;
   let serverSaved = 0;
+  let localSavedAt = 0;
   let syncConflict = false;
   let allowRemote = !downloaded;
   const syncController = new AbortController();
@@ -161,7 +162,10 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
     remove: (uri) => { offlineFiles.releaseAudio(uri); if (!uri.includes('/listening/')) removeAudio(uri); },
     async save(next, localOnly) {
       guard();
-      await Storage.setItem(localKey, JSON.stringify(next));
+      if (next.savedAt >= localSavedAt) {
+        localSavedAt = next.savedAt;
+        await Storage.setItem(localKey, JSON.stringify(next));
+      }
       guard();
       if (downloaded || localOnly || !allowRemote) return;
       if (syncConflict) throw new Error('另一台设备更新了进度，请重新打开教材；本机位置已保存');
