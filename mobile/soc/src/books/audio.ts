@@ -36,7 +36,7 @@ export function createBookAudio(deps: {
           if (player !== created || released || loading) return;
           // replace/seek can deliver a delayed pause after play() was requested.
           if (starting && !status.playing && !status.didJustFinish) return;
-          if (status.playing || status.didJustFinish) starting = false;
+          if ((status.playing && status.currentTime > 0.05) || status.didJustFinish) starting = false;
           deps.status(status);
         });
       }

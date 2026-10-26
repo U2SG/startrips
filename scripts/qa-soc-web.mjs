@@ -290,6 +290,10 @@ try {
   // Changing the narrator invalidates both loaded and prefetched speech without a reload.
   await page.getByRole('button', { name: '继续听书', exact: true }).click();
   await page.getByRole('button', { name: '暂停听书', exact: true }).waitFor();
+  await page.getByRole('button', { name: '展开听书', exact: true }).click();
+  const voiceStart = Number(await page.getByLabel('本句播放进度', { exact: true }).getAttribute('aria-valuenow'));
+  await page.waitForFunction((start) => Number(document.querySelector('[aria-label="本句播放进度"]')?.getAttribute('aria-valuenow')) > start + 0.5, voiceStart);
+  await page.getByRole('button', { name: '收起听书', exact: true }).click();
   const beforeVoice = narrations.length;
   await page.getByRole('button', { name: '听书音色：旁白', exact: true }).click();
   await page.getByRole('radio', { name: '选择 Ryan', exact: true }).click();
