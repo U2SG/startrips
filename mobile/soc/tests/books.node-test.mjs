@@ -237,3 +237,24 @@ test('look-ahead is bounded by audio duration and does not repeatedly call a fai
   for (let i = 0; i < 10; i++) { engine.tick(i / 10, 2, true, false); await setImmediate(); }
   assert.equal(calls, 4); assert.equal(engine.getState().status, 'playing'); engine.dispose();
 });
+
+test('evicted files are revalidated instead of retrying a stale resolved URI forever', async () => {
+  const files = new Set(), calls = [];
+  const { engine, played } = fixture({
+    exists: async (uri) => files.has(uri),
+    audio: async (p, i) => { const uri = `${p.page}-${i}-${calls.length}`; calls.push(i); files.add(uri); return { uri, duration: 30 }; },
+  });
+  await engine.open(); await engine.play();
+  const first = played[0].uri; files.delete(first);
+  await engine.go(1, 0, true);
+  assert.notEqual(played.at(-1).uri, first); assert.equal(calls.filter((i) => i === 0).length, 2); engine.dispose();
+});
+
+test('queued page transitions trigger deferred analysis without a new play/load call', async () => {
+  const starts = [];
+  const { engine } = fixture({ started: (p) => starts.push(p.page), audio: async (p, i) => ({ uri: `${p.page}-${i}`, duration: 8 }) });
+  await engine.open(); await engine.play(); await setImmediate();
+  engine.tick(7, 8, true, false); await setImmediate();
+  engine.tick(0.2, 8, true, false, 'book-a/2/0/true');
+  assert.equal(engine.getState().bookmark.page, 2); assert.ok(starts.includes(2)); engine.dispose();
+});

@@ -54,6 +54,11 @@ module.exports = function withBookQueue(config) {
       Function("bookAppend") { player: AudioPlayer, source: AudioSource, key: String, rate: Float ->
         runOnMain {
           createMediaItem(source)?.let { media ->
+            val trim = player.ref.currentMediaItemIndex - 8
+            if (trim > 0) {
+              player.bookKeys.subList(0, trim).clear(); player.bookRates.subList(0, trim).clear()
+              player.ref.removeMediaItems(0, trim)
+            }
             player.bookKeys.add(key); player.bookRates.add(rate)
             player.ref.addMediaSource(media)
           }
@@ -107,6 +112,7 @@ module.exports = function withBookQueue(config) {
           self.enqueueNextLoopItem()
           self.addPlaybackEndNotification()`],
         ['      guard let queuePlayer = self.ref as? AVQueuePlayer,', `      if let entry = self.bookEntries[ObjectIdentifier(finishedItem)] {
+        self.bookEntries.removeValue(forKey: ObjectIdentifier(finishedItem))
         // A queued successor advances in AVFoundation, without waiting for JS or deactivating the session.
         if self.ref.currentItem != nil && self.ref.currentItem !== finishedItem { return }
         if let queue = self.ref as? AVQueuePlayer, queue.items().contains(where: { $0 !== finishedItem }) { return }

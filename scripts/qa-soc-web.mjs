@@ -323,7 +323,32 @@ try {
   }
   await page.getByText('完成', { exact: true }).click();
   await page.getByRole('button', { name: '展开听书', exact: true }).click();
+  await page.waitForFunction(() => Number(document.querySelector('[aria-label="播放进度"]')?.getAttribute('aria-valuenow')) >= 1);
+  await page.getByRole('button', { name: '收起听书', exact: true }).click();
+  await page.getByRole('button', { name: '听书音色：旁白', exact: true }).click();
+  const sampleBefore = narrations.filter((request) => request.text === '你好，很高兴认识你。' && request.voice === 'Ryan').length;
+  await page.getByRole('button', { name: '试听 Ryan', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="试听 Ryan"]')?.textContent?.includes('▷'));
+  assert.equal(narrations.filter((request) => request.text === '你好，很高兴认识你。' && request.voice === 'Ryan').length, sampleBefore + 1);
+  await page.getByRole('button', { name: '试听 Ryan', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="试听 Ryan"]')?.textContent?.includes('▷'));
+  assert.equal(narrations.filter((request) => request.text === '你好，很高兴认识你。' && request.voice === 'Ryan').length, sampleBefore + 1, 'Repeated samples must use local audio');
+  await page.getByText('完成', { exact: true }).click();
+  // A fresh application must retain the chosen narrator and its paragraph cache.
+  await page.reload();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '听书音色：旁白', exact: true }).click();
+  assert.equal(await page.getByRole('radio', { name: '选择 Ryan', exact: true }).getAttribute('aria-checked'), 'true');
+  await page.getByText('完成', { exact: true }).click();
+  await page.getByRole('button', { name: '教材', exact: true }).click();
+  await page.getByRole('button', { name: '听书：手机教材', exact: true }).click();
+  const coldCount = narrations.filter((request) => request.voice === 'Ryan' && request.text === '第二页原文。').length;
+  await page.getByRole('button', { name: '播放听书', exact: true }).click();
+  await page.waitForFunction(() => Number(document.querySelector('[aria-label="播放进度"]')?.getAttribute('aria-valuemax')) > 0);
+  assert.equal(narrations.filter((request) => request.voice === 'Ryan' && request.text === '第二页原文。').length, coldCount, 'Cold playback must reuse the selected-voice audio');
   await page.getByRole('button', { name: '暂停听书', exact: true }).click();
+  await page.getByRole('button', { name: '收起听书', exact: true }).click();
+  await page.getByRole('button', { name: '展开听书', exact: true }).click();
   if (!await page.getByRole('button', { name: '离线下载', exact: true }).count()) await page.getByRole('button', { name: '听书设置', exact: true }).click();
   await page.getByRole('button', { name: '离线下载', exact: true }).click();
   await page.getByLabel('下载起始页', { exact: true }).fill('1');

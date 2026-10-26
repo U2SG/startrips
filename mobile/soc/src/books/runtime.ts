@@ -187,6 +187,7 @@ export async function openBook(worldId: string, textbook: data.TextbookEntry, pr
       return clip;
     },
     remove: offlineFiles.releaseAudio,
+    exists: offlineFiles.audioExists,
     async save(next, localOnly) {
       guard();
       if (next.savedAt >= localSavedAt) {

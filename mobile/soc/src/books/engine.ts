@@ -13,6 +13,7 @@ export type BookDependencies = {
   page(number: number, dramatic: boolean, signal: AbortSignal): Promise<BookPage>;
   audio(page: BookPage, index: number, signal: AbortSignal): Promise<string | CachedClip | null>;
   remove(uri: string): void;
+  exists?(uri: string): Promise<boolean>;
   save(bookmark: Bookmark, localOnly?: boolean): Promise<void>;
   focus(): void;
   started?(page: BookPage, signal: AbortSignal): void;
@@ -32,6 +33,7 @@ export class BookEngine {
   private clips = new Map<string, CachedClip>();
   private pages = new Map<string, BookPage>();
   private queue: Track[] = [];
+  private timelineBase = 0;
   private filling = -1;
   private prefetchFailed = new Set<string>();
   private ready = new Set<string>();
@@ -51,8 +53,8 @@ export class BookEngine {
     if (this.disposed) return;
     this.state = { ...this.state, ...next };
     const at = this.queue.findIndex((track) => track.key === this.loaded);
-    const elapsed = this.queue.slice(0, Math.max(0, at)).reduce((sum, track) => sum + track.clip.duration, 0) + (this.state.bookmark?.seconds || 0);
-    const length = this.queue.reduce((sum, track) => sum + track.clip.duration, 0);
+    const elapsed = this.timelineBase + this.queue.slice(0, Math.max(0, at)).reduce((sum, track) => sum + track.clip.duration, 0) + (this.state.bookmark?.seconds || 0);
+    const length = this.timelineBase + this.queue.reduce((sum, track) => sum + track.clip.duration, 0);
     this.state = { ...this.state, elapsed, length: length || this.state.duration };
     this.listeners.forEach((fn) => fn());
   }
@@ -61,10 +63,14 @@ export class BookEngine {
     ++this.sequence; this.controller.abort(); this.controller = new AbortController(); this.deps.player.pause(); this.transition = false;
     for (const key of this.jobs.keys()) if (!this.ready.has(key)) this.jobs.delete(key);
   }
-  private clearBuffer() { this.jobs.clear(); this.clips.clear(); this.ready.clear(); this.prefetchFailed.clear(); this.uris.forEach(this.deps.remove); this.uris.clear(); this.loaded = ''; this.queue = []; }
+  private clearBuffer() { this.jobs.clear(); this.clips.clear(); this.ready.clear(); this.prefetchFailed.clear(); this.uris.forEach(this.deps.remove); this.uris.clear(); this.loaded = ''; this.queue = []; this.timelineBase = 0; }
   private key(page: BookPage, index: number) { return `${page.signature}/${page.page}/${index}/${this.state.bookmark?.dramatic}`; }
-  private prepare(page: BookPage, index: number) {
+  private async prepare(page: BookPage, index: number): Promise<CachedClip | null> {
     const key = this.key(page, index);
+    const cached = this.clips.get(key);
+    if (cached && this.deps.exists && !await this.deps.exists(cached.uri) && this.clips.get(key) === cached) {
+      this.clips.delete(key); this.jobs.delete(key); this.ready.delete(key); this.uris.delete(cached.uri); this.deps.remove(cached.uri);
+    }
     if (!this.jobs.has(key)) {
       const signal = this.controller.signal;
       const job = this.deps.audio(page, index, signal).then((result) => {
@@ -122,6 +128,7 @@ export class BookEngine {
         if (!this.current(seq) || !clip) break;
         // A legacy test/player without duration information only needs one look-ahead.
         this.queue.push({ ...next, key, clip });
+        if (next.page.page !== last.page.page) this.deps.started?.(next.page, this.controller.signal);
         this.deps.player.enqueue?.(clip.uri, key, (this.state.bookmark?.speed || 1) * toneRate(next.page.passages[next.index].tone));
         this.patch({ buffered: this.bufferSeconds() });
         if (!clip.duration) break;
@@ -138,7 +145,7 @@ export class BookEngine {
   async go(number: number, index = 0, play = this.state.status === 'playing', raw?: unknown) {
     if (this.disposed) return;
     const previous = raw ?? this.state.bookmark;
-    this.invalidate(); this.loaded = ''; this.queue = [];
+    this.invalidate(); this.loaded = ''; this.queue = []; this.timelineBase = 0;
     const seq = this.sequence;
     this.patch({ status: 'loading', duration: 0, error: '' });
     try {
@@ -175,7 +182,7 @@ export class BookEngine {
         await this.deps.player.load(clip.uri, b.seconds, b.speed * toneRate(page.passages[b.passage].tone), key);
         if (!this.current(seq)) return;
         this.loaded = key;
-        this.queue = [{ page, index: b.passage, key, clip }];
+        this.queue = [{ page, index: b.passage, key, clip }]; this.timelineBase = 0;
       }
       this.deps.player.rate((this.state.bookmark?.speed || b.speed) * toneRate(page.passages[b.passage].tone));
       this.deps.player.play();
@@ -208,7 +215,7 @@ export class BookEngine {
     }
     this.deps.player.pause(); this.loaded = ''; this.transition = true;
     this.patch({ bookmark: { ...b, passage: index, seconds: 0 }, duration: 0, status: 'paused' });
-    this.queue = []; this.checkpoint(); await this.play();
+    this.queue = []; this.timelineBase = 0; this.checkpoint(); await this.play();
   }
   async seek(seconds: number) {
     const b = this.state.bookmark;
@@ -300,9 +307,20 @@ export class BookEngine {
     if (key && key !== this.loaded) {
       const track = this.queue.find((t) => t.key === key);
       if (!track) return; // A replaced native queue cannot update this book.
+      const pageChanged = track.page.page !== b.page;
       this.loaded = key; this.movedAt = Date.now();
+      const at = this.queue.indexOf(track);
+      if (at > 8) this.timelineBase += this.queue.splice(0, at - 8).reduce((sum, old) => sum + old.clip.duration, 0);
       b = { ...b, page: track.page.page, passage: track.index, signature: track.page.signature, seconds };
       this.patch({ page: track.page, bookmark: b });
+      if (pageChanged) this.deps.started?.(track.page, this.controller.signal);
+      const keep = new Set(this.queue.map((t) => t.key));
+      for (const old of this.clips.keys()) {
+        if (this.clips.size <= 96) break;
+        if (keep.has(old)) continue;
+        const clip = this.clips.get(old)!;
+        this.clips.delete(old); this.ready.delete(old); this.jobs.delete(old); this.uris.delete(clip.uri); this.deps.remove(clip.uri);
+      }
     }
     if (Math.abs(seconds - this.lastPosition) > 0.05 || !playing) { this.lastPosition = seconds; this.movedAt = Date.now(); }
     if (duration > 0) { const clip = this.clips.get(this.loaded); if (clip) clip.duration = duration; }
