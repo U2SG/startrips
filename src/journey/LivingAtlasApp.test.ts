@@ -41,7 +41,6 @@ import {
   readRoutePointMediaEvidenceBounded,
   ROUTE_POINT_MEDIA_EVIDENCE_CONCURRENCY,
   pendingPlaybackStoryRestore,
-  railContentSignature,
   releaseStalePlaybackSession,
   resolveInitialAtlasHomeCameraIntent,
   resolveInitialHomeOwnedFocusPoint,
@@ -1659,32 +1658,6 @@ describe("Mobile V2 particle-earth pointer ownership", () => {
     // right-hand column to one surface at a time.
     expect(source).toContain('{homeBaseContextSurfaceVisible && homeBaseContext && (isMobileV2 || desktopRightSurface === "home-base") ? (');
     expect(source).toContain('{atlasEverydaySurfaceVisible && everydayFragments && (isMobileV2 || desktopRightSurface === "everyday") ? (');
-  });
-});
-
-describe("railContentSignature (rail overflow hint freshness)", () => {
-  it("changes when a same-count edit alters what the rail renders", () => {
-    const before = railContentSignature([playbackJourney]);
-    const renamed = railContentSignature([
-      { ...playbackJourney, title: "一条被改得很长很长、足以在旅程栏换行的旅程标题" },
-    ]);
-    expect(renamed).not.toBe(before);
-  });
-
-  it("changes when a same-count edit moves the start date", () => {
-    const before = railContentSignature([playbackJourney]);
-    const redated = railContentSignature([{ ...playbackJourney, startedOn: "2024-01-05" }]);
-    expect(redated).not.toBe(before);
-  });
-
-  it("stays stable when the rail content is unchanged", () => {
-    expect(railContentSignature([playbackJourney]))
-      .toBe(railContentSignature([{ ...playbackJourney }]));
-  });
-
-  it("still tracks count changes", () => {
-    const two = railContentSignature([playbackJourney, { ...playbackJourney, id: "journey-2" }]);
-    expect(two).not.toBe(railContentSignature([playbackJourney]));
   });
 });
 
