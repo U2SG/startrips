@@ -3835,7 +3835,7 @@ button.living-atlas-globe__pick {
 
 .living-atlas__import-dialog > header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
 }
@@ -3843,13 +3843,6 @@ button.living-atlas-globe__pick {
 .living-atlas__import-dialog > header h2 {
   margin: 0;
   font: 400 clamp(22px, 4vw, 32px)/1.25 var(--archive-serif);
-}
-
-.living-atlas__import-dialog > header p {
-  margin: 8px 0 0;
-  color: var(--atlas-muted);
-  font-size: 12px;
-  line-height: 1.5;
 }
 
 .living-atlas__import-dialog > header button {
@@ -5743,11 +5736,6 @@ button.living-atlas-globe__pick {
   color: #dcece8;
   font-size: 15px;
   font-weight: 600;
-}
-
-.journey-itinerary-import-panel summary > small {
-  color: #a4bbb4;
-  font-size: 12px;
 }
 
 .journey-precise-location summary > small {

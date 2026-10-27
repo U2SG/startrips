@@ -4916,10 +4916,7 @@ export function LivingAtlasApp({
         <div className="living-atlas__import-backdrop" style={{ display: importOpen ? undefined : "none" }} aria-hidden={importOpen ? undefined : true}>
           <section ref={importDialogRef} className="living-atlas__import-dialog" role="dialog" aria-modal="true" aria-labelledby="living-atlas-import-title" tabIndex={-1}>
             <header>
-              <div>
-                <h2 id="living-atlas-import-title">导入已有行程</h2>
-                <p>自动整理成可编辑的路线。处理中可先关闭，稍后回来继续。</p>
-              </div>
+              <h2 id="living-atlas-import-title">导入已有行程</h2>
               <button type="button" onClick={() => setImportOpen(false)} aria-label="关闭行程导入"><IconX size={20} stroke={1.4} aria-hidden="true" /></button>
             </header>
             <ItineraryImportPanel
