@@ -764,22 +764,11 @@ button.living-atlas-globe__pick {
   gap: 14px;
 }
 
-.living-atlas__brand p,
 .living-atlas__brand h1 {
   overflow: hidden;
   margin: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.living-atlas__brand p {
-  color: #6f8781;
-  font: 500 8px/1 var(--archive-sans);
-  letter-spacing: 0.22em;
-}
-
-.living-atlas__brand h1 {
-  margin-top: 5px;
   font-family: var(--archive-serif);
   font-size: 17px;
   font-weight: 400;
@@ -6850,12 +6839,6 @@ button.living-atlas__globe-focus-exit {
 
 }
 
-@media (max-width: 374px) {
-  .living-atlas__brand p {
-    display: none;
-  }
-}
-
 @media (max-width: 760px), (max-width: 960px) and (max-height: 480px) and (any-pointer: coarse) {
   .living-atlas {
     min-height: 680px;
@@ -6960,10 +6943,6 @@ button.living-atlas__globe-focus-exit {
 
   .living-atlas__brand h1 {
     display: none;
-  }
-
-  .living-atlas__brand p {
-    max-width: 122px;
   }
 
   .living-atlas__header nav {

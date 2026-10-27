@@ -3905,7 +3905,7 @@ export function LivingAtlasApp({
         </header>
       ) : (
         <header className={`living-atlas__header${desktopMoreOpen && !desktopHeaderInert ? " has-more-menu" : ""}`} inert={desktopHeaderInert || undefined}>
-          <div className="living-atlas__brand"><StartripsWordmarkSignatureButton size={34} state={brandState} /><div><p>PRIVATE JOURNEY ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
+          <div className="living-atlas__brand"><StartripsWordmarkSignatureButton size={34} state={brandState} /><div><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
           <nav aria-label="图谱视图">
             {commandBarVisible ? (
               <button
