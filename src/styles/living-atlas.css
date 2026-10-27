@@ -8708,14 +8708,6 @@ button.living-atlas__globe-focus-exit {
   border-bottom: 1px solid rgba(118, 198, 188, 0.1);
 }
 
-.mobile-v2__picker > header p,
-.mobile-v2__more-heading p {
-  margin: 0 0 5px;
-  color: rgba(111, 226, 207, 0.62);
-  font: 600 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.15em;
-}
-
 .mobile-v2__picker > header h2,
 .mobile-v2__more-heading h2 {
   margin: 0;
@@ -8812,7 +8804,8 @@ button.living-atlas__globe-focus-exit {
   padding: 2px 2px 12px;
 }
 
-/* Icon, label and hint: the dock's 48px row scale, with the icon as a column. */
+/* Icon and label, plus a state line while an import is busy: the dock's 48px
+   row scale, with the icon as a column. */
 .mobile-v2__more-actions button {
   min-height: 48px;
   grid-template-columns: 20px minmax(0, 1fr);
@@ -8824,9 +8817,14 @@ button.living-atlas__globe-focus-exit {
 }
 
 .mobile-v2__more-actions button > svg {
-  grid-row: span 2;
   align-self: center;
   color: var(--atlas-muted);
+}
+
+/* Only a row with a state line has a second row for the icon to span; spanning
+   an empty one would add the row gap and lift a lone label off centre. */
+.mobile-v2__more-actions button:has(> small) > svg {
+  grid-row: span 2;
 }
 
 /* A row is large, so it answers a press with a tint rather than a scale. */
