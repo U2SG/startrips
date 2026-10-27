@@ -702,7 +702,6 @@ export default function LessonScreen({ worldId, textbook, profile, onEnded, onLi
             <Avatar name={ctx.companion.name} color={ctx.companion.color} size={34} />
             <View style={{ flex: 1, marginLeft: 10 }}>
               <Text style={s.voiceCoName} numberOfLines={1}>{ctx.companion.name}</Text>
-              <Text style={s.voiceCoSub}>语音对话 · 苏格拉底式</Text>
             </View>
           </View>
 
@@ -875,7 +874,6 @@ const makeStyles = (ink: Ink) => StyleSheet.create({
   voiceRoot: { flex: 1, backgroundColor: ink.canvas },
   voiceHead: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingBottom: 10 },
   voiceCoName: { fontFamily: font.bold, fontSize: 15, color: ink.fg, letterSpacing: -0.2 },
-  voiceCoSub: { fontFamily: font.sans, fontSize: 11, color: ink.muted, marginTop: 2 },
   voiceCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 22 },
   voiceStatus: { fontFamily: font.extra, fontSize: 20, color: ink.fg, letterSpacing: -0.3 },
   voiceStream: { fontFamily: font.sans, fontSize: 14, lineHeight: 22, color: ink.muted, textAlign: 'center' },
