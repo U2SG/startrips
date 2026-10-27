@@ -277,7 +277,7 @@ try {
   await page.getByRole('radio', { name: '30 分钟后停止', exact: true }).click();
   await page.screenshot({ path: path.join(artifacts, 'listening-reader.png') });
   await page.getByLabel('听书页码', { exact: true }).fill('2');
-  await page.getByRole('button', { name: '跳转到页码', exact: true }).click();
+  await page.getByLabel('听书页码', { exact: true }).press('Enter');
   await page.getByText('第二页原文。', { exact: true }).waitFor();
   for (let attempt = 0; attempt < 100; attempt++) {
     const bookmark = [...listeningFiles.entries()].find(([name]) => name.endsWith('/listening-progress.json'))?.[1];
@@ -380,13 +380,13 @@ try {
   await page.getByLabel('下载起始页', { exact: true }).fill('1');
   await page.getByLabel('下载结束页', { exact: true }).fill('2');
   await page.getByRole('button', { name: '开始下载', exact: true }).click();
-  await page.getByText('第 2 / 2 页 · 2 / 2 段', { exact: true }).waitFor();
+  await page.locator('[aria-live="polite"][aria-label="第 2 / 2 页 · 2 / 2 段"]').waitFor();
   await page.getByRole('button', { name: '开始下载', exact: true }).waitFor();
   assert.ok(narrations.every((request) => /[\p{L}\p{N}]/u.test(request.text)), 'Punctuation-only passages must never reach TTS');
   await page.getByRole('button', { name: '收起听书', exact: true }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '离线书库', exact: true }).click();
-  await page.getByText('2 / 2 页', { exact: true }).waitFor();
+  await page.getByText('2/2', { exact: true }).waitFor();
   let offlineApiCalls = 0;
   const blockOffline = async (route) => { offlineApiCalls++; await route.abort(); };
   await page.route('**/api/**', blockOffline);
