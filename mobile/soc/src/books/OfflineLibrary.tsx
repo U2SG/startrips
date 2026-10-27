@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
-import { font, useTheme } from '../theme';
+import { font, tnum, useTheme } from '../theme';
+import { Track } from './BookPlayer';
 import { shelf } from './offline';
 import { completePages, type DownloadedBook } from './offlineStore';
 import { getBook, getDownload, reset, subscribeDownload } from './runtime';
@@ -27,18 +28,24 @@ export function OfflineLibrary({ onClose, onOpen }: { onClose(): void; onOpen(bo
       {!books ? <ActivityIndicator color={ink.accent} /> : !books.length ? <Text style={{ color: ink.muted }}>还没有下载的教材</Text> : null}
       {books?.map((book) => {
         const pages = new Set(availablePages(book).map((page) => page.page));
-        return <View key={book.id} style={{ backgroundColor: ink.raised, borderRadius: 16, padding: 16, gap: 8 }}>
-          <Text style={{ color: ink.fg, fontFamily: font.med, fontSize: 17 }}>{book.textbook.title}</Text>
-          <Text style={{ color: ink.muted }}>{pages.size} / {book.textbook.numPages} 页</Text>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-            <Pressable accessibilityRole="button" accessibilityLabel={`离线听：${book.textbook.title}`} disabled={!pages.size || removing} aria-disabled={!pages.size || removing} style={row} onPress={() => onOpen(book)}><Text style={{ color: pages.size ? ink.accent : ink.muted }}>听书</Text></Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel={`删除下载：${book.textbook.title}`} disabled={download.active || removing} aria-disabled={download.active || removing} style={row} onPress={() => {
-              setRemoving(true); setError('');
-              const active = getBook();
-              if (active?.worldId === book.worldId && active.textbook.id === book.textbook.id) reset();
-              void shelf().remove(book.id).then(refresh).catch((e: Error) => setError(e.message)).finally(() => setRemoving(false));
-            }}><Text style={{ color: ink.red }}>删除</Text></Pressable>
-          </View>
+        const closed = !pages.size || removing;
+        // The open target and 删除 are siblings, so deleting can never open the book.
+        return <View key={book.id} style={{ backgroundColor: ink.raised, borderRadius: 16, flexDirection: 'row', alignItems: 'center' }}>
+          <Pressable accessibilityRole="button" accessibilityLabel={`离线听：${book.textbook.title}`} accessibilityHint={`已下载 ${pages.size} / ${book.textbook.numPages} 页`}
+            disabled={closed} aria-disabled={closed} onPress={() => onOpen(book)}
+            style={({ pressed }) => ({ flex: 1, minHeight: 72, padding: 16, gap: 10, justifyContent: 'center', opacity: pressed ? 0.6 : 1 })}>
+            <Text style={{ color: pages.size ? ink.fg : ink.muted, fontFamily: font.med, fontSize: 17 }}>{book.textbook.title}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <Track ratio={book.textbook.numPages ? pages.size / book.textbook.numPages : 0} height={2} style={{ flex: 1 }} />
+              <Text style={{ color: ink.muted, fontSize: 12, ...tnum }}>{pages.size}/{book.textbook.numPages}</Text>
+            </View>
+          </Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel={`删除下载：${book.textbook.title}`} disabled={download.active || removing} aria-disabled={download.active || removing} style={row} onPress={() => {
+            setRemoving(true); setError('');
+            const active = getBook();
+            if (active?.worldId === book.worldId && active.textbook.id === book.textbook.id) reset();
+            void shelf().remove(book.id).then(refresh).catch((e: Error) => setError(e.message)).finally(() => setRemoving(false));
+          }}><Text style={{ color: ink.red }}>删除</Text></Pressable>
         </View>;
       })}
     </ScrollView>
