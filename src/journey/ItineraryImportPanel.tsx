@@ -732,7 +732,6 @@ export function ItineraryImportPanel({
     >
       <summary>
         <span><IconUpload size={17} stroke={1.35} aria-hidden="true" />导入已有行程</span>
-        <small>粘贴链接、截图或文本，批量添加地点</small>
         <IconChevronDown className="journey-itinerary-import-panel__chevron" size={17} stroke={1.35} aria-hidden="true" />
       </summary>
 
