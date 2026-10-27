@@ -62,7 +62,6 @@ export function NearbyRoutePointPicker({ coordinate, neighbors, profile, allowFe
   return (
     <section className="nearby-route-points" aria-label="附近可达点">
       <strong>附近可达点</strong>
-      <p>大概位置即可。建议来自所选方式的路网，选择后仍可调整。</p>
       {profile === undefined ? (
         <div className="nearby-route-points__modes" role="group" aria-label="附近点的交通方式">
           {MODES.map((entry) => <button key={entry.profile} type="button" aria-pressed={mode === entry.profile}

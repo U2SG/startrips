@@ -285,10 +285,7 @@ export function JourneyRecordedTracks({
   return (
     <section className="journey-recorded-tracks" aria-labelledby="journey-recorded-tracks-title">
       <div className="journey-recorded-tracks__heading">
-        <div>
-          <small>RECORDED TRACE</small>
-          <h4 id="journey-recorded-tracks-title">记录轨迹</h4>
-        </div>
+        <h4 id="journey-recorded-tracks-title">记录轨迹</h4>
         <p>导入你已有的 GPX 记录。它只作为这段 Journey 的私密记录，不会自动生成 Route Point。</p>
       </div>
 
@@ -308,7 +305,7 @@ export function JourneyRecordedTracks({
         {selected ? (
           <div className="journey-recorded-tracks__selection" role="status">
             <span>{selected.file.name}</span>
-            <small>{Math.max(1, Math.ceil(selected.file.size / 1024))} KB · 文件只在当前编辑会话中保留</small>
+            <small>{Math.max(1, Math.ceil(selected.file.size / 1024))} KB</small>
           </div>
         ) : null}
         <button
