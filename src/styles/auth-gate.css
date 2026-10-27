@@ -39,12 +39,6 @@
   letter-spacing: 0.18em;
 }
 
-.auth-v3-brand > .auth-v3-brand__caption {
-  color: rgba(126, 169, 164, 0.52);
-  font-size: 8px;
-  letter-spacing: 0.14em;
-}
-
 .auth-v3-scene {
   position: absolute;
   z-index: var(--z-content-0);
@@ -225,17 +219,12 @@
   transform: none;
 }
 
-.auth-eyebrow,
 .auth-card label span,
 .auth-loading {
   color: #93aaa4;
   font-size: 10px;
   letter-spacing: 0.17em;
   text-transform: uppercase;
-}
-
-.auth-eyebrow {
-  margin: 0;
 }
 
 .auth-card h1 {
@@ -544,10 +533,6 @@
 
 .auth-card--login-v3.is-handoff h1 {
   animation: auth-v3-title-away 300ms 170ms ease-out both;
-}
-
-.auth-card--login-v3.is-handoff .auth-eyebrow {
-  animation: auth-v3-title-away 260ms 260ms ease-out both;
 }
 
 .auth-v3-scene.is-handoff .auth-v3-scene__earth {
@@ -914,10 +899,6 @@
     right: max(18px, env(safe-area-inset-right));
     justify-content: space-between;
     gap: 8px;
-  }
-
-  .auth-v3-brand > .auth-v3-brand__caption {
-    font-size: 7px;
   }
 
   .auth-v3-scene__earth {

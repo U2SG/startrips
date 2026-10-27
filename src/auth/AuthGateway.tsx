@@ -400,7 +400,6 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
       <LoginV3Scene handoff={handoff} forceReady={presentationReady} lightweight={lightweightScene} />
       <div className="auth-v3-brand">
         <StartripsWordmark size={30} />
-        <span className="auth-v3-brand__caption">PRIVATE JOURNEY ATLAS</span>
       </div>
       <div className={`auth-starlight-intro${presentationReady ? " is-ready" : ""}`} aria-hidden="true">
         <StartripsWordmark size={96} intro={!presentationReady} />
@@ -412,7 +411,6 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
         aria-labelledby="auth-title"
         aria-busy={pending}
       >
-        <p className="auth-eyebrow">YOUR JOURNEY STARTS HERE</p>
         <h1 id="auth-title">
           {mode === "sign-in" ? "进入你们的星轨" : mode === "sign-up" ? "创建私人入口" : "重置密码"}
         </h1>
@@ -586,7 +584,6 @@ function ResetPassword() {
     <main className="auth-gate">
       <section className="auth-card" aria-busy={pending}>
         <StartripsWordmark size={38} />
-        <p className="auth-eyebrow">ACCOUNT RECOVERY</p>
         <h1>设置新密码</h1>
         {!invalidLink && outcome !== "success" ? (
           <form onSubmit={submit}>
@@ -645,7 +642,6 @@ function InvitationGate({ invitationId, onAccepted }: { invitationId: string; on
     <main className="auth-gate">
       <section className="auth-card">
         <StartripsWordmark size={38} />
-        <p className="auth-eyebrow">INVITATION</p>
         <h1>加入共同图谱</h1>
         <p className="auth-copy">接受后，你将成为这份私人图谱的第二位成员。</p>
         <button className="auth-primary" type="button" disabled={pending} onClick={accept}>{pending ? "正在加入…" : "接受邀请"}</button>
@@ -1082,7 +1078,6 @@ function AccountEmailChangeLinkPage({
     <main className="auth-gate">
       <section className="auth-card" aria-busy={state === "working"}>
         <StartripsWordmark size={38} />
-        <p className="auth-eyebrow">ACCOUNT SECURITY</p>
         <h1>确认邮箱换绑</h1>
         <p className="auth-copy" role={state === "error" ? "alert" : "status"}>{message}</p>
         {state === "error" && retryable ? (
@@ -1445,13 +1440,13 @@ function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, on
   }
   if (gate.kind === "choose-organization") {
     return (
-      <main className="auth-gate"><section className="auth-card"><p className="auth-eyebrow">YOUR PRIVATE ATLAS</p><h1>选择一份图谱</h1><div className="auth-choice-list">{gate.organizations.map((organization) => <button type="button" disabled={pending} key={organization.id} onClick={() => selectOrganization(organization.id)}><strong>{organization.name}</strong><span>进入</span></button>)}</div>{message ? <p className="auth-message">{message}</p> : null}</section></main>
+      <main className="auth-gate"><section className="auth-card"><h1>选择一份图谱</h1><div className="auth-choice-list">{gate.organizations.map((organization) => <button type="button" disabled={pending} key={organization.id} onClick={() => selectOrganization(organization.id)}><strong>{organization.name}</strong><span>进入</span></button>)}</div>{message ? <p className="auth-message">{message}</p> : null}</section></main>
     );
   }
   if (gate.kind === "create-organization" || gate.kind === "bootstrap") {
     const isCreate = gate.kind === "create-organization";
     return (
-      <main className="auth-gate"><section className="auth-card"><StartripsWordmark size={38} intro /><p className="auth-eyebrow">PRIVATE ATLAS</p><h1>{isCreate ? "命名你们的图谱" : "完成图谱初始化"}</h1><p className="auth-copy">它将与账号及另一位受邀成员严格隔离。</p><form onSubmit={isCreate ? createOrganization : bootstrapAtlas}><label><span>图谱名称</span><input required maxLength={80} value={atlasName} onChange={(event) => setAtlasName(event.target.value)} /></label><label><span>题词（可选）</span><textarea maxLength={240} rows={3} value={dedication} onChange={(event) => setDedication(event.target.value)} /></label><button className="auth-primary" type="submit" disabled={pending}>{pending ? "正在创建…" : "创建私人图谱"}</button></form>{message ? <p className="auth-message" role="alert">{message}</p> : null}</section></main>
+      <main className="auth-gate"><section className="auth-card"><StartripsWordmark size={38} intro /><h1>{isCreate ? "命名你们的图谱" : "完成图谱初始化"}</h1><p className="auth-copy">它将与账号及另一位受邀成员严格隔离。</p><form onSubmit={isCreate ? createOrganization : bootstrapAtlas}><label><span>图谱名称</span><input required maxLength={80} value={atlasName} onChange={(event) => setAtlasName(event.target.value)} /></label><label><span>题词（可选）</span><textarea maxLength={240} rows={3} value={dedication} onChange={(event) => setDedication(event.target.value)} /></label><button className="auth-primary" type="submit" disabled={pending}>{pending ? "正在创建…" : "创建私人图谱"}</button></form>{message ? <p className="auth-message" role="alert">{message}</p> : null}</section></main>
     );
   }
 

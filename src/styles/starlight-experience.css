@@ -1,6 +1,5 @@
 /* Supplied brand direction, applied to existing product surfaces. */
 .auth-v3-brand { align-items: center; color: var(--startrips-starlight); }
-.auth-v3-brand > .auth-v3-brand__caption { color: var(--startrips-muted); }
 .auth-card > .startrips-wordmark { margin-bottom: 24px; }
 .auth-starlight-intro {
   grid-column: 1;
@@ -126,7 +125,6 @@
   .auth-starlight-intro { display: none; }
   .auth-v3-brand { align-items: center; top: max(20px, env(safe-area-inset-top)); }
   .auth-v3-brand > .startrips-wordmark { height: 34px; }
-  .auth-v3-brand > .auth-v3-brand__caption { max-width: 15ch; line-height: 1.8; text-align: right; }
   .auth-card--login-v3 { border-radius: 20px; }
   .mobile-v2__brand .startrips-wordmark { margin-bottom: 3px; }
 }
