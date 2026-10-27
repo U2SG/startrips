@@ -149,12 +149,6 @@
   align-items: center;
   margin-bottom: 16px;
 }
-.startrips-recovery-surface__eyebrow {
-  margin: 0 0 12px;
-  color: var(--startrips-muted);
-  font: 500 9px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.18em;
-}
 .startrips-recovery-surface__code {
   margin: 0;
   font: 400 clamp(64px, 16vw, 104px)/1.1 var(--archive-serif);
@@ -276,13 +270,6 @@
   .startrips-recovery-surface__action {
     min-height: 48px;
   }
-}
-.startrips-not-found .startrips-recovery-surface > .startrips-recovery-surface__eyebrow,
-.living-atlas__empty.startrips-recovery-surface > .startrips-recovery-surface__eyebrow {
-  margin: 0 0 12px;
-  color: var(--startrips-muted);
-  font: 500 9px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.18em;
 }
 .startrips-not-found .startrips-recovery-surface > .startrips-recovery-surface__body {
   color: var(--startrips-muted);
