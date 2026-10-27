@@ -200,7 +200,7 @@ async function runJobs({ repo, token, run }) {
 
 // Soc-only PRs skip the web lanes, so verify waits for soc.yml on this exact head instead.
 export async function verifySocGate({
-  socOnly, ledgerFinal, findHeadRun, proveSource, sleep, now = Date.now, timeoutMs = 55 * 60_000, graceMs = 5 * 60_000,
+  socOnly, ledgerFinal, findHeadRun, proveSource, sleep, now = Date.now, timeoutMs = 80 * 60_000, graceMs = 5 * 60_000,
 }) {
   if (!socOnly) return "soc gate not required";
   const start = now();

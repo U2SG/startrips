@@ -550,8 +550,8 @@ jobs:
   verify:
     name: verify
     runs-on: ubuntu-latest
-    # Soc-client-only PRs wait here for soc.yml (android is capped at 45 minutes).
-    timeout-minutes: 60
+    # Soc-client-only PRs wait here for soc.yml (ios is capped at 60 minutes, plus runner queue time).
+    timeout-minutes: 90
     if: ${{ always() }}
     permissions:
       contents: read
