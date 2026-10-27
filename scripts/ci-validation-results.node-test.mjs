@@ -5,8 +5,11 @@ import { validateResults } from "./ci-validation-results.mjs";
 const ordinary = {
   LEDGER_RESULT: "success", QUICK_CHECKS_RESULT: "success", SOURCE_PROOF_OUTCOME: "success",
   CLASSIFIED_LEDGER_ONLY: "false", PROVEN_LEDGER_ONLY: "false",
+  CLASSIFIED_SOC_ONLY: "false", PROVEN_SOC_ONLY: "false",
   CORE_RESULT: "success", BROWSER_QA_RESULT: "success", KEEPSAKE_RENDER_RESULT: "success",
 };
+const skippedLanes = { CORE_RESULT: "skipped", BROWSER_QA_RESULT: "skipped", KEEPSAKE_RENDER_RESULT: "skipped" };
+const socOnly = { ...ordinary, ...skippedLanes, CLASSIFIED_SOC_ONLY: "true", PROVEN_SOC_ONLY: "true" };
 const final = { ...ordinary, CLASSIFIED_LEDGER_ONLY: "true", PROVEN_LEDGER_ONLY: "true",
   CORE_RESULT: "skipped", BROWSER_QA_RESULT: "skipped", KEEPSAKE_RENDER_RESULT: "skipped" };
 
@@ -37,4 +40,14 @@ test("ledger, quick checks and failed/cancelled product jobs cannot be waived", 
       assert.throws(() => validateResults({ ...final, [key]: value }));
     }
   }
+});
+test("soc-client-only skips web lanes only when both classifications say so", () => {
+  assert.match(validateResults(socOnly), /Soc-client-only/);
+  for (const change of [
+    { CLASSIFIED_SOC_ONLY: "false", PROVEN_SOC_ONLY: "false" }, { PROVEN_SOC_ONLY: "false" },
+    { CLASSIFIED_SOC_ONLY: "false" }, { CLASSIFIED_SOC_ONLY: undefined, PROVEN_SOC_ONLY: undefined },
+    { CLASSIFIED_LEDGER_ONLY: "true", PROVEN_LEDGER_ONLY: "true" }, { SOURCE_PROOF_OUTCOME: "failure" },
+    { LEDGER_RESULT: "failure" }, { QUICK_CHECKS_RESULT: "failure" },
+    { CORE_RESULT: "failure" }, { BROWSER_QA_RESULT: "cancelled" }, { KEEPSAKE_RENDER_RESULT: "success" },
+  ]) assert.throws(() => validateResults({ ...socOnly, ...change }), JSON.stringify(change));
 });

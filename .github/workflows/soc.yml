@@ -2,7 +2,7 @@ name: soc
 
 on:
   pull_request:
-    paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', 'server/app.ts', 'server/tests/soc-auth.integration.test.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'scripts/qa-soc-*.py', 'deploy/Caddyfile']
+    paths: ['docs/soc.md', 'mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', 'server/app.ts', 'server/tests/soc-auth.integration.test.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'scripts/qa-soc-*.py', 'deploy/Caddyfile']
   push:
     branches: [main]
     paths: ['mobile/soc/**', 'server/soc/**', 'server/routes/soc.ts', 'server/app.ts', 'server/tests/soc-auth.integration.test.ts', '.github/workflows/soc.yml', 'scripts/qa-soc-*.mjs', 'scripts/qa-soc-*.py', 'deploy/Caddyfile']
@@ -21,8 +21,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A ledger-only final reuses the exact Source soc run only when that run is proved green.
+  soc-plan:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      reuse_source: ${{ steps.proof.outputs.reuse_source }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - id: proof
+        env:
+          SOURCE_WORKFLOW: soc.yml
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: node scripts/ci-ledger-fast-path.mjs
+
   web:
-    if: ${{ !inputs.live }}
+    needs: soc-plan
+    if: ${{ !cancelled() && !inputs.live && needs.soc-plan.outputs.reuse_source != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
@@ -75,7 +101,8 @@ jobs:
           retention-days: 14
 
   android:
-    if: ${{ !inputs.live }}
+    needs: soc-plan
+    if: ${{ !cancelled() && !inputs.live && needs.soc-plan.outputs.reuse_source != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -204,7 +231,8 @@ jobs:
           retention-days: 14
 
   ios:
-    if: ${{ !inputs.live }}
+    needs: soc-plan
+    if: ${{ !cancelled() && !inputs.live && needs.soc-plan.outputs.reuse_source != 'true' }}
     runs-on: macos-26
     timeout-minutes: 60
     env:
