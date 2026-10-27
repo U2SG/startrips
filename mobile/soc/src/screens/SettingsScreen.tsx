@@ -215,7 +215,6 @@ const emptyState = () => null;
 const makeStyles = (ink: Ink) => StyleSheet.create({
   root: { flex: 1, backgroundColor: ink.canvas },
   groupLabel: { fontSize: type_.xs, fontFamily: font.med, letterSpacing: 0.4, color: ink.muted, marginBottom: 7, marginLeft: 4 },
-  groupCaption: { fontSize: 10, color: ink.muted, marginBottom: 7, marginLeft: 4, lineHeight: 15, opacity: 0.8 },
   group: {
     backgroundColor: ink.raised, borderRadius: radius.xxl, overflow: 'hidden',
     ...elev(ink, 2),
@@ -258,6 +257,5 @@ const makeStyles = (ink: Ink) => StyleSheet.create({
 
   navRow: { flexDirection: 'row', alignItems: 'center', minHeight: 56, paddingHorizontal: 14, gap: 10 },
   navRowText: { fontSize: type_.body, color: ink.fg, fontFamily: font.med },
-  navRowSub: { flex: 1, fontSize: type_.xs, color: ink.muted, fontFamily: font.sans },
   navChevron: { fontSize: 20, color: ink.muted },
 });
