@@ -1234,7 +1234,8 @@ describe("JourneyStory", () => {
       onMediaAdded: () => null,
     }));
 
-    expect(markup).not.toContain("JOURNEY SOUNDTRACK");
+    // The soundtrack head carries only the track name, no eyebrow above it.
+    expect(markup).toContain('<div class="journey-story__soundtrack-head"><strong>night-route</strong></div>');
     // #7: the presentation strips the file extension — the UI shows the
     // friendly name, never `night-route.mp3`.
     expect(markup).toContain("night-route");

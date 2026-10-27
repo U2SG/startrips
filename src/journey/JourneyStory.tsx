@@ -495,9 +495,7 @@ function MediaEvidenceEditor({
   return (
     <section className="journey-story__placement-review" aria-label="媒体地点">
       <div className="journey-story__placement-review-head">
-        <p>MEDIA LOCATION</p>
         <strong>{evidence ? mediaEvidenceLocationText(evidence) : "正在读取媒体地点…"}</strong>
-        <span>拍摄地点属于媒体自身证据，不会改变它所属的旅程或停靠点。</span>
       </div>
       {evidence ? (
         <div className="journey-story__placement-actions">
@@ -4678,7 +4676,7 @@ export function JourneyStory({
         <header>
           {showDesktopChapterRail ? routePointNavigation : null}
           {mobileLayout ? <div>
-            <p>PRIVATE JOURNEY · {journeyRange(journey)}</p>
+            <p>{journeyRange(journey)}</p>
             <h2 id="journey-story-title">{journey.title}</h2>
           </div> : canEditStory ? <button
             className="journey-story__edit-toggle"
@@ -5044,7 +5042,6 @@ export function JourneyStory({
                     />
                     <section ref={mobileMediaSheetRef} tabIndex={-1} data-focus-trap-exempt="true" className="journey-story__mobile-media-sheet" role="dialog" aria-modal="true" aria-label="媒体管理">
                       <div>
-                        <small>当前媒体</small>
                         <strong>{asset.fileName}</strong>
                       </div>
                       {cover?.id !== asset.id ? (
@@ -5113,10 +5110,8 @@ export function JourneyStory({
                     />
                     <section ref={mobileMediaSheetRef} tabIndex={-1} data-focus-trap-exempt="true" className="journey-story__mobile-media-sheet is-confirming" role="alertdialog" aria-modal="true" aria-label="确认删除媒体">
                       <div>
-                        <small>删除媒体</small>
                         <strong>确定删除这段媒体？</strong>
                       </div>
-                      <p>这个操作需要再次确认，不会由滑动手势直接触发。</p>
                       <div className="journey-story__mobile-media-confirm-actions">
                         <button ref={mediaDeleteCancelRef} type="button" disabled={mediaDeleteState === "pending"} onClick={closeMobileMediaDelete}>取消</button>
                         <button className="is-destructive" type="button" disabled={mediaDeleteState === "pending"} onClick={() => void confirmMediaDelete()}>{mediaDeleteState === "pending" ? "正在删除…" : "确认删除"}</button>
@@ -5258,14 +5253,13 @@ export function JourneyStory({
             )}
             {mobileLayout && mobileManageMode ? (
               <div className="journey-story__mobile-manage-bar" role="status">
-                <div><small>MANAGE JOURNEY</small><strong>管理旅程</strong></div>
+                <strong>管理旅程</strong>
                 <button ref={mobileManageDoneRef} type="button" disabled={mutationPending} onClick={exitMobileManageMode}>完成</button>
               </div>
             ) : null}
             {onDelete && deleteState !== "idle" ? (
               <section className="journey-story__delete-confirmation" aria-label="确认删除旅程">
                 <div>
-                  <p>REMOVE FROM ATLAS</p>
                   <strong>7 天内可以恢复</strong>
                   <span>{journeyDeleteDescription(journey)}</span>
                 </div>
@@ -5278,7 +5272,6 @@ export function JourneyStory({
             ) : null}
             {manageMedia && mediaEditing ? <div className="journey-story__media-add">
               {mobileLayout ? <div>
-                <p>PRIVATE MEDIA</p>
                 <strong>{selectedRoutePoint
                   ? `${visualMediaCount(selectedRoutePoint.id)} 个媒体片段 · ${selectedRoutePoint.label || `途径点 ${selectedRoutePoint.sortOrder + 1}`}`
                   : `${playbackIntroMedia(journey).length} 个媒体片段 · 旅程级媒体 / 开场章节`}</strong>
@@ -5325,7 +5318,6 @@ export function JourneyStory({
                 return (
                   <section className="journey-story__placement-review" aria-label={"\u5a92\u4f53\u4f4d\u7f6e\u5efa\u8bae"}>
                     <div className="journey-story__placement-review-head">
-                      <p>PLACEMENT SUGGESTION</p>
                       <strong>{singleSuggestion && suggestedJourney
                         ? `\u770b\u8d77\u6765\u66f4\u50cf\u662f\uff1a${suggestedJourney.title} / ${suggestedPoint?.label || "\u6574\u6bb5\u65c5\u7a0b"}`
                         : `\u68c0\u6d4b\u5230 ${groups.length} \u7ec4\u53ef\u80fd\u7684\u4f4d\u7f6e`}</strong>
@@ -5420,7 +5412,6 @@ export function JourneyStory({
 
             {showSoundtrack ? <div className={`journey-story__soundtrack${soundtrack && soundtrackRead?.status === "ready" ? " has-track" : ""}${playing ? " is-playing" : ""}`}>
               <div className="journey-story__soundtrack-head">
-                {mobileLayout ? <p>JOURNEY SOUNDTRACK</p> : null}
                 {soundtrack ? <strong>{stripMediaExtension(soundtrack.fileName)}</strong> : null}
               </div>
               {/* #7: the audio element is a hidden playback engine only — no

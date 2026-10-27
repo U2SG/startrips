@@ -45,7 +45,7 @@ export function StoryMediaRail({ media, currentId, requestedId, reads, disabled,
           );
         })}
       </ol> : null}
-      {onOrganize ? <button className="story-media-rail__organize" type="button" disabled={disabled} onClick={onOrganize}>整理媒体 · 移动与排序</button> : null}
+      {onOrganize ? <button className="story-media-rail__organize" type="button" disabled={disabled} onClick={onOrganize}>整理媒体</button> : null}
     </nav>
   );
 }
