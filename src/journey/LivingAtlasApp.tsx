@@ -4549,10 +4549,7 @@ export function LivingAtlasApp({
           aria-label="日常"
         >
           <header>
-            <div>
-              <p>EVERYDAY</p>
-              <h2>日常片段</h2>
-            </div>
+            <h2>日常片段</h2>
             <button type="button" onClick={() => closeAtlasEveryday(true)} aria-label="关闭日常">
               <IconX size={16} stroke={1.35} aria-hidden="true" />
             </button>
@@ -4586,10 +4583,7 @@ export function LivingAtlasApp({
           aria-live="polite"
         >
           <header>
-            <div>
-              <p>HOME BASE · {homeBaseContext.presence === "current" ? "CURRENT" : "HISTORY"}</p>
-              <h2>{homeBaseContext.heading}</h2>
-            </div>
+            <h2>{homeBaseContext.heading}</h2>
             <button type="button" onClick={clearHomeBaseContext} aria-label="关闭常住地信息">
               <IconX size={16} stroke={1.35} aria-hidden="true" />
             </button>
@@ -4598,9 +4592,6 @@ export function LivingAtlasApp({
             <span>{homeBaseContext.periodLabel}</span>
             <span>{homeBaseContext.statusLabel}</span>
           </div>
-          <p className="living-atlas__home-base-context-note">
-            这是你确认过的常住地阶段。它提供生活背景，不改变当前旅程、路线点或播放焦点。
-          </p>
           {everydayFragments ? (
             <EverydayFragments
               key={homeBaseContext.periodId}

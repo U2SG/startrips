@@ -9597,20 +9597,13 @@ body:has(.journey-share) .account-dock {
 
 .living-atlas__home-base-context > header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 14px;
 }
 
-.living-atlas__home-base-context > header p {
-  margin: 0;
-  color: color-mix(in srgb, var(--atlas-cyan) 72%, var(--atlas-text));
-  font: 500 9px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.12em;
-}
-
 .living-atlas__home-base-context > header h2 {
-  margin: 4px 0 0;
+  margin: 0;
   color: var(--atlas-text);
   font-size: 19px;
   font-weight: 520;
@@ -9639,13 +9632,6 @@ body:has(.journey-share) .account-dock {
   color: var(--atlas-muted);
   font: 500 10px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
   letter-spacing: 0.06em;
-}
-
-.living-atlas__home-base-context-note {
-  margin: 12px 0 0;
-  color: #c6d2ce;
-  font-size: 12px;
-  line-height: 1.65;
 }
 
 /* Compact: grows up from the dock (or from the bottom edge in an Atlas with
@@ -9705,20 +9691,13 @@ body:has(.journey-share) .account-dock {
 
 .living-atlas__everyday-context > header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 14px;
 }
 
-.living-atlas__everyday-context > header p {
-  margin: 0;
-  color: color-mix(in srgb, var(--atlas-cyan) 72%, var(--atlas-text));
-  font: 500 9px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.12em;
-}
-
 .living-atlas__everyday-context > header h2 {
-  margin: 4px 0 0;
+  margin: 0;
   color: var(--atlas-text);
   font-size: 19px;
   font-weight: 520;
@@ -9887,7 +9866,6 @@ body:has(.journey-share) .account-dock {
 }
 
 .everyday-fragment-place-input__confirmed,
-.everyday-fragment-place-input__hint,
 .everyday-fragment-place-input__message {
   margin: 0;
 }
@@ -9929,7 +9907,6 @@ body:has(.journey-share) .account-dock {
 }
 
 .everyday-fragment-place-input__results small,
-.everyday-fragment-place-input__hint,
 .everyday-fragment-place-input__confirmed span {
   color: var(--atlas-muted);
 }

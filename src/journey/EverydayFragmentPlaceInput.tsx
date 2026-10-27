@@ -224,9 +224,7 @@ export function EverydayFragmentPlaceInput({
           <span>已确认地点</span>
           <strong>{confirmed.placeLabel || `${confirmed.latitude.toFixed(5)}, ${confirmed.longitude.toFixed(5)}`}</strong>
         </p>
-      ) : (
-        <p className="everyday-fragment-place-input__hint">请选择一个搜索结果，或使用下方手动坐标。</p>
-      )}
+      ) : null}
       {results.length > 0 ? (
         <ul id={listId} className="everyday-fragment-place-input__results" role="listbox" aria-label="地点搜索结果">
           {results.map((result, index) => (
