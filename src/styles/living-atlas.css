@@ -4309,8 +4309,7 @@ button.living-atlas-globe__pick {
   color: var(--control-select);
 }
 
-.journey-route-draft__stop-toggle > span,
-.journey-route-draft__stay-ownership > span {
+.journey-route-draft__stop-toggle > span {
   display: grid;
   gap: 2px;
 }
@@ -4725,12 +4724,6 @@ button.living-atlas-globe__pick {
   font-size: 9px;
 }
 
-.journey-media-fields > p {
-  color: var(--atlas-faint);
-  font-size: 10px;
-  text-align: center;
-}
-
 .journey-review > p {
   margin: 0;
   color: var(--atlas-acid);
@@ -5069,19 +5062,6 @@ button.living-atlas-globe__pick {
 .journey-recorded-tracks__heading {
   display: grid;
   gap: 7px;
-}
-
-.journey-recorded-tracks__heading > div {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.journey-recorded-tracks__heading small {
-  color: var(--atlas-acid);
-  font: 500 9px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.14em;
 }
 
 .journey-recorded-tracks__heading h4,
@@ -5545,7 +5525,7 @@ button.living-atlas-globe__pick {
 
 .journey-globe-pick-button {
   width: 100%;
-  min-height: 68px;
+  min-height: 52px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
@@ -5560,21 +5540,10 @@ button.living-atlas-globe__pick {
   cursor: pointer;
 }
 
-.journey-globe-pick-button > span {
-  display: grid;
-  gap: 4px;
-}
-
 .journey-globe-pick-button strong {
   color: #cad9d5;
   font-size: 13px;
   font-weight: 500;
-}
-
-.journey-globe-pick-button small {
-  color: #647a74;
-  font-size: 11px;
-  line-height: 1.45;
 }
 
 .journey-route-draft {
@@ -5601,7 +5570,6 @@ button.living-atlas-globe__pick {
 }
 
 .journey-route-draft > li.is-empty svg {
-  grid-row: 1 / span 2;
   align-self: center;
   color: var(--atlas-cyan);
 }
@@ -5610,13 +5578,6 @@ button.living-atlas-globe__pick {
   color: #b9c9c4;
   font-family: var(--archive-serif);
   font-size: 18px;
-}
-
-.journey-route-draft > li.is-empty small {
-  margin: 0;
-  font: inherit;
-  font-size: 11px;
-  line-height: 1.5;
 }
 
 .journey-route-draft__index,
@@ -5669,7 +5630,6 @@ button.living-atlas-globe__pick {
   min-height: 72px;
 }
 
-.journey-sentence > small,
 .journey-story-fields__inferred {
   color: var(--control-muted);
   font-size: 12px;
@@ -7920,13 +7880,6 @@ button.living-atlas__globe-focus-exit {
     padding: 6px 4px 10px;
   }
 
-  .journey-media-mobile-sheet__heading small {
-    margin: 0;
-    color: rgba(111, 226, 207, 0.58);
-    font: 600 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
-    letter-spacing: 0.13em;
-  }
-
   .journey-media-mobile-sheet__heading strong {
     overflow: hidden;
     color: rgba(238, 247, 243, 0.96);
@@ -7976,14 +7929,6 @@ button.living-atlas__globe-focus-exit {
   .journey-media-mobile-sheet__confirm-actions > button {
     justify-content: center;
     padding-inline: 8px;
-  }
-
-  .journey-media-mobile-sheet.is-confirming > p {
-    margin: 0;
-    padding: 5px 4px 10px;
-    color: rgba(161, 190, 181, 0.68);
-    font-size: 10px;
-    line-height: 1.55;
   }
 
   .journey-media-picker {

@@ -1637,7 +1637,7 @@ export function JourneyComposer({
                 <label className="journey-media-picker">
                   <IconUpload size={26} stroke={1.2} aria-hidden="true" />
                   <span>添加照片或视频</span>
-                  <strong>{existingVisualMediaCount ? `${existingVisualMediaCount} 个已有媒体 · 可继续添加` : "支持照片与视频，可持续添加"}</strong>
+                  {existingVisualMediaCount ? <strong>{`${existingVisualMediaCount} 个已有媒体 · 可继续添加`}</strong> : null}
                   <input type="file" accept={MEDIA_FILE_ACCEPT} multiple onChange={(event) => selectFiles(event)} />
                 </label>
                 {!mobileLayout ? (
@@ -1737,7 +1737,6 @@ export function JourneyComposer({
                     <button type="button" className="journey-media-mobile-sheet__backdrop" aria-label="关闭媒体管理" onClick={() => setMobileMediaMenuIndex(null)} />
                     <section ref={mobileMediaSheetRef} tabIndex={-1} data-focus-trap-exempt="true" className="journey-media-mobile-sheet" role="dialog" aria-modal="true" aria-label={`管理媒体 ${mobileMenuMedia.file.name}`}>
                       <div className="journey-media-mobile-sheet__heading">
-                        <small>媒体管理</small>
                         <strong>{mobileMenuMedia.file.name}</strong>
                       </div>
                       <button
@@ -1781,7 +1780,6 @@ export function JourneyComposer({
                     <button type="button" className="journey-media-mobile-sheet__backdrop" aria-label="关闭媒体归属选择" onClick={() => setMobileMediaAssignmentIndex(null)} />
                     <section ref={mobileMediaSheetRef} tabIndex={-1} data-focus-trap-exempt="true" className="journey-media-mobile-sheet is-assignment" role="dialog" aria-modal="true" aria-label={`${mobileAssignmentMedia.file.name} 的媒体归属`}>
                       <div className="journey-media-mobile-sheet__heading">
-                        <small>媒体归属</small>
                         <strong>{mobileAssignmentMedia.file.name}</strong>
                       </div>
                       <button
@@ -1813,19 +1811,14 @@ export function JourneyComposer({
                     <button type="button" className="journey-media-mobile-sheet__backdrop" aria-label="取消移除媒体" onClick={() => setMobileMediaDeleteIndex(null)} />
                     <section ref={mobileMediaSheetRef} tabIndex={-1} data-focus-trap-exempt="true" className="journey-media-mobile-sheet is-confirming" role="alertdialog" aria-modal="true" aria-label={`确认移除媒体 ${mobileDeleteMedia.file.name}`}>
                       <div className="journey-media-mobile-sheet__heading">
-                        <small>移除媒体</small>
                         <strong>确定移除 {mobileDeleteMedia.file.name}？</strong>
                       </div>
-                      <p>它只会从这次待上传列表中移除，不会由滑动手势直接触发。</p>
                       <div className="journey-media-mobile-sheet__confirm-actions">
                         <button type="button" onClick={() => setMobileMediaDeleteIndex(null)}>取消</button>
                         <button type="button" className="is-destructive" onClick={() => removePendingMedia(mobileMediaDeleteIndex)}>确认移除</button>
                       </div>
                     </section>
                   </div>
-                ) : null}
-                {mediaFiles.length > 0 ? (
-                  <p>{mobileLayout ? "点按归属标签可调整；其他操作收在媒体管理中。" : "每个文件都可以归到整段旅程，或一个具体途径点。"}</p>
                 ) : null}
               </div>
   );
@@ -1855,11 +1848,10 @@ export function JourneyComposer({
           整理成路线
         </button>
       </label>
-      <small>先读出地点和日期给你核对，确认后才加入路线；也可以在下方手动填写。</small>
     </form>
   );
   const journeyTitleFragment = (
-                <label className="journey-title-field"><span>旅程标题</span><input required maxLength={80} value={title} onChange={(event) => { metadataEditedRef.current.title = true; setTitle(event.target.value); }} placeholder="穿过北方的夜车" /></label>
+                <label className="journey-title-field"><span>旅程标题</span><input required maxLength={80} value={title} onChange={(event) => { metadataEditedRef.current.title = true; setTitle(event.target.value); }} /></label>
   );
   const journeyMetaFragment = (
     <>
@@ -1881,7 +1873,7 @@ export function JourneyComposer({
   ) : (
     <section className="journey-recorded-tracks journey-recorded-tracks--save-first" aria-label="记录轨迹">
       <div className="journey-recorded-tracks__heading">
-        <div><small>RECORDED TRACE</small><h4>记录轨迹</h4></div>
+        <h4>记录轨迹</h4>
         <p>先保存这段 Journey，之后才能把 GPX 记录导入到它自己的私密轨迹中。</p>
       </div>
     </section>
@@ -1889,7 +1881,7 @@ export function JourneyComposer({
   const appearanceFragment = (
     <>
                 <fieldset className="journey-light-colors">
-                  <legend>这段旅程的光 · 单色基调</legend>
+                  <legend>这段旅程的光</legend>
                   <div className="journey-light-color-list">
                     {LIGHT_COLORS.map((color) => (
                       <button
@@ -2037,7 +2029,7 @@ export function JourneyComposer({
   );
   const globePickFragment = (
     <>
-                {onGlobePickRequest ? <button ref={globePickTriggerRef} className="journey-globe-pick-button" type="button" onClick={requestGlobePoint}><IconMapPin size={17} stroke={1.35} aria-hidden="true" /><span><strong>直接在地球上取点</strong><small>适合在路上、海上或没有准确名称的位置</small></span></button> : null}
+                {onGlobePickRequest ? <button ref={globePickTriggerRef} className="journey-globe-pick-button" type="button" onClick={requestGlobePoint}><IconMapPin size={17} stroke={1.35} aria-hidden="true" /><span><strong>直接在地球上取点</strong></span></button> : null}
     </>
   );
   const reverseAttributionFragment = (
@@ -2051,7 +2043,7 @@ export function JourneyComposer({
   );
   const routeListFragment = (
               <ol className="journey-route-draft" aria-label="已添加的地点">
-                {routePoints.length === 0 ? <li className="is-empty"><IconMapPin size={22} stroke={1.15} aria-hidden="true" /><span>还没有地点</span><small>先搜索一个地点，或直接在地球上取点。</small></li> : null}
+                {routePoints.length === 0 ? <li className="is-empty"><IconMapPin size={22} stroke={1.15} aria-hidden="true" /><span>还没有地点</span></li> : null}
                 {routePoints.map((point, index) => {
                   const expanded = expandedRoutePointDraftId === point.draftId;
                   const menuOpen = routePointMenuDraftId === point.draftId;
@@ -2151,7 +2143,6 @@ export function JourneyComposer({
                               data-route-point-label-input={point.draftId}
                               aria-label={`${displayLabel} 名称`}
                               maxLength={120}
-                              placeholder="地点名称（可精确到建筑或景点）"
                               value={point.label}
                               onChange={(event) => setRoutePoints((current) => updateRoutePoint(current, point.draftId, { label: event.target.value }))}
                             />
@@ -2203,7 +2194,6 @@ export function JourneyComposer({
                                 <input
                                   maxLength={120}
                                   value={point.regionContext ?? ""}
-                                  placeholder="例如：成都、乌兰布统"
                                   onChange={(event) => setRoutePoints((current) => updateRoutePoint(current, point.draftId, { regionContext: event.target.value }))}
                                 />
                               </label>
@@ -2235,7 +2225,7 @@ export function JourneyComposer({
                             </button>
                             {!point.isStop && (stayOwnership.previous || stayOwnership.next || stayOwnership.current) ? (
                               <div className="journey-route-draft__stay-ownership" data-stay-ownership-correction={stayOwnership.needsCorrection ? "true" : "false"}>
-                                <span>跟随哪个停靠？<small>只记录停留归属，不改变路线或媒体身份</small></span>
+                                <span>跟随哪个停靠？</span>
                                 <div role="group" aria-label={`${displayLabel} 停留归属`}>
                                   {stayOwnership.previous ? (
                                     <button
@@ -2349,7 +2339,7 @@ export function JourneyComposer({
               <details className="journey-precise-location" open={mobileLayout || undefined}>
                 <summary><span><IconMapPin size={17} stroke={1.35} aria-hidden="true" />精确位置</span><small>手动输入经纬度</small><IconChevronDown className="journey-precise-location__chevron" size={17} stroke={1.35} aria-hidden="true" /></summary>
                 <div className="journey-coordinate-fields">
-                  <label className="journey-coordinate-fields__label"><span>地点名称</span><input maxLength={120} value={pointLabel} onChange={(event) => setPointLabel(event.target.value)} placeholder="可精确到建筑、景点或沿途位置" /></label>
+                  <label className="journey-coordinate-fields__label"><span>地点名称</span><input maxLength={120} value={pointLabel} onChange={(event) => setPointLabel(event.target.value)} /></label>
                   <label><span>纬度</span><input inputMode="decimal" value={latitude} onChange={(event) => setLatitude(event.target.value)} placeholder="31.2304" /></label>
                   <label><span>经度</span><input inputMode="decimal" value={longitude} onChange={(event) => setLongitude(event.target.value)} placeholder="121.4737" /></label>
                   <label className="journey-checkbox"><input className="st-check" type="checkbox" checked={pointIsStop} onChange={(event) => setPointIsStop(event.target.checked)} />这是一个停留地点</label>
