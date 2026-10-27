@@ -86,7 +86,6 @@ export function StartripsRecoverySurface({
       <div className="startrips-recovery-surface__motion" aria-hidden="true">
         <StartripsSignatureMotion clip="recovery" size={64} title="" />
       </div>
-      <p className="startrips-recovery-surface__eyebrow">{getStartripsRecoveryCopy(descriptor.copyKeys.eyebrow)}</p>
       {descriptor.code ? <p className="startrips-recovery-surface__code">{descriptor.code}</p> : null}
       <Heading>{getStartripsRecoveryCopy(descriptor.copyKeys.title)}</Heading>
       <p className="startrips-recovery-surface__body">{getStartripsRecoveryCopy(descriptor.copyKeys.body)}</p>
