@@ -6563,10 +6563,7 @@ button.living-atlas__route-point-context-entry {
   gap: 14px;
 }
 
-.living-atlas__cross-point-reading > header p,
-.living-atlas__cross-point-reading > header span,
-.living-atlas__cross-point-reading-provenance,
-.living-atlas__cross-point-reading > footer > span {
+.living-atlas__cross-point-reading > header span {
   margin: 0;
   color: var(--atlas-muted);
   font-size: 9px;
@@ -6574,7 +6571,7 @@ button.living-atlas__route-point-context-entry {
 }
 
 .living-atlas__cross-point-reading > header h2 {
-  margin: 5px 0 4px;
+  margin: 0 0 4px;
   color: var(--atlas-text);
   font-size: 19px;
   font-weight: 520;
@@ -6594,10 +6591,6 @@ button.living-atlas__route-point-context-entry {
   cursor: pointer;
 }
 
-.living-atlas__cross-point-reading-provenance {
-  margin-top: 18px;
-}
-
 .living-atlas__cross-point-reading > blockquote {
   margin: 18px 0 0;
   color: #d3ded9;
@@ -6606,8 +6599,8 @@ button.living-atlas__route-point-context-entry {
 }
 
 .living-atlas__cross-point-reading > footer {
-  display: grid;
-  gap: 10px;
+  display: flex;
+  justify-content: flex-end;
   margin-top: 22px;
 }
 
@@ -6616,6 +6609,7 @@ button.living-atlas__route-point-context-entry {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 0 14px;
   border: 1px solid rgba(118, 198, 188, 0.2);
   border-radius: 999px;
@@ -6904,10 +6898,6 @@ button.living-atlas__globe-focus-exit {
     .living-atlas-globe__pick-label-compact {
       display: none;
     }
-  }
-
-  .living-atlas-globe__mode-note {
-    display: none;
   }
 
   /* MapLibre's own controls clear the dock like every other compact surface

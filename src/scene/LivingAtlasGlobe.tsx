@@ -7,7 +7,6 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
-  useReducer,
   useRef,
   useState,
   type CSSProperties,
@@ -50,13 +49,6 @@ import {
   writeChangedEarthDiveRevealStyle,
   type EarthDiveRevealBounds,
 } from "./earthDiveReveal";
-import {
-  GLOBE_GESTURE_HINT_DWELL_MS,
-  globeGestureHintVisible,
-  globeModeNoteVisible,
-  initialGlobeGestureHintState,
-  resolveGlobeGestureHint,
-} from "./globeGestureHint";
 import {
   ParticleEarthScene,
   type ParticleEarthBackend,
@@ -520,12 +512,6 @@ export function LivingAtlasGlobe({
   const persistentEarth = usePersistentEarth();
   const compactMobileLayout = useCompactMobileLayout();
   const [detailLanguage, setDetailLanguage] = useState<DetailedEarthLanguage>("zh");
-  const [gestureHint, signalGestureHint] = useReducer(
-    resolveGlobeGestureHint,
-    initialGlobeGestureHintState,
-  );
-  const gestureHintVisible = globeGestureHintVisible(gestureHint);
-  const modeNoteVisible = globeModeNoteVisible(gestureHint, { globeFocusMode, compactMobileLayout });
   const homeBaseLayer = useMemo(() => resolveLivingAtlasHomeBaseLayer(homeBasePresence), [homeBasePresence]);
   const detailedEarthRoute = useMemo(() => (
     journeyRoutes.find((route) => route.id === activeJourneyRouteId)
@@ -1147,38 +1133,6 @@ export function LivingAtlasGlobe({
     };
   }, []);
 
-  // #253: entering focus mode arms the hint, leaving retires it and bumps the
-  // ordering token so this visit's dwell timer cannot speak for the next one.
-  useEffect(() => {
-    signalGestureHint({ kind: "focus-mode", active: globeFocusMode });
-  }, [globeFocusMode]);
-
-  // The dwell is a plain timer, not an animation or `transitionend` listener,
-  // so reduced motion reaches the same end state on the same schedule.
-  useEffect(() => {
-    if (!gestureHintVisible) return;
-    const session = gestureHint.session;
-    const dwell = window.setTimeout(
-      () => signalGestureHint({ kind: "dwell", session }),
-      GLOBE_GESTURE_HINT_DWELL_MS,
-    );
-    return () => window.clearTimeout(dwell);
-  }, [gestureHint.session, gestureHintVisible]);
-
-  // The particle globe owns wheel/drag on its own canvas outside this subtree,
-  // so the first gesture is observed on the window rather than on the section.
-  useEffect(() => {
-    if (!gestureHintVisible) return;
-    const session = gestureHint.session;
-    const dismiss = () => signalGestureHint({ kind: "gesture", session });
-    window.addEventListener("wheel", dismiss, { capture: true, passive: true });
-    window.addEventListener("pointerdown", dismiss, { capture: true, passive: true });
-    return () => {
-      window.removeEventListener("wheel", dismiss, { capture: true });
-      window.removeEventListener("pointerdown", dismiss, { capture: true });
-    };
-  }, [gestureHint.session, gestureHintVisible]);
-
   const effectiveDive = resolveEarthDivePresentation(dive, earthExperiencePolicy, globeFocusMode);
   const homeBaseInteractive = effectiveDive.owner !== "detail"
     && !cinematicActive
@@ -1382,17 +1336,14 @@ export function LivingAtlasGlobe({
         />
       ) : null}
 
-      {/* #308: one resolver owns gesture-note discoverability. Focus mode keeps
-          #253's transient onboarding; ordinary desktop keeps one quiet gesture
-          line even though renderer-mode chrome is gone; compact mobile stays
-          uncluttered and relies on its native pinch gesture. */}
-      {modeNoteVisible ? (
+      {/* The note is a loading status only: it appears while the vector map
+          prepares on the ordinary desktop surface. Focus mode keeps its single
+          return control, and compact mobile stays uncluttered. */}
+      {!globeFocusMode
+        && !compactMobileLayout
+        && (effectiveDive.stage === "prewarm" || effectiveDive.stage === "blending") ? (
         <div className="living-atlas-globe__mode-note" aria-hidden="true">
-          {effectiveDive.stage === "prewarm" || effectiveDive.stage === "blending"
-            ? "VECTOR MAP PREPARING"
-            : detailMode
-              ? "DRAG TO EXPLORE / ZOOM OUT TO RETURN"
-              : "SCROLL TO ZOOM / DRAG TO ROTATE"}
+          VECTOR MAP PREPARING
         </div>
       ) : null}
     </section>

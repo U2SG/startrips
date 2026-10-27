@@ -9,8 +9,7 @@
 //     nodes and none of the retired renderer-mode copy;
 //   * nothing interactive can be sampled in the top-right region;
 //   * ordinary desktop keeps one keyboard-reachable intent affordance which
-//     enters the SAME Semantic Earth Dive path, while the zoom/drag guidance
-//     remains independent from whether the detail utility cluster is mounted;
+//     enters the SAME Semantic Earth Dive path;
 //   * entering focus mode from the detail map lands on the particle earth, so
 //     MapLibre's own navigation and attribution controls are not left behind
 //     as a second piece of chrome;
@@ -18,8 +17,9 @@
 //     focus-visible outline, and is not wrapped in a header panel;
 //   * clicking it and pressing Escape both restore `data-globe-focus`, leave
 //     `history.length` unchanged and leave the selected Journey selected;
-//   * the gesture hint retires on the first wheel input and on the dwell alone,
-//     and does not come back for the same visit.
+//   * no zoom/drag gesture hint is rendered anywhere: the
+//     `.living-atlas-globe__mode-note` exists only as the transient
+//     "VECTOR MAP PREPARING" status, which none of these settled states shows.
 //
 // Deliberate coverage boundaries, stated rather than implied:
 //   * The top-right sample on the `living-atlas` fixture is STRUCTURALLY empty:
@@ -70,12 +70,11 @@ const VIEWPORTS = [
 // re-asserting it here would prove nothing new. The reduced CSS viewport is the
 // real variable, so this pass grades the five things the reviewer named:
 // return-control geometry and position, top-right emptiness, retired renderer
-// chrome, the transient hint, and the preserved return context.
+// chrome, the absent gesture hint, and the preserved return context.
 const ZOOM_CONDITIONS = [
   { name: "1366x768", width: 1366, height: 768 },
   { name: "1366x768@125%", width: 1093, height: 614, deviceScaleFactor: 1.25 },
 ];
-const HINT_DWELL_MS = 4000; // src/scene/globeGestureHint.ts
 
 const journeys = [0, 1, 2, 3].map((index) => {
   const startedOn = ["2026-08-20", "2026-06-12", "2025-12-28", "2024-04-09"][index];
@@ -349,6 +348,10 @@ function readComposition(page) {
       diveIntentName: document.querySelector('[data-earth-dive-intent="true"]')?.getAttribute("aria-label") ?? null,
       modeNoteCount: document.querySelectorAll(".living-atlas-globe__mode-note").length,
       legacyModeCopy: ["深入真实地图", "返回粒子地球", "REGION MAP", "ART GLOBE"].some((copy) => text.includes(copy)),
+      // The retired zoom/drag gesture hints; the mode note may only ever read
+      // "VECTOR MAP PREPARING" now.
+      gestureHintCopy: ["SCROLL TO ZOOM", "DRAG TO ROTATE", "DRAG TO EXPLORE", "ZOOM OUT TO RETURN"]
+        .some((copy) => text.includes(copy)),
       globeSectionChildren: [...(document.querySelector(".living-atlas-globe")?.children ?? [])]
         .map((child) => (typeof child.className === "string" ? child.className : child.tagName)),
       interactiveTopRight: samples,
@@ -513,7 +516,7 @@ const waitForExitedFocus = (page) => page.waitForFunction(() => (
   document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "off"
 ), null, { timeout: 5_000 });
 
-const countHint = (page) => page.evaluate(() => (
+const countModeNote = (page) => page.evaluate(() => (
   document.querySelectorAll(".living-atlas-globe__mode-note").length
 ));
 
@@ -864,16 +867,6 @@ try {
       await enterFocus(page);
       const focused = await readComposition(page);
 
-      // The hint is armed on entry; the first wheel input retires it, and it
-      // does not come back for this visit.
-      const hintArmed = focused.modeNoteCount;
-      await page.mouse.move(viewport.width / 2, viewport.height / 2);
-      await page.mouse.wheel(0, -240);
-      await page.waitForFunction(() => (
-        document.querySelectorAll(".living-atlas-globe__mode-note").length === 0
-      ), null, { timeout: 5_000 }).catch(() => undefined);
-      const hintAfterGesture = await countHint(page);
-
       await page.locator(".living-atlas__globe-focus-exit").click();
       await waitForExitedFocus(page);
       await settle(page);
@@ -885,9 +878,8 @@ try {
         || ordinary.modeCount !== 0
         || ordinary.diveIntentCount !== 1
         || ordinary.legacyModeCopy
-        // Owner review on PR 257: #253 owns the focus-mode composition, so the
-        // ordinary surface keeps the permanent guidance it has always shown.
-        || ordinary.modeNoteCount !== 1
+        // The ordinary surface carries no zoom/drag gesture hint.
+        || ordinary.modeNoteCount !== 0
         || !selection.changed
         || focused.focusMarker !== "on"
         || focused.controlsCount !== 0
@@ -910,16 +902,14 @@ try {
         || !exit.parentClass?.includes("living-atlas")
         || exit.parentClass.includes("header")
         || !exit.focused
-        || hintArmed !== 1
-        || hintAfterGesture !== 0
+        // Focus mode shows no gesture hint either.
+        || focused.modeNoteCount !== 0
         || returned.focusMarker !== "off"
         || returned.controlsCount !== 1
         || returned.modeCount !== 0
         || returned.diveIntentCount !== 1
         || returned.legacyModeCopy
-        // Retiring the hint inside focus mode does not consume the ordinary
-        // surface's own line: returning restores the full ordinary chrome.
-        || returned.modeNoteCount !== 1
+        || returned.modeNoteCount !== 0
         || returned.activeRailJourney !== selection.selectedTitle
         || returned.historyLength !== historyBefore
         || pageErrors.length > 0;
@@ -942,7 +932,7 @@ try {
           interactiveTopRight: focused.interactiveTopRight,
         },
         exit,
-        hint: { armedOnEntry: hintArmed, afterFirstWheel: hintAfterGesture },
+        focusedModeNoteCount: focused.modeNoteCount,
         selection,
         historyLength: { beforeEnter: historyBefore, afterExit: returned.historyLength },
         returned: {
@@ -1005,8 +995,8 @@ try {
     }
   }
 
-  // 3. Reduced motion reaches the same end states, and the hint retires on the
-  //    dwell alone - no wheel, no drag, no `transitionend` in the path.
+  // 3. Reduced motion reaches the same end states, across two focus visits,
+  //    without any gesture hint on either.
   {
     const viewport = VIEWPORTS[0];
     const { page, pageErrors } = await openAtlas(viewport, { reducedMotion: "reduce" });
@@ -1014,17 +1004,10 @@ try {
       const historyBefore = await page.evaluate(() => window.history.length);
       await enterFocus(page);
       const focused = await readComposition(page);
-      const hintArmed = focused.modeNoteCount;
-      await page.waitForFunction(() => (
-        document.querySelectorAll(".living-atlas-globe__mode-note").length === 0
-      ), null, { timeout: HINT_DWELL_MS + 6_000 });
-      const hintAfterDwell = await countHint(page);
-      // A second visit arms a fresh hint; the retired one never re-appears in
-      // the visit that dismissed it.
       await page.locator(".living-atlas__globe-focus-exit").click();
       await waitForExitedFocus(page);
       await enterFocus(page);
-      const rearmed = await countHint(page);
+      const secondVisitNote = await countModeNote(page);
       await page.keyboard.press("Escape");
       await waitForExitedFocus(page);
       await settle(page);
@@ -1035,7 +1018,7 @@ try {
         focusedFocusMarker: focused.focusMarker,
         focusedControlsCount: focused.controlsCount,
         interactiveTopRight: focused.interactiveTopRight,
-        hint: { armedOnEntry: hintArmed, afterDwell: hintAfterDwell, rearmedOnNextVisit: rearmed },
+        modeNote: { firstVisit: focused.modeNoteCount, secondVisit: secondVisitNote },
         historyLength: { beforeEnter: historyBefore, afterExit: returned.historyLength },
         returnedFocusMarker: returned.focusMarker,
         returnedControlsCount: returned.controlsCount,
@@ -1043,12 +1026,11 @@ try {
         pageErrors,
         failed: focused.focusMarker !== "on"
           || focused.controlsCount !== 0
-          || hintArmed !== 1
-          || hintAfterDwell !== 0
-          || rearmed !== 1
+          || focused.modeNoteCount !== 0
+          || secondVisitNote !== 0
           || returned.focusMarker !== "off"
           || returned.controlsCount !== 1
-          || returned.modeNoteCount !== 1
+          || returned.modeNoteCount !== 0
           || returned.historyLength !== historyBefore
           || pageErrors.length > 0,
       });
@@ -1331,6 +1313,7 @@ try {
           controlsCount: returned.controlsCount,
           modeCount: returned.modeCount,
           modeNoteCount: returned.modeNoteCount,
+          gestureHintCopy: returned.gestureHintCopy,
         },
         pageErrors,
         failed: !returnedToParticle
@@ -1353,10 +1336,14 @@ try {
           || composition.focusMarker !== "on"
           || composition.controlsCount !== 0
           || composition.interactiveTopRight.length > 0
+          || composition.modeNoteCount !== 0
           || returned.focusMarker !== "off"
           || returned.controlsCount !== 1
           || returned.modeCount !== 0
-          || returned.modeNoteCount !== 1
+          // Leaving focus at detail zoom may legitimately re-run the Dive, so
+          // the note can briefly read VECTOR MAP PREPARING; it never carries a
+          // gesture hint.
+          || returned.gestureHintCopy
           || pageErrors.length > 0,
       });
     } finally {
@@ -1747,7 +1734,7 @@ try {
       const journey = await selectNonDefaultJourney(page);
       await enterFocus(page);
       const focused = await readComposition(page);
-      const hintOnEntry = await countHint(page);
+      const noteOnEntry = await countModeNote(page);
 
       // The return control has to be genuinely inside the top-left safe area
       // at a shorter viewport too, not merely "not on the right": a control
@@ -1813,7 +1800,7 @@ try {
           exit: focused.exit,
         },
         topLeft,
-        hintOnEntry,
+        noteOnEntry,
         returned: {
           focusMarker: returned.focusMarker,
           controlsCount: returned.controlsCount,
@@ -1843,8 +1830,8 @@ try {
           || !topLeft
           || focused.exit?.accessibleName !== "返回图谱"
           || focused.exit?.parentClass?.includes("living-atlas__header")
-          // The hint is present on entry, i.e. transient guidance still arms.
-          || hintOnEntry !== 1
+          // No gesture hint on entry: the single return control stays alone.
+          || noteOnEntry !== 0
           // Return context survives at this size too.
           || returned.focusMarker !== "off"
           || returned.controlsCount !== 1

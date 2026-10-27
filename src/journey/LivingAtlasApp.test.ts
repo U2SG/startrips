@@ -1295,7 +1295,9 @@ describe("Route Point context integration (#291)", () => {
     expect(appSource).toContain('onClick={escalateCrossPointReadingToStory}');
     expect(appSource).toContain('revealRoutePointContext(journeyId, targetRoutePointId)');
     expect(appSource).toContain('openJourneyStory(journeyId, targetRoutePointId)');
-    expect(appSource).toContain('从 {crossPointReading.source.routePointLabel} 临时阅读 · 未改变当前观察');
+    expect(appSource).not.toContain("TRANSIENT READING");
+    expect(appSource).not.toContain("临时阅读 · 未改变当前观察");
+    expect(appSource).not.toContain("关闭后返回 ·");
   });
 
   it("keeps the mobile cross-point reader above persistent mobile chrome", () => {
