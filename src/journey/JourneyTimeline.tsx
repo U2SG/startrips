@@ -49,7 +49,6 @@ export function JourneyTimeline({
   return (
     <section className="journey-timeline" aria-labelledby="journey-timeline-title">
       <header>
-        <p>CHRONOLOGICAL ORBIT</p>
         <h2 id="journey-timeline-title">旅程时间线</h2>
       </header>
       <div className="journey-timeline__rail">

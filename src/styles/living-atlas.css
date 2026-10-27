@@ -1466,25 +1466,11 @@ button.living-atlas-globe__pick {
 }
 
 .journey-timeline > header {
-  display: grid;
-  grid-template-columns: 180px 1fr;
-  align-items: end;
-  gap: 28px;
   padding-bottom: 24px;
   border-bottom: 1px solid var(--atlas-line);
 }
 
-.journey-timeline > header p {
-  grid-column: 1;
-  margin: 0;
-  color: var(--atlas-acid);
-  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.18em;
-}
-
 .journey-timeline > header h2 {
-  grid-column: 2;
-  grid-row: 1;
   margin: 0;
   font-family: var(--archive-serif);
   font-size: clamp(30px, 4vw, 54px);
@@ -7069,15 +7055,7 @@ button.living-atlas__globe-focus-exit {
   }
 
   .journey-timeline > header {
-    grid-template-columns: 1fr;
-    gap: 10px;
     padding-bottom: 18px;
-  }
-
-  .journey-timeline > header p,
-  .journey-timeline > header h2 {
-    grid-column: 1;
-    grid-row: auto;
   }
 
   .journey-timeline > header h2 {
