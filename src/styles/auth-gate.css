@@ -1207,14 +1207,6 @@ body:has(.living-atlas) .account-dock > .account-dock__tab {
 .account-dock__panel p,
 .account-dock__panel h2 { margin: 0; }
 
-.account-sheet__identity p,
-.account-sheet__drill-header p {
-  margin-bottom: 5px;
-  color: rgba(111, 196, 182, 0.66);
-  font: 600 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.14em;
-}
-
 .account-sheet__identity h2,
 .account-sheet__drill-header h2 {
   overflow: hidden;
@@ -1255,6 +1247,7 @@ body:has(.living-atlas) .account-dock > .account-dock__tab {
 .mobile-v2__more-actions button {
   min-height: 58px;
   display: grid;
+  align-content: center;
   gap: 4px;
   padding: 10px 2px;
   border: 0;

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  accountSurfaceEyebrow,
   accountSurfaceFromLocationSearch,
   accountSurfaceTitle,
   isAccountEmailChangeSurface,
@@ -79,16 +78,11 @@ describe("account surface transitions", () => {
     expect(accountSurfaceTitle("edit")).toBe("编辑图谱");
     for (const surface of LINK) {
       expect(accountSurfaceTitle(surface)).toBe("设置密码");
-      expect(accountSurfaceEyebrow(surface)).toBe("ACCOUNT SECURITY");
     }
     for (const surface of EMAIL_CHANGE) {
       expect(isAccountEmailChangeSurface(surface)).toBe(true);
       expect(accountSurfaceTitle(surface)).toBe("修改邮箱");
-      expect(accountSurfaceEyebrow(surface)).toBe("ACCOUNT SECURITY");
     }
-    expect(accountSurfaceEyebrow("password-change")).toBe("ACCOUNT SECURITY");
-    expect(accountSurfaceEyebrow("invite")).toBe("INVITATION");
-    expect(accountSurfaceEyebrow("edit")).toBe("ATLAS DETAILS");
   });
 
   it("gives every link outcome its own sentence and never names the route", () => {
