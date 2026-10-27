@@ -50,7 +50,6 @@
 .auth-link { min-height: 44px; }
 
 .living-atlas__brand { gap: 20px; }
-.living-atlas__brand > div > p { color: var(--startrips-muted); letter-spacing: 0.14em; }
 .living-atlas__brand > div > h1 { color: var(--startrips-starlight); font-size: 13px; letter-spacing: 0.04em; }
 .living-atlas__empty { border-left-color: var(--startrips-line); }
 .living-atlas__empty > p:first-child { color: var(--startrips-muted); }

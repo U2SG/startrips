@@ -468,10 +468,7 @@ export function ProposalCard({
       ) : null}
 
       {card.kind === "create-journey" ? (
-        <>
-          <blockquote className="command-card__quote">{card.sentence}</blockquote>
-          <p className="command-card__meta">确认后打开「记录旅程」，先读出地点和日期给你核对，确认后才加入路线。</p>
-        </>
+        <blockquote className="command-card__quote">{card.sentence}</blockquote>
       ) : null}
 
       {card.kind === "navigate" ? (
