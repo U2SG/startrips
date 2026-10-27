@@ -1460,7 +1460,6 @@ export function JourneyPlaybackOverlay({
               <StartripsWordmark size={42} intro />
             </div>
             <div className="journey-playback__intro">
-              <p>{playbackMode === "quick-recap" ? "QUICK RECAP" : "JOURNEY PLAYBACK"}</p>
               <h2>{journey.title}</h2>
               <span>{journey.startedOn}{journey.endedOn ? ` — ${journey.endedOn}` : ""}</span>
             </div>
@@ -1714,7 +1713,6 @@ export function JourneyPlaybackOverlay({
                     <span>Route Point</span>
                     <strong>{point?.label || (entry.routePointId ? `Route Point ${chapterIndex + 1}` : "旅程开场")}</strong>
                   </header>
-                  <p>Route Point Media · 使用 {entry.included.length} · 省略 {entry.omitted.length}</p>
                   <ul>
                     {entry.included.map((item) => {
                       const asset = quickRecapSourceJourney?.media.find((candidate) => candidate.id === item.assetId);

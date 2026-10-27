@@ -8911,13 +8911,6 @@ body:has(.journey-share) .account-dock {
   padding-bottom: 14px;
 }
 
-.journey-share__heading p {
-  margin: 0 0 6px;
-  color: rgba(111, 226, 207, 0.62);
-  font: 600 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.15em;
-}
-
 .journey-share__heading h2 {
   margin: 0;
   font: 500 23px/1.15 var(--archive-serif);

@@ -136,7 +136,7 @@ export function JourneyFilmExportDialog({ journeyId, title, exporter, onClose }:
     data-focus-trap-exempt onCancel={(event) => { event.preventDefault(); event.stopPropagation(); onClose(); }}
     onClick={(event) => { event.stopPropagation(); if (event.target === event.currentTarget) onClose(); }}>
     <div className="journey-film-export__body">
-      <header><div><p>JOURNEY FILM</p><h2 id="journey-film-export-title">导出旅程短片</h2></div>
+      <header><div><h2 id="journey-film-export-title">导出旅程短片</h2></div>
         <button type="button" onClick={onClose} aria-label="关闭短片导出">关闭</button></header>
       <p className="journey-film-export__title">{title}</p>
       <p>在此设备生成 1080p、30 FPS 的 MP4，不上传成片。默认加入旅程中已设置的配乐；没有配乐时成片为静音。包含原片、短视频片段和路线示意，不是道路导航或地球实录。</p>
@@ -154,7 +154,7 @@ export function JourneyFilmExportDialog({ journeyId, title, exporter, onClose }:
         <label className="journey-film-export__check"><input type="checkbox" checked={includeNotes} onChange={(e) => { setNotes(e.target.checked); clearArtifact(); }} />包含途径点感想字幕</label>
         <label className="journey-film-export__check"><input type="checkbox" checked={includeCover} onChange={(e) => { setCover(e.target.checked); clearArtifact(); }} />使用已生成的艺术封面（没有则使用原图）</label>
       </fieldset>
-      <p className="journey-film-export__hint">保留全部场景和字幕，生成一部完整视频，实际时长可超过目标和两分钟。配乐从开头循环至片尾，不混入素材视频原声。短视频取开头片段，较短的片段停留在末帧。使用设备临时存储；成片及待清理文件合计最多 512 MiB、8 份，且预留一半可用空间；浏览器不支持时内存导出最多 96 MiB。导出期间请保持页面打开。</p>
+      <p className="journey-film-export__hint">保留全部场景和字幕，生成一部完整视频，实际时长可超过目标和两分钟。配乐从开头循环至片尾，不混入素材视频原声。短视频取开头片段，较短的片段停留在末帧。导出期间请保持页面打开。</p>
       {plan ? <p role="status">完整视频预计 {Math.ceil(plan.durationMs / 1000)} 秒，文件约 {Math.ceil(plan.estimatedOutputBytes / 1024 / 1024)} MiB（大小为估算）。{plan.soundtrackIncluded ? "包含旅程配乐。" : "未设置或已关闭配乐。"}</p> : null}
       {retained.count > 0 ? <div><p>设备保留了 {retained.count} 份导出临时文件，约 {Math.ceil(retained.bytes / 1024 / 1024)} MiB。请确认所有下载均已完成后再清理。</p><button type="button" disabled={busy} onClick={() => void clearSavedDownloads()}>所有下载已完成，清理临时文件</button></div> : null}
       {busy ? <div role="status" aria-live="polite"><p>{progressText}</p>
