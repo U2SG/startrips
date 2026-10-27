@@ -86,13 +86,14 @@ jobs:
     timeout-minutes: 5
     outputs:
       ledger_only_final: ${{ steps.final-plan.outputs.ledger_only_final }}
+      soc_client_only: ${{ steps.final-plan.outputs.soc_client_only }}
       source_sha: ${{ steps.final-plan.outputs.source_sha }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Classify ledger-only final before provisioning test environments
+      - name: Classify ledger-only final and soc-client-only before provisioning test environments
         id: final-plan
         env:
           CLASSIFY_ONLY: '1'
@@ -122,7 +123,7 @@ jobs:
   core:
     name: core
     needs: quick-checks
-    if: needs.quick-checks.outputs.ledger_only_final != 'true'
+    if: needs.quick-checks.outputs.ledger_only_final != 'true' && needs.quick-checks.outputs.soc_client_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -182,7 +183,7 @@ jobs:
   keepsake-render:
     name: keepsake-render
     needs: quick-checks
-    if: needs.quick-checks.outputs.ledger_only_final != 'true'
+    if: needs.quick-checks.outputs.ledger_only_final != 'true' && needs.quick-checks.outputs.soc_client_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -264,7 +265,7 @@ jobs:
   browser-qa:
     name: browser-qa / ${{ matrix.name }}
     needs: quick-checks
-    if: needs.quick-checks.outputs.ledger_only_final != 'true'
+    if: needs.quick-checks.outputs.ledger_only_final != 'true' && needs.quick-checks.outputs.soc_client_only != 'true'
     runs-on: ubuntu-24.04
     env:
       QA_PLAYWRIGHT_VERSION: '1.55.0'
@@ -549,7 +550,8 @@ jobs:
   verify:
     name: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    # Soc-client-only PRs wait here for soc.yml (android is capped at 45 minutes).
+    timeout-minutes: 60
     if: ${{ always() }}
     permissions:
       contents: read
@@ -565,7 +567,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Prove reusable Source CI when this is a ledger-only final
+      - name: Re-classify soc-client-only and prove reusable Source CI for a ledger-only final
         id: source-proof
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -583,6 +585,8 @@ jobs:
           KEEPSAKE_RENDER_RESULT: ${{ needs.keepsake-render.result }}
           CLASSIFIED_LEDGER_ONLY: ${{ needs.quick-checks.outputs.ledger_only_final }}
           PROVEN_LEDGER_ONLY: ${{ steps.source-proof.outputs.ledger_only_final }}
+          CLASSIFIED_SOC_ONLY: ${{ needs.quick-checks.outputs.soc_client_only }}
+          PROVEN_SOC_ONLY: ${{ steps.source-proof.outputs.soc_client_only }}
           SOURCE_PROOF_OUTCOME: ${{ steps.source-proof.outcome }}
         run: node scripts/ci-validation-results.mjs
 
