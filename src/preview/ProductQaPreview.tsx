@@ -363,7 +363,7 @@ export function LivingAtlasGlobeChromeQa(props: LivingAtlasGlobeProps) {
 
 function LivingAtlasQaPreview() {
   // #253: the globe-focus chrome lane needs the real `LivingAtlasGlobe`, since
-  // `.living-atlas-globe__controls` and the transient gesture hint live there.
+  // `.living-atlas-globe__controls` and the vector-map status note live there.
   // #291's dedicated lane adds qaRoutePointContext=1 and intentionally keeps
   // the deterministic QA globe unless a real-pointer round explicitly asks for
   // the production scene. That round must also claim the persistent Earth stage:

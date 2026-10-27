@@ -3098,12 +3098,12 @@ try {
   const reorderedContext = reorderedPage.locator("[data-route-point-context]");
   await reorderedContext.waitFor({ state: "visible", timeout: 5_000 });
   const reorderedState = await reorderedContext.evaluate((node) => ({
-    text: node.textContent ?? "",
+    position: node.querySelector(":scope > header > p")?.textContent?.trim() ?? "",
     switches: [...node.querySelectorAll("[data-route-point-context-switch]")].map((button) => button.getAttribute("data-route-point-context-switch")),
     order: node.querySelector("[data-route-point-context-order]")?.textContent ?? "",
   }));
   record("reordered payload recomputes same-coordinate record order and neighbours", { reorderedState },
-    reorderedState.text.includes("ROUTE POINT · 02/08")
+    reorderedState.position === "02/08"
     && reorderedState.switches.join(",") === `${same07Id},${same02Id}`
     && reorderedState.order.includes("上一段 · 入口")
     && reorderedState.order.includes("下一段 · 码头 · 清晨"));

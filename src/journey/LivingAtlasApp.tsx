@@ -4674,7 +4674,7 @@ export function LivingAtlasApp({
             aria-live="polite"
           >
             <header>
-              <p>ROUTE POINT · {String(context.routePointIndex + 1).padStart(2, "0")}/{String(context.routePointCount).padStart(2, "0")}</p>
+              <p>{String(context.routePointIndex + 1).padStart(2, "0")}/{String(context.routePointCount).padStart(2, "0")}</p>
               <h2>{context.routePointLabel}</h2>
               <span>{context.journeyTitle}</span>
               <button
@@ -4865,7 +4865,6 @@ export function LivingAtlasApp({
           >
             <header>
               <div>
-                <p>TRANSIENT READING · ROUTE POINT {String(crossPointReading.target.routePointIndex + 1).padStart(2, "0")}</p>
                 <h2 id="cross-point-reading-title">{crossPointReading.target.routePointLabel}</h2>
                 <span>{crossPointReading.target.journeyTitle}</span>
               </div>
@@ -4878,12 +4877,8 @@ export function LivingAtlasApp({
                 <IconX size={16} stroke={1.35} aria-hidden="true" />
               </button>
             </header>
-            <p className="living-atlas__cross-point-reading-provenance">
-              从 {crossPointReading.source.routePointLabel} 临时阅读 · 未改变当前观察
-            </p>
             <blockquote>{crossPointReading.target.note}</blockquote>
             <footer>
-              <span>关闭后返回 · {crossPointReading.source.routePointLabel}</span>
               <button
                 type="button"
                 data-cross-point-reading-escalate

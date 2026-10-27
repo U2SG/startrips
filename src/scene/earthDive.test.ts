@@ -512,8 +512,8 @@ describe("earth dive ownership", () => {
     });
 
     it("cannot re-arm while it holds, however deep the zoom authority reads", () => {
-      // The gesture hint the mode shows says SCROLL TO ZOOM, so a suspended
-      // mode is precisely the state in which deep zoom readings arrive.
+      // Focus mode still lets the user wheel-zoom the particle globe, so a
+      // suspended mode is precisely the state in which deep zoom readings arrive.
       const frames = [0.5, 0.9, 1, 1, 1].map((localProgress) => ({
         level: "local" as GlobeSemanticZoom,
         localProgress,
