@@ -4388,7 +4388,7 @@ export function LivingAtlasApp({
       {isMobileV2 && mobilePickerOpen ? (
         <section ref={mobilePickerDialogRef} tabIndex={-1} className="mobile-v2__picker" role="dialog" aria-modal="true" aria-labelledby="mobile-v2-picker-title">
           <header>
-            <div><p>YOUR JOURNEYS</p><h2 id="mobile-v2-picker-title">全部旅程</h2></div>
+            <h2 id="mobile-v2-picker-title">全部旅程</h2>
             <button type="button" onClick={() => setMobilePickerOpen(false)} aria-label="关闭全部旅程"><IconX size={19} stroke={1.4} aria-hidden="true" /></button>
           </header>
           <ol>
@@ -4459,7 +4459,6 @@ export function LivingAtlasApp({
               }}
             ><span aria-hidden="true" /></button>
             <header className="mobile-v2__more-heading">
-              <p>MORE</p>
               <h2 id="mobile-v2-more-title">更多操作</h2>
             </header>
             <div className="mobile-v2__more-actions">
@@ -4478,7 +4477,6 @@ export function LivingAtlasApp({
                       >
                         <IconTimeline size={20} stroke={1.35} aria-hidden="true" />
                         <span>全部旅程</span>
-                        <small>按时间浏览全部 {journeys.length} 段旅程</small>
                       </button>
                     );
                   case "everyday":
@@ -4498,7 +4496,6 @@ export function LivingAtlasApp({
                       >
                         <IconPhoto size={20} stroke={1.35} aria-hidden="true" />
                         <span>日常</span>
-                        <small>{atlasEverydayMode !== null ? "收起日常片段" : "查看或记录日常片段"}</small>
                       </button>
                     );
                   case "import":
@@ -4514,7 +4511,7 @@ export function LivingAtlasApp({
                       >
                         <IconUpload size={20} stroke={1.35} aria-hidden="true" />
                         <span>{importStatus.busy ? "查看正在处理的行程导入" : "导入已有行程"}</span>
-                        <small>{importStatus.busy ? "处理中，可随时回来继续" : "自动整理成可编辑的路线"}</small>
+                        {importStatus.busy ? <small>处理中，可随时回来继续</small> : null}
                       </button>
                     );
                   case "share":
@@ -4532,7 +4529,6 @@ export function LivingAtlasApp({
                       >
                         <IconShare size={20} stroke={1.35} aria-hidden="true" />
                         <span>分享多段旅程</span>
-                        <small>选择旅程，生成只读链接</small>
                       </button>
                     );
                 }
