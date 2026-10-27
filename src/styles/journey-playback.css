@@ -167,13 +167,6 @@
   gap: 12px;
 }
 
-.journey-playback__selection-summary header span {
-  color: var(--atlas-muted);
-  font: 500 8px/1.4 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
 .journey-playback__selection-summary header strong {
   overflow: hidden;
   font: 500 12px/1.4 var(--archive-sans);

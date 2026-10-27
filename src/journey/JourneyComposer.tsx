@@ -1996,7 +1996,7 @@ export function JourneyComposer({
                   <section className="journey-location-result-group" data-qa-composer-external-results aria-label="外部地点">
                     <div className="journey-location-result-group__heading">
                       <strong>外部地点</strong>
-                      <small>添加为新的 Route Point</small>
+                      <small>添加为新的路线点</small>
                     </div>
                     <ul className="journey-location-results">
                       {searchResults.map((result) => (

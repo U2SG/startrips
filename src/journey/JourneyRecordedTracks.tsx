@@ -270,7 +270,7 @@ export function JourneyRecordedTracks({
           setConfirmWithdrawal(null);
           setTracks((current) => current.filter((track) => track.operationKey !== operationKey));
           onTracksChanged?.();
-          setMessage("这份记录轨迹已撤回；Route Point 和媒体没有被修改。 ");
+          setMessage("这份记录轨迹已撤回；路线点和媒体没有被修改。 ");
         },
       );
     } catch (error) {
@@ -286,7 +286,7 @@ export function JourneyRecordedTracks({
     <section className="journey-recorded-tracks" aria-labelledby="journey-recorded-tracks-title">
       <div className="journey-recorded-tracks__heading">
         <h4 id="journey-recorded-tracks-title">记录轨迹</h4>
-        <p>导入你已有的 GPX 记录。它只作为这段 Journey 的私密记录，不会自动生成 Route Point。</p>
+        <p>导入你已有的 GPX 记录。它只作为这段旅程的私密记录，不会自动生成路线点。</p>
       </div>
 
       <div className="journey-recorded-tracks__import">
@@ -336,7 +336,7 @@ export function JourneyRecordedTracks({
                 </div>
                 {confirmWithdrawal === track.operationKey ? (
                   <div className="journey-recorded-tracks__confirm" role="alertdialog" aria-label={`确认撤回记录 ${index + 1}`}>
-                    <p>只撤回这份记录轨迹；不会删除 Route Point、照片或视频。</p>
+                    <p>只撤回这份记录轨迹；不会删除路线点、照片或视频。</p>
                     <div>
                       <button
                         ref={confirmCancelRef}

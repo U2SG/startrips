@@ -16,7 +16,7 @@ describe("JourneyRecordedTracks", () => {
     expect(markup).toContain("记录轨迹");
     expect(markup).toContain('type="file"');
     expect(markup).toContain("导入这份 GPX");
-    expect(markup).toContain("不会自动生成 Route Point");
+    expect(markup).toContain("不会自动生成路线点");
     expect(markup).not.toMatch(/latitude|longitude|operationKey/);
   });
 
