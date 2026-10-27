@@ -7,8 +7,7 @@
 .journey-film-export::backdrop { background: rgba(5, 10, 16, .76); }
 .journey-film-export__body { padding: clamp(18px, 4vw, 28px); }
 .journey-film-export header { display: flex; justify-content: space-between; align-items: start; gap: 20px; }
-.journey-film-export header p { letter-spacing: .16em; font-size: .7rem; color: #d8bf91; }
-.journey-film-export h2 { margin: 6px 0 16px; font-size: 1.3rem; font-weight: 500; }
+.journey-film-export h2 { margin: 0 0 16px; font-size: 1.3rem; font-weight: 500; }
 .journey-film-export p { line-height: 1.7; font-size: .875rem; }
 .journey-film-export__title { overflow-wrap: anywhere; font-weight: 600; }
 .journey-film-export fieldset { border: 0; margin: 24px 0; padding: 0; }

@@ -397,7 +397,6 @@ export function JourneyShareDialog({
       >
         <header className="journey-share__heading">
           <div>
-            <p>SHARE JOURNEYS</p>
             <h2 id="journey-share-title">
               {lockedJourney ? `分享「${lockedJourney.title}」` : "分享多段旅程"}
             </h2>
