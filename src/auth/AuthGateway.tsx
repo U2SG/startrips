@@ -18,7 +18,6 @@ import { useModalFocus } from "../journey/useModalFocus";
 import { usePersistentEarth } from "../scene/LivingAtlasGlobe";
 import { AtlasViewProvider, createOwnerAtlasView } from "../journey/atlasView";
 import {
-  accountSurfaceEyebrow,
   accountSurfaceFromLocationSearch,
   accountSurfaceTitle,
   isAccountEmailChangeSurface,
@@ -1496,15 +1495,15 @@ function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, on
           <div id="account-dock-panel" className="account-dock__panel">
             <header className="account-sheet__identity">
               <IconUserCircle size={24} stroke={1.2} aria-hidden="true" />
-              <div><p>PRIVATE ATLAS</p><h2>{gate.atlas.title}</h2><span>{userName}</span></div>
+              <div><h2>{gate.atlas.title}</h2><span>{userName}</span></div>
             </header>
             {message ? <p className="account-sheet__message" role="status">{message}</p> : null}
             <div className="account-dock__actions">
-              {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setPasswordOpen(false); setEmailChangeOpen(false); setIdentityOpen(false); setInviteOpen((value) => !value); }}><span>邀请另一位</span><small>发送私人图谱邀请</small></button> : null}
-              <button type="button" onClick={() => { setInviteOpen(false); setPasswordOpen(false); setEmailChangeOpen(false); setIdentityOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}><span>编辑图谱</span><small>修改名称与题词</small></button>
-              <button type="button" onClick={() => { if (passwordOpen) { setPasswordOpen(false); setMessage(""); return; } void openAccountPassword(); }}><span>账户密码</span><small>修改或设置登录密码</small></button>
-              <button type="button" onClick={() => { if (emailChangeOpen) { setEmailChangeOpen(false); setMessage(""); return; } openAccountEmailChange(); }}><span>修改邮箱</span><small>查看、发起或取消邮箱换绑</small></button>
-              <button type="button" onClick={() => { setInviteOpen(false); setEditAtlasOpen(false); setPasswordOpen(false); setEmailChangeOpen(false); setMessage(""); setIdentityOpen((value) => !value); }}><span>登录方式</span><small>绑定或解绑第三方登录</small></button>
+              {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setPasswordOpen(false); setEmailChangeOpen(false); setIdentityOpen(false); setInviteOpen((value) => !value); }}><span>邀请另一位</span></button> : null}
+              <button type="button" onClick={() => { setInviteOpen(false); setPasswordOpen(false); setEmailChangeOpen(false); setIdentityOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}><span>编辑图谱</span></button>
+              <button type="button" onClick={() => { if (passwordOpen) { setPasswordOpen(false); setMessage(""); return; } void openAccountPassword(); }}><span>账户密码</span></button>
+              <button type="button" onClick={() => { if (emailChangeOpen) { setEmailChangeOpen(false); setMessage(""); return; } openAccountEmailChange(); }}><span>修改邮箱</span></button>
+              <button type="button" onClick={() => { setInviteOpen(false); setEditAtlasOpen(false); setPasswordOpen(false); setEmailChangeOpen(false); setMessage(""); setIdentityOpen((value) => !value); }}><span>登录方式</span></button>
               <EarthExperienceMenuEntry
                 surface="dock"
                 policy={earthExperience.policy}
@@ -1544,15 +1543,15 @@ function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, on
               <>
                 <header className="account-sheet__identity">
                   <IconUserCircle size={24} stroke={1.2} aria-hidden="true" />
-                  <div><p>PRIVATE ATLAS</p><h2 id="account-sheet-title">{gate.atlas.title}</h2><span>{userName}</span></div>
+                  <div><h2 id="account-sheet-title">{gate.atlas.title}</h2><span>{userName}</span></div>
                 </header>
                 {message ? <p className="account-sheet__message" role="status">{message}</p> : null}
                 <div className="account-sheet__actions">
-                  {isOwner ? <button type="button" onClick={() => { setMessage(""); setAccountSurface("invite"); }}><span>邀请另一位</span><small>发送私人图谱邀请</small></button> : null}
-                  <button type="button" onClick={openMobileEdit}><span>编辑图谱</span><small>修改名称与题词</small></button>
-                  <button type="button" onClick={() => void openAccountPassword()}><span>账户密码</span><small>修改或设置登录密码</small></button>
-                  <button type="button" onClick={openAccountEmailChange}><span>修改邮箱</span><small>查看、发起或取消邮箱换绑</small></button>
-                  <button type="button" onClick={() => { setMessage(""); setAccountSurface("identity-links"); }}><span>登录方式</span><small>绑定或解绑第三方登录</small></button>
+                  {isOwner ? <button type="button" onClick={() => { setMessage(""); setAccountSurface("invite"); }}><span>邀请另一位</span></button> : null}
+                  <button type="button" onClick={openMobileEdit}><span>编辑图谱</span></button>
+                  <button type="button" onClick={() => void openAccountPassword()}><span>账户密码</span></button>
+                  <button type="button" onClick={openAccountEmailChange}><span>修改邮箱</span></button>
+                  <button type="button" onClick={() => { setMessage(""); setAccountSurface("identity-links"); }}><span>登录方式</span></button>
                   <EarthExperienceMenuEntry
                     surface="sheet"
                     policy={earthExperience.policy}
@@ -1562,14 +1561,14 @@ function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, on
                   <MediaPresentationMenuEntry surface="sheet" onConfirmed={() => setAccountSurface(null)} />
                   <MobileClassicViewMenuEntry surface="sheet" />
                   <button type="button" onClick={() => window.location.assign("/soc/")}><span>学习</span></button>
-                  <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}><span>退出</span><small>退出当前账户</small></button>
+                  <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}><span>退出</span></button>
                 </div>
               </>
             ) : (
               <>
                 <header className="account-sheet__drill-header">
                   <button type="button" onClick={() => { setEmailChangeOpen(false); setAccountSurface("menu"); }} aria-label="返回账户菜单">‹</button>
-                  <div><p>{accountSurfaceEyebrow(accountSurface)}</p><h2 id="account-sheet-title">{accountSurfaceTitle(accountSurface)}</h2></div>
+                  <h2 id="account-sheet-title">{accountSurfaceTitle(accountSurface)}</h2>
                 </header>
                 {message ? <p className="account-sheet__message" role="alert">{message}</p> : null}
                 {accountSurface === "identity-links" ? (

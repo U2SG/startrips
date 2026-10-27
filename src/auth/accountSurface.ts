@@ -133,11 +133,6 @@ export function accountSurfaceFromLocationSearch(search: string): AccountSurface
   return value === "link-expired" ? "password-link-expired" : null;
 }
 
-export function accountSurfaceEyebrow(surface: AccountSurface): string {
-  if (isAccountPasswordSurface(surface) || isAccountEmailChangeSurface(surface) || surface === "identity-links") return "ACCOUNT SECURITY";
-  return surface === "invite" ? "INVITATION" : "ATLAS DETAILS";
-}
-
 export function accountSurfaceTitle(surface: AccountSurface): string {
   if (surface === "identity-links") return "登录方式";
   if (surface === "password-change") return "修改密码";
