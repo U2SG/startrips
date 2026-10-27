@@ -128,7 +128,7 @@ function quickRecapSelectionReasonLabel(reason: AutoEditSelectionReason) {
     case "all-media": return "完整媒体顺序";
     case "journey-cover": return "旅程封面";
     case "user-pinned": return "手动保留";
-    case "route-point-representative": return "Route Point 代表媒体";
+    case "route-point-representative": return "路线点代表媒体";
     case "visual-diversity": return "补充画面差异";
     case "duplicate-cluster-representative": return "相似画面的代表";
     case "video-highlight": return "代表视频片段";
@@ -1710,8 +1710,7 @@ export function JourneyPlaybackOverlay({
               return (
                 <section key={`${entry.routePointId ?? "journey"}:${chapterIndex}`}>
                   <header>
-                    <span>Route Point</span>
-                    <strong>{point?.label || (entry.routePointId ? `Route Point ${chapterIndex + 1}` : "旅程开场")}</strong>
+                    <strong>{point?.label || (entry.routePointId ? `路线点 ${chapterIndex + 1}` : "旅程开场")}</strong>
                   </header>
                   <ul>
                     {entry.included.map((item) => {
