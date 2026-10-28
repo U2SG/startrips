@@ -29,7 +29,7 @@ export type GoatShowState = {
 export type GoatShowAttrs = Record<string, string>;
 
 // The ending: after the leap home it turns round with a small hop (TURN_C crouch, TURN_S settled).
-const TURN_C = 8760, TURN_S = TURN_C + 420;
+const TURN_C = 8930, TURN_S = TURN_C + 420;
 export const DUR = TURN_S + 480;
 
 type Engine = {
@@ -484,10 +484,10 @@ function createGoatShow(): Engine {
   // 8.42 home, still facing the way it came: a beat, a glance back over its shoulder, then a small calm turn
   const cRest = track([[8420, 0], [8520, 1], [TURN_C, .5]]);
   body(8420, TURN_C, live(HOME_R, cRest, () => 0, -1));
-  key("neck", 8570, 13); key("neck", 8650, 14); key("neck", TURN_C - 50, 0);
-  key("head", 8570, 17); key("head", 8650, 18); key("head", TURN_C - 50, 0);
-  key("ears", 8540, -10); key("ears", 8660, 3); key("ears", TURN_C - 50, 0);
-  key("tail", 8540, 6); key("tail", 8680, -4); key("tail", TURN_C - 50, 0);
+  key("neck", 8600, 0); key("neck", 8700, 13); key("neck", 8770, 14); key("neck", TURN_C - 30, 0);
+  key("head", 8600, 0); key("head", 8700, 17); key("head", 8770, 18); key("head", TURN_C - 30, 0);
+  key("ears", 8600, 0); key("ears", 8690, -10); key("ears", 8800, 3); key("ears", TURN_C - 30, 0);
+  key("tail", 8600, 0); key("tail", 8690, 6); key("tail", 8810, -4); key("tail", TURN_C - 30, 0);
   hopTurn({ from: HOME_R, to: HOME_L, f0: -1, f1: 1, c0: .5, tC: TURN_C, tL: TURN_C + 100, tD: TURN_C + 300, tS: TURN_S,
     h: 9, crouch: 3.5, absorb: 3.5 });
   const cEnd = track([[TURN_S, 0], [TURN_S + 80, 1.5], [TURN_S + 330, 0]]);
