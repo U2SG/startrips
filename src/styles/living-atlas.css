@@ -910,6 +910,29 @@ button.living-atlas-globe__pick {
   scrollbar-color: rgba(122, 244, 237, 0.28) transparent;
 }
 
+/* A long rail fades out at its foot while rows remain below, and the fade
+   lifts at the end of the scroll. The scroll timeline is inactive when the
+   list does not overflow, so a short rail is never masked. */
+@property --journey-rail-fade {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@keyframes journey-rail-fade {
+  from,
+  92% { --journey-rail-fade: 36px; }
+  to { --journey-rail-fade: 0px; }
+}
+
+@supports (animation-timeline: scroll()) {
+  .living-atlas__journey-rail ol {
+    mask-image: linear-gradient(to bottom, #000 calc(100% - var(--journey-rail-fade)), transparent);
+    animation: journey-rail-fade linear both;
+    animation-timeline: scroll(self block);
+  }
+}
+
 .living-atlas__journey-rail button {
   --journey-color: var(--atlas-warm);
   width: 100%;
@@ -6899,6 +6922,8 @@ button.living-atlas__globe-focus-exit {
     overflow-y: hidden;
     padding-bottom: 4px;
     scroll-snap-type: x proximity;
+    mask-image: none;
+    animation: none;
   }
 
   .living-atlas__journey-rail li {
