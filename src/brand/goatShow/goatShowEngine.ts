@@ -1,8 +1,10 @@
 // Startrips goat show: pure timeline engine (no DOM).
 //
-// A faithful TypeScript port of the approved prototype engine
-// (docs/plans/goat-proto/goat-show-engine.js). Behaviour is numerically
-// identical; goatShowEngine.test.ts pins it to the prototype's golden frames.
+// A TypeScript port of the approved prototype engine
+// (docs/plans/goat-proto/goat-show-engine.js). Up to the final leap it is
+// numerically identical to the prototype; the product then changes the ending
+// so the goat lands first and turns round on the ground. goatShowEngine.test.ts
+// pins both parts to golden frames.
 // The choreography is built once, on first use, so importing the header does
 // not pay for it at boot.
 import { GOAT_SHOW_ART as DATA, type GoatShowLegKey } from "./goatShowArt";
@@ -26,7 +28,9 @@ export type GoatShowState = {
 };
 export type GoatShowAttrs = Record<string, string>;
 
-export const DUR = 8900;
+// The ending: after the leap home it turns round with a small hop (TURN_C crouch, TURN_S settled).
+const TURN_C = 8930, TURN_S = TURN_C + 420;
+export const DUR = TURN_S + 480;
 
 type Engine = {
   frame: (t: number) => GoatShowState;
@@ -263,7 +267,7 @@ function createGoatShow(): Engine {
   }
 
   // The drawn legs are almost straight at rest, so the goat stands a touch lower while it performs.
-  const BASEC = track([[0, 0], [300, 2.5], [8400, 2.5], [8850, 0]]);
+  const BASEC = track([[0, 0], [300, 2.5], [8400, 2.5], [TURN_S - 20, 2.5], [TURN_S + 430, 0]]);
   function live(S: Stance, cT: (t: number) => number, poT: (t: number) => number, f: number, follow?: number): BodyFn {
     return (t) => stancePose(anchorsWorld(S, t), cT(t) + BASEC(t), poT(t), f, follow);
   }
@@ -403,6 +407,7 @@ function createGoatShow(): Engine {
 
   // ---------- footholds ----------
   const HOME_L: Stance = { fn: onGround(693.2), ff: onGround(703.2), hn: onGround(746.2), hf: onGround(736.2) };
+  const HOME_R: Stance = { fn: onGround(746.2), ff: onGround(736.2), hf: onGround(703.2), hn: onGround(693.2) };
   const ON_PS: Stance = { fn: onTop(502), ff: onTop(510), hf: onTop(556), hn: onTop(565) };
   const ON_TOP: Stance = { fn: onFace(-36), ff: onFace(-42), hf: onFace(-56), hn: onFace(-62) };
   LEG_KEYS.forEach((k) => { plant(k, HOME_L[k], 0); });
@@ -465,7 +470,7 @@ function createGoatShow(): Engine {
   key("tail", 4600, -8); key("tail", 5000, 4); key("tail", 5300, 0); key("tail", 5850, -14); key("tail", 6100, 6); key("tail", 6300, 0);
   key("tail", 6560, -14); key("tail", 6680, 4);
 
-  // 6.70 turn for home, trot down the tops to the s, and a twisting leap back into the lockup
+  // 6.70 turn for home, trot down the tops to the s, and leap back down beside the lockup
   hopTurn({ from: ON_P_L, to: ON_P_R, f0: 1, f1: -1, tC: 6700, tL: 6820, tD: 7040, tS: 7160, h: 12, crouch: 4, absorb: 4 });
   const tr2 = trot({ from: ON_P_R, face: -1, t0: 7160, t1: 7760, s0: 454, s1: 545, T: 220, duty: .58, lift: 6, low: 5.5,
     phase: { fn: 0, hf: .04, ff: .55, hn: .59 } });
@@ -473,13 +478,23 @@ function createGoatShow(): Engine {
     const odd2 = ((nt2 - 7240) / 110) % 2;
     key("neck", nt2, odd2 ? -2 : -6); key("head", nt2, odd2 ? -1 : -4); key("ears", nt2, odd2 ? 3 : -3); key("tail", nt2, odd2 ? -6 : 2);
   }
-  hop({ from: tr2.anchors, pre: tr2.pose, to: HOME_L, face: -1, faceTo: 1, c0: 5.5, tC: 7760, tLF: 7830, tLH: 7890,
+  hop({ from: tr2.anchors, pre: tr2.pose, to: HOME_R, face: -1, c0: 5.5, tC: 7760, tLF: 7830, tLH: 7890,
     tDF: 8190, tDH: 8250, tS: 8420, h: 18, crouch: 5, rear: 8, dive: -5, absorb: 5 });
-  const cEnd = track([[8420, 0], [8500, 1.5], [8750, 0]]);
-  body(8420, 1e9, live(HOME_L, cEnd, () => 0, 1));
-  key("neck", 8520, 3); key("neck", 8900, 0); key("head", 8520, 2); key("head", 8900, 0);
-  key("ears", 8480, -8); key("ears", 8680, 4); key("ears", 8900, 0);
-  key("tail", 8480, -16); key("tail", 8620, 8); key("tail", 8760, -4); key("tail", 8900, 0);
+
+  // 8.42 home, still facing the way it came: a beat, a glance back over its shoulder, then a small calm turn
+  const cRest = track([[8420, 0], [8520, 1], [TURN_C, .5]]);
+  body(8420, TURN_C, live(HOME_R, cRest, () => 0, -1));
+  key("neck", 8600, 0); key("neck", 8700, 13); key("neck", 8770, 14); key("neck", TURN_C - 30, 0);
+  key("head", 8600, 0); key("head", 8700, 17); key("head", 8770, 18); key("head", TURN_C - 30, 0);
+  key("ears", 8600, 0); key("ears", 8690, -10); key("ears", 8800, 3); key("ears", TURN_C - 30, 0);
+  key("tail", 8600, 0); key("tail", 8690, 6); key("tail", 8810, -4); key("tail", TURN_C - 30, 0);
+  hopTurn({ from: HOME_R, to: HOME_L, f0: -1, f1: 1, c0: .5, tC: TURN_C, tL: TURN_C + 100, tD: TURN_C + 300, tS: TURN_S,
+    h: 9, crouch: 3.5, absorb: 3.5 });
+  const cEnd = track([[TURN_S, 0], [TURN_S + 80, 1.5], [TURN_S + 330, 0]]);
+  body(TURN_S, 1e9, live(HOME_L, cEnd, () => 0, 1));
+  key("neck", TURN_S + 100, 3); key("neck", DUR, 0); key("head", TURN_S + 100, 2); key("head", DUR, 0);
+  key("ears", TURN_S + 60, -8); key("ears", TURN_S + 260, 4); key("ears", DUR, 0);
+  key("tail", TURN_S + 60, -16); key("tail", TURN_S + 200, 8); key("tail", TURN_S + 340, -4); key("tail", DUR, 0);
 
   const NECK = track(KEYS.neck), HEAD = track(KEYS.head), EARS = track(KEYS.ears), TAIL = track(KEYS.tail);
 

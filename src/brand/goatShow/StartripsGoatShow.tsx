@@ -19,7 +19,7 @@ function applyFrame(parts: Map<string, Element>, state: GoatShowState) {
 /**
  * The goat show that plays when the Atlas wordmark is clicked: the goat leaps
  * onto "trips", tips it into a column, boops the star into a halo, rides the
- * column back down and leaps home into the lockup. Decorative only.
+ * column back down, leaps home and turns round into the lockup. Decorative only.
  *
  * It sits exactly over the static wordmark (same baseline and scale) and
  * deliberately draws above and beyond it. It runs on the shared signature
