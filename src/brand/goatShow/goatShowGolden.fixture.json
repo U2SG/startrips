@@ -1,5 +1,5 @@
 {
- "durationMs": 8900,
+ "durationMs": 9660,
  "frames": [
   {
    "t": 0,
@@ -852,59 +852,9 @@
    }
   },
   {
-   "t": 7900,
-   "attrs": {
-    "root": "translate(548.422 -75.454) rotate(-12.144) scale(-1 1) translate(-719.7 0)",
-    "tail": "rotate(-15.99 750 -56)",
-    "neck": "rotate(-0.049 703 -56)",
-    "head": "rotate(-0.717 686 -86)",
-    "ear-far": "rotate(10.267 692 -86)",
-    "ear-near": "rotate(10.267 692 -86)",
-    "fn-hip": "rotate(21.7 700 -57.5)",
-    "fn-knee": "rotate(44.925 697.5614 -35.412)",
-    "fn-fet": "rotate(-97.637 692.982 -12.65)",
-    "ff-hip": "rotate(24.467 700 -57.5)",
-    "ff-knee": "rotate(33.66 702.6998 -35.4)",
-    "ff-fet": "rotate(-78.843 702.982 -12.65)",
-    "hn-hip": "rotate(-10.235 740.3 -54.5)",
-    "hn-knee": "rotate(30.294 746.4008 -34.3788)",
-    "hn-fet": "rotate(-56.425 745.482 -13.15)",
-    "hf-hip": "rotate(-18.287 740.3 -55.5)",
-    "hf-knee": "rotate(25.714 741.2185 -34.3775)",
-    "hf-fet": "rotate(-44.572 735.482 -13.15)",
-    "star": "translate(417.408 -105.264) rotate(720) scale(1)",
-    "trips": "translate(0 0) rotate(0 405 0)",
-    "L0": "translate(0 0) rotate(0 36 0)",
-    "L1": "translate(68.708 0) rotate(0 36 0)",
-    "L2": "translate(121.076 0) rotate(0 36 0)",
-    "L3": "translate(204.576 0) rotate(0 36 0)"
-   },
-   "trips": {
-    "th": 0,
-    "sink": 0,
-    "notch": 50
-   },
-   "star": {
-    "p": [
-     417.408,
-     -105.264
-    ],
-    "s": 1,
-    "r": 720
-   },
-   "goat": {
-    "A": [
-     548.4222224609168,
-     -75.45448147630924
-    ],
-    "p": -12.144116688068364,
-    "face": -1
-   }
-  },
-  {
    "t": 8200,
    "attrs": {
-    "root": "translate(719.717 0.241) rotate(-4.907) scale(1 1) translate(-719.7 0)",
+    "root": "translate(719.683 0.241) rotate(4.907) scale(-1 1) translate(-719.7 0)",
     "tail": "rotate(-5.163 750 -56)",
     "neck": "rotate(-2.648 703 -56)",
     "head": "rotate(-1.736 686 -86)",
@@ -944,34 +894,34 @@
    },
    "goat": {
     "A": [
-     719.7170303750823,
+     719.6829696249177,
      0.2409543742226097
     ],
-    "p": -4.907407407407407,
-    "face": 1
+    "p": 4.907407407407407,
+    "face": -1
    }
   },
   {
    "t": 8600,
    "attrs": {
-    "root": "translate(719.7 2.429) rotate(0) scale(1 1) translate(-719.7 0)",
-    "tail": "rotate(6.671 750 -56)",
-    "neck": "rotate(2.657 703 -56)",
-    "head": "rotate(1.771 686 -86)",
-    "ear-far": "rotate(-0.224 692 -86)",
-    "ear-near": "rotate(-0.224 692 -86)",
-    "fn-hip": "rotate(-16.214 700 -57.5)",
-    "fn-knee": "rotate(32.682 697.5614 -35.412)",
-    "fn-fet": "rotate(-16.468 692.982 -12.65)",
-    "ff-hip": "rotate(-16.422 700 -57.5)",
-    "ff-knee": "rotate(32.046 702.6998 -35.4)",
-    "ff-fet": "rotate(-15.625 702.982 -12.65)",
-    "hn-hip": "rotate(-12.591 740.3 -54.5)",
-    "hn-knee": "rotate(24.162 746.4008 -34.3788)",
-    "hn-fet": "rotate(-11.571 745.482 -13.15)",
-    "hf-hip": "rotate(-12.277 740.3 -55.5)",
-    "hf-knee": "rotate(24.813 741.2185 -34.3775)",
-    "hf-fet": "rotate(-12.535 735.482 -13.15)",
+    "root": "translate(719.7 3.37) rotate(0) scale(-1 1) translate(-719.7 0)",
+    "tail": "rotate(2.064 750 -56)",
+    "neck": "rotate(13.756 703 -56)",
+    "head": "rotate(17.756 686 -86)",
+    "ear-far": "rotate(-3.5 692 -86)",
+    "ear-near": "rotate(-3.5 692 -86)",
+    "fn-hip": "rotate(-19.425 700 -57.5)",
+    "fn-knee": "rotate(39.354 697.5614 -35.412)",
+    "fn-fet": "rotate(-19.93 692.982 -12.65)",
+    "ff-hip": "rotate(-19.915 700 -57.5)",
+    "ff-knee": "rotate(38.767 702.6998 -35.4)",
+    "ff-fet": "rotate(-18.852 702.982 -12.65)",
+    "hn-hip": "rotate(-15.986 740.3 -54.5)",
+    "hn-knee": "rotate(30.54 746.4008 -34.3788)",
+    "hn-fet": "rotate(-14.555 745.482 -13.15)",
+    "hf-hip": "rotate(-15.388 740.3 -55.5)",
+    "hf-knee": "rotate(31.216 741.2185 -34.3775)",
+    "hf-fet": "rotate(-15.828 735.482 -13.15)",
     "star": "translate(417.408 -105.264) rotate(720) scale(1)",
     "trips": "translate(0 0) rotate(0 405 0)",
     "L0": "translate(0 0) rotate(0 36 0)",
@@ -995,14 +945,64 @@
    "goat": {
     "A": [
      719.7,
-     2.4294759945130315
+     3.3703703703703702
     ],
     "p": 0,
-    "face": 1
+    "face": -1
    }
   },
   {
-   "t": 8900,
+   "t": 8980,
+   "attrs": {
+    "root": "translate(719.7 -7.665) rotate(0) scale(0.875 1) translate(-719.7 0)",
+    "tail": "rotate(-4.036 750 -56)",
+    "neck": "rotate(3.563 703 -56)",
+    "head": "rotate(2.708 686 -86)",
+    "ear-far": "rotate(11.125 692 -86)",
+    "ear-near": "rotate(11.125 692 -86)",
+    "fn-hip": "rotate(7.7 700 -57.5)",
+    "fn-knee": "rotate(2.925 697.5614 -35.412)",
+    "fn-fet": "rotate(-3.637 692.982 -12.65)",
+    "ff-hip": "rotate(16.965 700 -57.5)",
+    "ff-knee": "rotate(-0.254 702.6998 -35.4)",
+    "ff-fet": "rotate(-5.723 702.982 -12.65)",
+    "hn-hip": "rotate(8.867 740.3 -54.5)",
+    "hn-knee": "rotate(-5.346 746.4008 -34.3788)",
+    "hn-fet": "rotate(7.604 745.482 -13.15)",
+    "hf-hip": "rotate(-9.51 740.3 -55.5)",
+    "hf-knee": "rotate(-5.612 741.2185 -34.3775)",
+    "hf-fet": "rotate(30.248 735.482 -13.15)",
+    "star": "translate(417.408 -105.264) rotate(720) scale(1)",
+    "trips": "translate(0 0) rotate(0 405 0)",
+    "L0": "translate(0 0) rotate(0 36 0)",
+    "L1": "translate(68.708 0) rotate(0 36 0)",
+    "L2": "translate(121.076 0) rotate(0 36 0)",
+    "L3": "translate(204.576 0) rotate(0 36 0)"
+   },
+   "trips": {
+    "th": 0,
+    "sink": 0,
+    "notch": 50
+   },
+   "star": {
+    "p": [
+     417.408,
+     -105.264
+    ],
+    "s": 1,
+    "r": 720
+   },
+   "goat": {
+    "A": [
+     719.7,
+     -7.664776803925633
+    ],
+    "p": 0,
+    "face": 0.875
+   }
+  },
+  {
+   "t": 9660,
    "attrs": {
     "root": "translate(719.7 0) rotate(0) scale(1 1) translate(-719.7 0)",
     "tail": "rotate(0 750 -56)",

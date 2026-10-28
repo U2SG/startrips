@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import { DUR, attrs, frame, svg } from "./goatShowEngine";
 import golden from "./goatShowGolden.fixture.json";
 
-// The golden file is `attrs(frame(t))`, `trips`, `star` and `goat` written by
-// the approved prototype engine (docs/plans/goat-proto/goat-show-engine.js).
+// The golden file is `attrs(frame(t))`, `trips`, `star` and `goat`. Frames up
+// to t = 7400 were written by the approved prototype engine
+// (docs/plans/goat-proto/goat-show-engine.js) and are unchanged; the last four
+// (landing, glance back, mid-turn, rest) were regenerated from this engine for
+// the land-then-turn ending, which departs from the prototype after 7890 ms.
 const TOLERANCE = 1e-6;
 
 function numbers(value: string) {
@@ -40,11 +43,11 @@ function finiteDeep(value: unknown): boolean {
 }
 
 describe("goat show engine", () => {
-  it("lasts as long as the approved prototype", () => {
+  it("lasts as long as the golden show", () => {
     expect(DUR).toBe(golden.durationMs);
   });
 
-  it("matches every golden frame of the approved prototype", () => {
+  it("matches every golden frame", () => {
     expect(golden.frames.length).toBe(21);
     for (const expected of golden.frames) {
       const state = frame(expected.t);
