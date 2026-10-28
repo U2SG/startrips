@@ -919,17 +919,26 @@ button.living-atlas-globe__pick {
   initial-value: 0px;
 }
 
+/* Sized to the row: a 68px row over the golden ratio (42px) keeps the cut
+   row's top solid while its title sits in the fade. The fade lifts across
+   the last row pitch (68px row + 8px gap) of the scroll, not a percentage
+   that would stretch with the rail's length. */
 @keyframes journey-rail-fade {
-  from,
-  92% { --journey-rail-fade: 36px; }
+  from { --journey-rail-fade: 42px; }
   to { --journey-rail-fade: 0px; }
 }
 
 @supports (animation-timeline: scroll()) {
   .living-atlas__journey-rail ol {
-    mask-image: linear-gradient(to bottom, #000 calc(100% - var(--journey-rail-fade)), transparent);
+    mask-image: linear-gradient(
+      to bottom,
+      #000 calc(100% - var(--journey-rail-fade)),
+      rgb(0 0 0 / 0.618) calc(100% - var(--journey-rail-fade) * 0.382),
+      transparent
+    );
     animation: journey-rail-fade linear both;
     animation-timeline: scroll(self block);
+    animation-range: calc(100% - 76px) 100%;
   }
 }
 
