@@ -18,9 +18,10 @@ if(new URLSearchParams(location.search).has("media")) {
 fixture.media=[{id:"photo-one",journeyId:fixture.id,routePointId:null,fileName:"虚构照片.svg",mimeType:"image/svg+xml",bytes:100,sortOrder:0,createdAt:fixture.createdAt}];
 view.readMedia=async()=>({url:"/artifacts/daily-journal/fictional-photo.svg",expiresAt:"2099-01-01T00:00:00Z"});
 }
-function Harness(){const [journey,setJourney]=useState(fixture);
+function Harness(){const [journey,setJourney]=useState(fixture);const [epoch,setEpoch]=useState(0);
+useEffect(()=>{const remount=()=>setEpoch(n=>n+1);window.addEventListener("qa-remount-stream",remount);return()=>window.removeEventListener("qa-remount-stream",remount)},[]);
 useEffect(()=>{const switcher=()=>setJourney({...fixture,atlasId:"other-atlas",id:"33333333-3333-4333-8333-333333333333",title:"另一账号"}); window.addEventListener("qa-account-switch",switcher);return()=>window.removeEventListener("qa-account-switch",switcher)},[]);
-return <AtlasViewProvider value={view}><main className="living-atlas"><JourneyStream journeys={[journey]} journeyId={journey.id} onClose={()=>{}} onOpenClassic={()=>{}} onObservationChange={v=>window.__observation=v}/></main></AtlasViewProvider>}
+return <AtlasViewProvider value={view}><main className="living-atlas"><JourneyStream key={epoch} onJourneyUpdated={j=>{window.__ownerJourney=j;setJourney(j)}} journeys={[journey]} journeyId={journey.id} onClose={()=>{}} onOpenClassic={()=>{}} onObservationChange={v=>window.__observation=v}/></main></AtlasViewProvider>}
 createRoot(document.getElementById("root")).render(<Harness/>);`);
 await writeFile(`${output}/index.html`, '<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div><script type="module" src="./harness.tsx"></script></body></html>');
 await writeFile(`${output}/fictional-photo.svg`, '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400"><rect width="600" height="400" fill="#4a6970"/><circle cx="300" cy="150" r="60" fill="#edce92"/><path d="M0 400L200 220L400 400Z" fill="#193844"/></svg>');

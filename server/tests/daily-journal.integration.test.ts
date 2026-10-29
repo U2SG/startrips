@@ -209,7 +209,7 @@ describe("private daily journal API and PostgreSQL", () => {
   });
   it("atomically confirms hotel tools, replays concurrent clicks and rejects stale/foreign plans", async () => {
     const hotelJourney = await createJourneyForAtlas(owner.atlasId, owner.userId, { title: "虚构住宿测试", startedOn: "2027-05-01", endedOn: null, note: "", lightColor: "#ffffff", routePoints: [{ label: "起点", latitude: 0, longitude: 0, isStop: true, occurredAt: null }] });
-    const cs = previewJournalImport("2027-05-01\n实际：23:40她入住虚构城星桥酒店。\n2027-05-02\n实际：00:20她回到虚构城星桥酒店。\n取消：山谷酒店。", "2027-05-01");
+    const cs = previewJournalImport("2027-05-01\n实际：23:40她入住虚构城星桥酒店。\n2027-05-02\n实际：00:20她再次入住虚构城星桥酒店。\n取消：山谷酒店。\n她取消了在虚构城星桥酒店入住的计划。", "2027-05-01");
     cs[0].events[0].text = "保留手工正文"; cs[0].events[0].edited = true;
     await writeDailyJournal(hotelJourney!.id, owner.atlasId, 0, cs);
     const hotels = [cs[0].events[0], cs[1].events[0]].map(e => ({ eventId: e.id, evidence: e.source, label: "星桥酒店", context: "虚构城", latitude: 10, longitude: 20, providerId: "mock-provider", existingPointId: null }));
@@ -222,6 +222,11 @@ describe("private daily journal API and PostgreSQL", () => {
     await db.update(member).set({ role: "viewer" }).where(eq(member.userId, owner.userId));
     expect((await apply(owner.cookie, { token, confirmed: true })).status).toBe(403);
     await db.update(member).set({ role: "owner" }).where(eq(member.userId, owner.userId));
+    const cancelled = cs[1].events[2];
+    const badPlan = signHotelPlan({ ...plan, hotels: [{ ...hotels[0], eventId: cancelled.id, evidence: cancelled.source }] }, serverConfig.authSecret);
+    expect((await apply(owner.cookie, { token: badPlan, confirmed: true })).status).toBe(409);
+    const cropped = signHotelPlan({ ...plan, hotels: [{ ...hotels[0], evidence: "入住" }] }, serverConfig.authSecret);
+    expect((await apply(owner.cookie, { token: cropped, confirmed: true })).status).toBe(409);
     const responses = await Promise.all([apply(owner.cookie, { token, confirmed: true }), apply(owner.cookie, { token, confirmed: true })]);
     expect(responses.map(r => r.status)).toEqual([200, 200]);
     const [a, b] = await Promise.all(responses.map(r => r.json()));

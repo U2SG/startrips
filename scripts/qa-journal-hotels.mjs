@@ -14,6 +14,7 @@ try {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     const page = await context.newPage();
     let previews = 0, writes = 0, releasePreview, releaseApply;
+    let stored = structuredClone(journal);
     const errors = []; page.on("pageerror", e => errors.push(e.message));
     await page.route(/\/api\/journeys\/[^/]+\/journal(?:\/hotels\/(?:preview|apply))?$/, async route => {
       const url = route.request().url();
@@ -25,8 +26,9 @@ try {
         writes++; assert.deepEqual(route.request().postDataJSON(), { token: "test-signed-preview", confirmed: true });
         await new Promise(resolve => { releaseApply = resolve; });
         const saved = structuredClone(journal); saved.revision = 2; saved.chapters[0].events[0].status = "actual"; saved.chapters[0].events[0].routePointId = pointId;
+        stored = saved;
         await route.fulfill({ json: { journal: saved, journey: { id: journeyId, atlasId: "fictional-atlas", title: "虚构旅行手记验收", note: "", startedOn: "2027-04-03", endedOn: null, lightColor: "#74e7d0", revision: 2, createdByUserId: "fictional-owner", createdAt: "2027-04-03T00:00:00Z", updatedAt: "2027-04-03T00:00:00Z", media: [], routePoints: [{ id: pointId, journeyId, sortOrder: 0, latitude: 10, longitude: 20, label: "星桥酒店", isStop: true, occurredAt: null }] } } });
-      } else await route.fulfill({ json: { journal: url.includes(journeyId) ? journal : { revision: 0, chapters: [] } } });
+      } else await route.fulfill({ json: { journal: url.includes(journeyId) ? stored : { revision: 0, chapters: [] } } });
     });
     await page.goto(`${origin}/artifacts/daily-journal/index.html`);
     await page.getByRole("button", { name: "每日手记", exact: true }).click();
@@ -47,6 +49,10 @@ try {
     await page.getByRole("button", { name: "在 Stream 中查看地点：星桥酒店" }).click();
     await page.waitForFunction(id => window.__observation?.routePointId === id, pointId);
     await page.getByRole("button", { name: "每日手记", exact: true }).click();
+    assert.equal(await page.evaluate(() => window.__ownerJourney.routePoints.some(p => p.id === "44444444-4444-4444-8444-444444444444")), true);
+    await page.evaluate(() => window.dispatchEvent(new Event("qa-remount-stream")));
+    await page.getByRole("button", { name: "每日手记", exact: true }).click();
+    await page.getByRole("button", { name: "在 Stream 中查看地点：星桥酒店" }).waitFor();
     // A late preview must not land in the newly selected account.
     await preview().click(); await page.getByText("正在检索酒店…", { exact: true }).waitFor();
     await page.evaluate(() => window.dispatchEvent(new Event("qa-account-switch")));

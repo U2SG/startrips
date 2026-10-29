@@ -12,9 +12,13 @@ After saving the diary, choose **用 AI 查找已入住酒店**. The existing IN
 
 Explicit planned/cancelled events are excluded. Actual and uncertain events may produce a proposal, but missing names/areas, ambiguous branches, conflicting nearby existing points or unreturned candidate IDs never create a point. Names and areas must be verbatim source evidence; coordinates come only from the existing search adapter. A reliable existing Journey point is reused before searching externally. Strict name/address matching is deliberately conservative: translated aliases or incomplete addresses may remain questions rather than being guessed.
 
+Independent review additionally required a server-side factual gate: a source event must contain an explicit completed-stay verb and no plan/cancellation/negation/uncertainty/instruction markers. Mixed replacement sentences remain questions rather than being cropped into misleading proof. The preview displays the complete event source, and confirmation rechecks it. Normalized name/area must be nonempty, so punctuation cannot stand in for a city. These conservative checks do not claim to prove every natural-language assertion; the member reviews the full source before approval.
+
 Review the batch, then choose **确认批量添加及关联**. This is approval for this exact preview only. The server signs a 15-minute plan bound to Atlas, Journey and both revisions; confirmation rechecks authorization and locks the same active Atlas/Journey as existing writes. Hotel points and journal links commit together. Exact replay is a no-op; stale plans return 409. Repeated stays reuse the same point. New hotels are appended in source-event order; existing route order, dates, local times, source and manually edited prose are untouched. No UTC timestamp is invented. Canceling a preview writes nothing; accepted saves cannot be described as canceled.
 
 No additional database migration is required beyond 0040/0041. `pnpm qa:journal-hotels` runs the existing journal browser baseline plus desktop/phone hotel confirmation, duplicate-click, cancellation and account-switch checks. Unavailable model/search services leave the manual journal workflow available. This feature has not imported any private travel source.
+
+Hotel writes update the owner application's Journey state as well as the open Stream. The browser regression remounts Stream and verifies the new point/link survives, avoiding stale route revisions after closing the reader.
 
 ## Persistence and access
 

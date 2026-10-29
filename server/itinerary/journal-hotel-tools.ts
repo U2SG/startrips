@@ -3,10 +3,11 @@ import { requestIntentModelAnswer, type IntentModelOptions } from "../intents/in
 import { ShareIntentError } from "../intents/create-share-intent";
 import type { DailyJournal } from "../../src/journey/dailyJournal";
 import type { HotelSelection } from "../../src/journey/journalHotels";
+import { hasExplicitHotelStay } from "../../src/journey/journalHotels";
 import type { LocationSearch } from "../location/location-search";
 import type { RoutePoint } from "../../src/journey/types";
 
-const fail = () => new ShareIntentError("HOTEL_TOOLS_INVALID", "酒店工具返回无效；没有写入地点。", 502);
+const fail = () => new ShareIntentError("HOTEL_TOOLS_INVALID", "当前模型未返回受支持的酒店工具调用或候选无效；没有写入地点，可手动关联已有地点。", 502);
 const object = (properties: object) => ({ type: "object", additionalProperties: false, required: Object.keys(properties), properties });
 const string = { type: "string" };
 const schema = object({ stays: { type: "array", items: object({ eventId: string, evidence: string, name: string, area: string }) }, questions: { type: "array", items: string } });
@@ -32,6 +33,8 @@ export async function proposeJournalHotels(journal: DailyJournal, points: Pick<R
     if (!event || seen.has(event.id) || [evidence, name, area].some(s => typeof s !== "string" || !s.trim() || s.length > 500)
       || !event.source.includes(evidence as string) || !event.source.includes(name as string) || !journal.chapters.find(c => c.events.includes(event))!.source.includes(area as string)) throw fail();
     seen.add(event.id);
+    if (!norm(name as string) || !norm(area as string)) { questions.push(`${event.id}：酒店名称或地区缺失，未建点。`); continue; }
+    if (!hasExplicitHotelStay(event.source, name as string)) { questions.push(`${event.id}：原文未能明确证明实际入住，未建点。`); continue; }
     const query = `${name} ${area}`;
     if (query.length > 120) { questions.push(`${event.id}：酒店名称/地址过长，请核对。`); continue; }
     if (signal?.aborted) throw fail();
@@ -49,7 +52,7 @@ export async function proposeJournalHotels(journal: DailyJournal, points: Pick<R
     }
     const existing = points.filter(point => sameHotel(point, p));
     if (existing.length > 1) { questions.push(`${event.id}：已有多个相同地点，请先核对。`); continue; }
-    searches.push({ eventId: event.id, evidence: evidence as string, candidates: [{ eventId: event.id, evidence: evidence as string, label: p.label, context: p.context,
+    searches.push({ eventId: event.id, evidence: event.source, candidates: [{ eventId: event.id, evidence: event.source, label: p.label, context: p.context,
       latitude: p.latitude, longitude: p.longitude, providerId: p.id, existingPointId: existing[0]?.id ?? null }] });
   }
   if (!searches.length) return { hotels: [], questions };
