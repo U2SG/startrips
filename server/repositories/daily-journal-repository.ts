@@ -1,10 +1,50 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db/client";
 import { atlases, journeys, journeyJournals, journeyRoutePoints, mediaAssets } from "../db/app-schema";
 import { lockActiveAtlas, lockActiveJourney } from "./journey-repository";
 import { EMPTY_JOURNAL, type DailyJournal, type JournalChapter } from "../../src/journey/dailyJournal";
+import { sameHotel, type HotelPlan } from "../itinerary/journal-hotel-tools";
+
+/** Confirmed, server-signed plan; one transaction for both route and journal. */
+export async function applyJournalHotels(plan: HotelPlan, atlasId: string, journeyId: string) {
+  if (plan.atlasId !== atlasId || plan.journeyId !== journeyId) return null;
+  return db.transaction(async tx => {
+    if (!await lockActiveAtlas(tx, atlasId) || !await lockActiveJourney(tx, journeyId, atlasId)) return null;
+    const [journal] = await tx.select().from(journeyJournals).where(eq(journeyJournals.journeyId, journeyId));
+    const [journey] = await tx.select().from(journeys).where(eq(journeys.id, journeyId));
+    const digest = createHash("sha256").update(JSON.stringify({ hotelPlan: plan })).digest("hex");
+    if (journal?.lastWriteDigest === digest) return { revision: journal.revision, chapters: journal.chapters };
+    if (!journal || journal.revision !== plan.journalRevision || journey.revision !== plan.journeyRevision) throw new JournalWriteError("JOURNAL_CHANGED", 409);
+    const points = await tx.select().from(journeyRoutePoints).where(eq(journeyRoutePoints.journeyId, journeyId));
+    const chapters = structuredClone(journal.chapters);
+    const events = chapters.flatMap(c => c.events);
+    let sortOrder = points.reduce((max, p) => Math.max(max, p.sortOrder), -1) + 1;
+    let created = false;
+    // Iterate source events, not model-returned order; never sort wall clock times.
+    for (const event of events) {
+      const hotel = plan.hotels.find(h => h.eventId === event.id);
+      if (!hotel) continue;
+      if (event.routePointId || !["actual", "uncertain"].includes(event.status) || !event.source.includes(hotel.evidence)) throw new JournalWriteError("JOURNAL_CHANGED", 409);
+      const matches = points.filter(p => sameHotel(p, hotel));
+      if (matches.length > 1 || (hotel.existingPointId && matches[0]?.id !== hotel.existingPointId)) throw new JournalWriteError("JOURNAL_CHANGED", 409);
+      let point = matches[0];
+      if (!point) {
+        if (points.length >= 200) throw new JournalWriteError("HOTEL_POINT_LIMIT", 400);
+        [point] = await tx.insert(journeyRoutePoints).values({ id: randomUUID(), journeyId, sortOrder: sortOrder++, label: hotel.label,
+          latitude: hotel.latitude, longitude: hotel.longitude, regionContext: hotel.context, placeRole: "accommodation", isStop: true, occurredAt: null }).returning();
+        points.push(point); created = true;
+      }
+      event.routePointId = point.id; event.status = "actual";
+    }
+    if (created) await tx.update(journeys).set({ revision: journey.revision + 1, updatedAt: new Date() }).where(eq(journeys.id, journeyId));
+    if (!plan.hotels.length) return { revision: journal.revision, chapters };
+    const revision = journal.revision + 1;
+    await tx.update(journeyJournals).set({ revision, chapters, lastWriteDigest: digest }).where(eq(journeyJournals.journeyId, journeyId));
+    return { revision, chapters };
+  });
+}
 
 export class JournalWriteError extends Error {
   constructor(public code: string, public status: 400 | 409) { super(code); }
