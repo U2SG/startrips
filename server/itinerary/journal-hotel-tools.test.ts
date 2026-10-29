@@ -6,7 +6,7 @@ import type { LocationSearch } from "../location/location-search";
 const chapters = previewJournalImport("2027-05-01\n实际：她在虚构城入住星桥酒店，23:40准备睡觉。\n取消：原计划入住山谷酒店。", "2027-05-01");
 const event = chapters[0].events[0];
 const journal = { revision: 1, chapters };
-const candidate = { id: "provider-1", label: "星桥酒店", context: "虚构城中心路", countryCode: "ZZ", latitude: 10, longitude: 20 };
+const candidate = { id: "provider-1", label: "星桥酒店", context: "虚构城，中心路", countryCode: "ZZ", latitude: 10, longitude: 20 };
 const stay = { eventId: event.id, evidence: "在虚构城入住星桥酒店", name: "星桥酒店", area: "虚构城" };
 function setup(stays: unknown[] = [stay], candidates = [candidate], chosen = "provider-1") {
   const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
@@ -61,9 +61,9 @@ describe("hotel tool boundaries", () => {
   });
   it.each([
     ["实际：她在虚构城入住星桥酒店，晚餐去了山谷酒店。", "星桥酒店", "山谷酒店"],
-    ["实际：她在虚构城山谷酒店拍照后入住星桥酒店。", "星桥酒店", "山谷酒店"],
+    ["实际：她在远方城山谷酒店拍照后，在虚构城入住星桥酒店。", "星桥酒店", "山谷酒店"],
     ["In Fiction City we stayed at Starbridge Hotel and ate at Valley Hotel.", "Starbridge Hotel", "Valley Hotel"],
-    ["In Fiction City we photographed Valley Hotel then checked in at Starbridge Hotel.", "Starbridge Hotel", "Valley Hotel"],
+    ["We photographed Valley Hotel in Other City then checked in at Starbridge Hotel in Fiction City.", "Starbridge Hotel", "Valley Hotel"],
   ])("stages only the stayed hotel in a mixed-purpose source: %s", async (source, stayed, visited) => {
     const copy = structuredClone(journal); copy.chapters[0].source = source; copy.chapters[0].events[0].source = source;
     const area = source.includes("Fiction City") ? "Fiction City" : "虚构城";
@@ -74,6 +74,30 @@ describe("hotel tool boundaries", () => {
       if (name === stayed) expect(result.hotels[0].evidence).toBe(source);
       else { expect(result.questions).toHaveLength(1); expect(s.search.search).not.toHaveBeenCalled(); }
     }
+  });
+  it("does not borrow geography from another event in the same chapter", async () => {
+    const copy = structuredClone(journal);
+    copy.chapters[0].source = "实际：在虚构城入住星桥酒店。\n实际：下午到远方城。";
+    copy.chapters[0].events[0].source = "实际：在虚构城入住星桥酒店。";
+    const bad = setup([{ ...stay, evidence: "入住星桥酒店", area: "远方城" }], [{ ...candidate, context: "远方城，中心路" }]);
+    const result = await proposeJournalHotels(copy, [], bad.model, bad.search);
+    expect(result.hotels).toEqual([]); expect(bad.search.search).not.toHaveBeenCalled();
+    const good = setup([{ ...stay, evidence: "入住星桥酒店", area: "虚构城" }]);
+    const accepted = await proposeJournalHotels(copy, [], good.model, good.search);
+    expect(accepted.hotels[0]).toMatchObject({ sourceArea: "虚构城", evidence: copy.chapters[0].events[0].source });
+    expect(good.fetcher).toHaveBeenCalledTimes(2);
+  });
+  it("does not confuse York with New York in provider or existing-point addresses", async () => {
+    const copy = structuredClone(journal); copy.chapters[0].source = copy.chapters[0].events[0].source = "We checked in at Starbridge Hotel in York.";
+    const extracted = { ...stay, name: "Starbridge Hotel", area: "York", evidence: copy.chapters[0].source };
+    const wrong = { ...candidate, label: "Starbridge Hotel", context: "New York, USA" };
+    const s = setup([extracted], [wrong]);
+    expect((await proposeJournalHotels(copy, [], s.model, s.search)).hotels).toEqual([]);
+    const owned = setup([extracted], [], "existing:owned");
+    const result = await proposeJournalHotels(copy, [{ id: "owned", label: wrong.label, latitude: 10, longitude: 20, regionContext: wrong.context }], owned.model, owned.search);
+    expect(result.hotels).toEqual([]); expect(owned.search.search).toHaveBeenCalled();
+    const good = setup([extracted], [{ ...wrong, context: "York, UK" }]);
+    expect((await proposeJournalHotels(copy, [], good.model, good.search)).hotels[0].sourceArea).toBe("York");
   });
   it("refuses punctuation-only area instead of matching every provider address", async () => {
     const s = setup([{ ...stay, area: "。" }]);

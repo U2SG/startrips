@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasExplicitHotelStay } from "./journalHotels";
+import { hasExplicitHotelStay, hasExplicitHotelStayAt, hotelContextMatchesArea } from "./journalHotels";
 
 describe("hotel stay attribution", () => {
   it.each([
@@ -26,5 +26,37 @@ describe("hotel stay attribution", () => {
     ["入住星桥酒店的餐厅。", "星桥酒店"],
   ])("leaves ambiguous object %s unconfirmed", (source, name) => {
     expect(hasExplicitHotelStay(source, name)).toBe(false);
+  });
+});
+
+describe("hotel stay geography", () => {
+  it.each([
+    ["实际：在虚构城入住星桥酒店。下午到远方城。", "星桥酒店", "虚构城", "远方城"],
+    ["实际：在远方城拍照，在虚构城入住星桥酒店。", "星桥酒店", "虚构城", "远方城"],
+    ["In Fiction City we stayed at Starbridge Hotel. Later we went to Other City.", "Starbridge Hotel", "Fiction City", "Other City"],
+    ["We photographed Other City then checked in at Starbridge Hotel in Fiction City.", "Starbridge Hotel", "Fiction City", "Other City"],
+  ])("binds the geography to the stay in %s", (source, name, correct, wrong) => {
+    expect(hasExplicitHotelStayAt(source, name, correct)).toBe(true);
+    expect(hasExplicitHotelStayAt(source, name, wrong)).toBe(false);
+  });
+  it.each([
+    ["她在虚构城山谷酒店拍照后入住星桥酒店。", "星桥酒店", "虚构城"],
+    ["In Fiction City we photographed Valley Hotel then checked in at Starbridge Hotel.", "Starbridge Hotel", "Fiction City"],
+    ["虚构城：入住星桥酒店。", "星桥酒店", "虚构城"],
+    ["入住星桥酒店。", "星桥酒店", "虚构城"],
+  ])("does not infer location from another activity or heading: %s", (source, name, area) => {
+    expect(hasExplicitHotelStayAt(source, name, area)).toBe(false);
+  });
+});
+
+
+describe("whole address components", () => {
+  it.each([
+    ["New York, USA", "York", false], ["Yorkshire, UK", "York", false],
+    ["Main Street, York, UK", "York", true], ["New York, USA", "New York", true],
+    ["虚构城，中心路", "虚构城", true], ["虚构城中心路", "虚构城", false],
+    ["North Fiction City, ZZ", "Fiction City", false],
+  ])("matches %s to %s conservatively", (context, area, expected) => {
+    expect(hotelContextMatchesArea(context, area)).toBe(expected);
   });
 });

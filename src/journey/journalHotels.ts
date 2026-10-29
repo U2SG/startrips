@@ -3,6 +3,7 @@ export type HotelSelection = {
   evidence: string;
   label: string;
   context: string;
+  sourceArea: string;
   latitude: number;
   longitude: number;
   providerId: string;
@@ -31,4 +32,26 @@ export function hasExplicitHotelStay(source: string, name: string): boolean {
   const chinese = new RegExp(`(?:入住|住进|住在|住了)\\s*${literal}(?=$|[\\s，,。.!！;；:：])`, "iu");
   const english = new RegExp(`\\b(?:checked\\s+in\\s+(?:at|to)|stayed\\s+(?:at|in))\\s+(?:the\\s+)?${literal}(?=$|[,.!;:]|\\s+(?:in|on|and|then|before|after)\\b)`, "iu");
   return chinese.test(text) || english.test(text);
+}
+
+/** Require geography in the selected stay clause, never in another event/chapter. */
+export function hasExplicitHotelStayAt(source: string, name: string, area: unknown): boolean {
+  if (typeof area !== "string" || !/[\p{L}\p{N}]/u.test(area) || !hasExplicitHotelStay(source, name)) return false;
+  const escape = (s: string) => s.normalize("NFKC").trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const location = escape(area), hotel = escape(name), text = source.normalize("NFKC");
+  // Deliberately supported constructions only. Chapter headings, pronouns and
+  // location mentions separated by another action cannot supply stay geography.
+  const chinese = new RegExp(`在\\s*${location}\\s*(?:再次)?(?:入住|住进|住在|住了)\\s*${hotel}(?=$|[\\s，,。.!！;；:：])`, "iu");
+  const stay = `(?:checked\\s+in\\s+(?:at|to)|stayed\\s+(?:at|in))\\s+(?:the\\s+)?${hotel}`;
+  const prefix = new RegExp(`\\bin\\s+${location}\\s+(?:(?:we|she|he|they|I)\\s+)?${stay}(?=$|[,.!;:]|\\s+(?:and|then|before|after)\\b)`, "iu");
+  const suffix = new RegExp(`\\b${stay}\\s+in\\s+${location}(?=$|[,.!;:]|\\s+(?:and|then|before|after)\\b)`, "iu");
+  return chinese.test(text) || prefix.test(text) || suffix.test(text);
+}
+
+/** Provider addresses are opaque: require an entire delimited component, not a city substring. */
+export function hotelContextMatchesArea(context: string | null | undefined, area: unknown): boolean {
+  const normalize = (s: string) => s.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase();
+  if (typeof area !== "string" || !/[\p{L}\p{N}]/u.test(area) || typeof context !== "string") return false;
+  const expected = normalize(area);
+  return context.split(/[,，;；/|·\n]/u).some(component => normalize(component) === expected);
 }

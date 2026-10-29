@@ -6,7 +6,7 @@ import { atlases, journeys, journeyJournals, journeyRoutePoints, mediaAssets } f
 import { lockActiveAtlas, lockActiveJourney } from "./journey-repository";
 import { EMPTY_JOURNAL, type DailyJournal, type JournalChapter } from "../../src/journey/dailyJournal";
 import { sameHotel, type HotelPlan } from "../itinerary/journal-hotel-tools";
-import { hasExplicitHotelStay } from "../../src/journey/journalHotels";
+import { hasExplicitHotelStayAt, hotelContextMatchesArea } from "../../src/journey/journalHotels";
 
 /** Confirmed, server-signed plan; one transaction for both route and journal. */
 export async function applyJournalHotels(plan: HotelPlan, atlasId: string, journeyId: string) {
@@ -21,16 +21,19 @@ export async function applyJournalHotels(plan: HotelPlan, atlasId: string, journ
     const points = await tx.select().from(journeyRoutePoints).where(eq(journeyRoutePoints.journeyId, journeyId));
     const chapters = structuredClone(journal.chapters);
     const events = chapters.flatMap(c => c.events);
+    if (new Set(plan.hotels.map(h => h.eventId)).size !== plan.hotels.length
+      || plan.hotels.some(h => !events.some(e => e.id === h.eventId))) throw new JournalWriteError("JOURNAL_CHANGED", 409);
     let sortOrder = points.reduce((max, p) => Math.max(max, p.sortOrder), -1) + 1;
     let created = false;
     // Iterate source events, not model-returned order; never sort wall clock times.
     for (const event of events) {
       const hotel = plan.hotels.find(h => h.eventId === event.id);
       if (!hotel) continue;
-      if (event.routePointId || !["actual", "uncertain"].includes(event.status) || event.source !== hotel.evidence || !hasExplicitHotelStay(event.source, hotel.label)) throw new JournalWriteError("JOURNAL_CHANGED", 409);
+      if (event.routePointId || !["actual", "uncertain"].includes(event.status) || event.source !== hotel.evidence || !hasExplicitHotelStayAt(event.source, hotel.label, hotel.sourceArea) || !hotelContextMatchesArea(hotel.context, hotel.sourceArea)) throw new JournalWriteError("JOURNAL_CHANGED", 409);
       const matches = points.filter(p => sameHotel(p, hotel));
       if (matches.length > 1 || (hotel.existingPointId && matches[0]?.id !== hotel.existingPointId)) throw new JournalWriteError("JOURNAL_CHANGED", 409);
       let point = matches[0];
+      if (point && !hotelContextMatchesArea(point.regionContext, hotel.sourceArea)) throw new JournalWriteError("JOURNAL_CHANGED", 409);
       if (!point) {
         if (points.length >= 200) throw new JournalWriteError("HOTEL_POINT_LIMIT", 400);
         [point] = await tx.insert(journeyRoutePoints).values({ id: randomUUID(), journeyId, sortOrder: sortOrder++, label: hotel.label,
