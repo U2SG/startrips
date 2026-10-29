@@ -41,7 +41,7 @@ function ownerMedia(journey: Journey, routePointId: string | null): JourneyMedia
 }
 
 /** Entries oldest first, in canonical Route order. */
-export function journeyStreamEntries(journey: Journey): JourneyStreamEntry[] {
+export function journeyStreamEntries(journey: Journey, focusPointId: string | null = null): JourneyStreamEntry[] {
   const entries: JourneyStreamEntry[] = [{ kind: "intro", key: "intro", note: trimmed(journey.note) }];
   for (const asset of ownerMedia(journey, null)) {
     entries.push({ kind: "media", key: `media:${asset.id}`, asset, routePoint: null, place: null, date: null, note: null });
@@ -52,7 +52,7 @@ export function journeyStreamEntries(journey: Journey): JourneyStreamEntry[] {
     const place = trimmed(point.label);
     const date = streamDate(point.occurredAt);
     if (media.length === 0) {
-      if (note) entries.push({ kind: "note", key: `note:${point.id}`, routePoint: point, place, date, note });
+      if (note || point.id === focusPointId) entries.push({ kind: "note", key: `note:${point.id}`, routePoint: point, place, date, note: note ?? "" });
       continue;
     }
     media.forEach((asset, index) => {

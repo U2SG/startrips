@@ -1,0 +1,21 @@
+.daily-journal { position: fixed; inset: 0; z-index: 120; overflow: auto; background: #111b24; color: #efe9dc; padding: 28px max(20px, calc((100vw - 900px) / 2)); font: 16px/1.7 system-ui, sans-serif; }
+.daily-journal header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.daily-journal h1 { font-size: 26px; margin: 4px 0 20px; }
+.daily-journal h2 { font-size: 22px; }
+.daily-journal button, .daily-journal input, .daily-journal textarea, .daily-journal select { font: inherit; color: inherit; border: 1px solid #75838b; border-radius: 6px; padding: 8px 12px; background: #1b2c38; max-width: 100%; }
+.daily-journal button { cursor: pointer; margin: 4px 8px 4px 0; }
+.daily-journal button:disabled { opacity: .5; cursor: default; }
+.daily-journal label { display: block; margin: 12px 0; }
+.daily-journal input, .daily-journal select { display: block; }
+.daily-journal textarea { display: block; box-sizing: border-box; width: 100%; min-height: 120px; resize: vertical; }
+.daily-journal fieldset { border: 0; padding: 0; min-width: 0; }
+.daily-journal article { scroll-margin-top: 16px; border-top: 1px solid #57616a; padding: 24px 0; }
+.daily-journal nav { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
+.daily-journal a { color: #edce92; }
+.daily-journal pre, .daily-journal__prose { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.daily-journal__event { margin: 24px 0; padding-left: 16px; border-left: 2px solid #687880; }
+.daily-journal__metadata { color: #d8bb86; font-size: 14px; }
+.daily-journal__toolbar, .daily-journal__import { border: 1px solid #52616b; border-radius: 8px; padding: 16px; margin: 16px 0; }
+.daily-journal__media img, .daily-journal__media video { display: block; max-width: 100%; max-height: 65vh; margin: 16px 0; }
+.daily-journal [role=alert] { padding: 12px; background: #482c2c; }
+@media (max-width: 480px) { .daily-journal { padding: 16px; } .daily-journal header { flex-wrap: wrap; } }

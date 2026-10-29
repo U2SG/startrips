@@ -1,3 +1,4 @@
+import { dailyJournalClient, type DailyJournalClient } from "./dailyJournalApi";
 import type { JourneyFilmExporter } from "./journeyFilmExport";
 import { createContext, useContext } from "react";
 import {
@@ -205,6 +206,7 @@ export type AtlasMutations = {
  * so the presentation components below it are the same code.
  */
 export type AtlasView = {
+  dailyJournal?: DailyJournalClient;
   creativeCover?: CreativeCoverClient;
   /** #463: absent in guest/demo views; never fall back to the owner client. */
   everydayFragments?: EverydayFragmentClient;
@@ -260,6 +262,7 @@ export function createOwnerAtlasView(
   const capabilities = { ...OWNER_ATLAS_VIEW_CAPABILITIES, ...overrides };
   return {
     capabilities,
+    ...(capabilities.canEditJourney ? { dailyJournal: dailyJournalClient } : {}),
     everydayFragments: everydayFragmentClient,
     listJourneys: () => listJourneys(),
     listHomeBasePeriods: () => listHomeBasePeriods(),

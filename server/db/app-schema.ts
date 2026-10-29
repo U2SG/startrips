@@ -1,3 +1,4 @@
+import type { JournalChapter } from "../../src/journey/dailyJournal";
 import {
   boolean,
   check,
@@ -1259,3 +1260,11 @@ export const providerIdTokenConsumptions = pgTable(
     index("provider_id_token_consumptions_expires_idx").on(table.expiresAt),
   ],
 );
+
+// Private daily evidence is deliberately absent from Journey/share projections.
+export const journeyJournals = pgTable("journey_journals", {
+  journeyId: uuid("journey_id").primaryKey().references(() => journeys.id, { onDelete: "cascade" }),
+  revision: integer("revision").notNull().default(1),
+  lastWriteDigest: text("last_write_digest"),
+  chapters: jsonb("chapters").$type<JournalChapter[]>().notNull().default([]),
+});
