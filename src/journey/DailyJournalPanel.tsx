@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAtlasView } from "./atlasView";
 import { useModalFocus } from "./useModalFocus";
-import { mergeJournalSuggestions, previewJournalImport, type DailyJournal, type JournalChapter, type JournalEvent, type JournalStatus } from "./dailyJournal";
+import { adoptJournalSuggestions, mergeJournalSuggestions, previewJournalImport, type DailyJournal, type JournalChapter, type JournalEvent, type JournalStatus } from "./dailyJournal";
 import type { DailyJournalClient } from "./dailyJournalApi";
 import type { Journey, JourneyMediaAsset } from "./types";
 import { useReaderReads } from "./journeyReaderMedia";
@@ -33,7 +33,7 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint }: {
   const [notice, setNotice] = useState("");
   const [confirmClose, setConfirmClose] = useState(false);
   const active = useRef<AbortController | null>(null);
-  const requestClose = () => { if (draft || source) setConfirmClose(true); else onClose(); };
+  const requestClose = () => { if (busy === "保存") return; if (draft || source) setConfirmClose(true); else onClose(); };
   const root = useModalFocus<HTMLDivElement>(requestClose);
   useEffect(() => {
     const controller = new AbortController(); active.current = controller;
@@ -65,15 +65,15 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint }: {
   const ordered = journal?.chapters.map((c, index) => ({ c, index })).sort((a, b) => a.c.date.localeCompare(b.c.date) || a.index - b.index) ?? [];
   const visual = journey.media.filter((m) => /^(image|video)\//.test(m.mimeType));
   return <div className="daily-journal" role="dialog" aria-modal="true" aria-label="每日手记" ref={root} tabIndex={-1}>
-    <header><div><span>私有手记 · 不随分享链接公开</span><h1>{journey.title}</h1></div><button onClick={requestClose}>返回 Stream</button></header>
-    {confirmClose ? <div role="alert"><p>当前有未保存内容，离开会丢弃草稿。</p><button onClick={() => setConfirmClose(false)}>继续编辑</button><button onClick={() => { active.current?.abort(); onClose(); }}>丢弃并返回</button></div> : null}
+    <header><div><span>私有手记 · 不随分享链接公开</span><h1>{journey.title}</h1></div><button disabled={busy === "保存"} onClick={requestClose}>返回 Stream</button></header>
+    {confirmClose ? <div role="alert"><p>当前有未保存内容，离开会丢弃草稿。</p><button onClick={() => setConfirmClose(false)}>继续编辑</button><button disabled={busy === "保存"} onClick={() => { active.current?.abort(); onClose(); }}>丢弃并返回</button></div> : null}
     {error ? <p role="alert">{error}</p> : null}{notice ? <p role="status">{notice}</p> : null}
     {busy ? <p role="status">正在{busy}…</p> : null}
     {saved ? <>
       <section className="daily-journal__import" aria-label="导入手记">
         <label>原始流水账<textarea value={source} maxLength={200000} placeholder="粘贴整份记录，以 2027-04-03 或 4月3日 开头分日。" disabled={!!busy} onChange={(e) => setSource(e.target.value)} /></label>
         <label>无完整日期时的归章日期<input type="date" value={date} disabled={!!busy} onChange={(e) => setDate(e.target.value)} /></label>
-        <p>日期与钟点按旅行当地记录保留；未注明时区不会换算。事件保持原文顺序。默认待确认，不自动创建地图点。</p>
+        <p>日期与钟点按旅行当地记录保留；未注明时区不会换算。事件保持原文顺序。明确的实际/计划/取消标记会保留，其余待确认；不自动创建地图点。</p>
         <button disabled={!!busy || !source.trim()} onClick={() => {
           try {
             const base = draft ?? saved; const chapters = previewJournalImport(source, date, base.chapters);
@@ -88,6 +88,7 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint }: {
           const suggestions = await client.suggest(journey.id, draft.chapters, signal);
           if (!signal.aborted) setDraft((current) => current ? { ...current, chapters: mergeJournalSuggestions(current.chapters, suggestions) } : current);
         })}>用 AI 整理原文</button>
+        <button disabled={!!busy || !draft.chapters.some((c) => c.suggestions.length)} onClick={() => setDraft((value) => value ? { ...value, chapters: adoptJournalSuggestions(value.chapters) } : value)}>将建议应用到未手改正文</button>
         <button disabled={!!busy} onClick={() => run("保存", async (signal) => {
           const result = await client.save(journey.id, draft, signal);
           if (!signal.aborted) { setSaved(result); setDraft(null); setSource(""); setNotice("手记已保存。"); }
@@ -114,6 +115,7 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint }: {
               <label>原文明确的当地钟点（可空）<input type="time" value={event.localTime ?? ""} onChange={(e) => updateEvent(c.id, event.id, { localTime: e.target.value || null })} /></label>
               <label>时间背景<input value={event.timeContext} maxLength={200} onChange={(e) => updateEvent(c.id, event.id, { timeContext: e.target.value })} /></label>
               <label>已确认的实际地点<select aria-label="已确认的实际地点" disabled={event.status !== "actual"} value={event.routePointId ?? ""} onChange={(e) => updateEvent(c.id, event.id, { routePointId: e.target.value || null })}><option value="">无 / 待确认</option>{journey.routePoints.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</select></label>
+              {event.mediaIds.length ? <button type="button" onClick={() => updateEvent(c.id, event.id, { mediaIds: [] })}>清除照片或视频关联</button> : null}
               {visual.length ? <label>关联照片或视频（可多选）<select aria-label="关联照片或视频（可多选）" multiple value={event.mediaIds} onChange={(e) => updateEvent(c.id, event.id, { mediaIds: Array.from(e.target.selectedOptions, (option) => option.value) })}>{visual.map((m) => <option key={m.id} value={m.id}>{m.fileName}</option>)}</select></label> : null}
             </fieldset> : <p className="daily-journal__prose">{event.text}</p>}
             {point && !draft ? <button onClick={() => onPoint(point.id)}>在 Stream 中查看地点：{point.label}</button> : null}

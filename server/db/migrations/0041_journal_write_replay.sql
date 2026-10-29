@@ -1,0 +1,1 @@
+ALTER TABLE "journey_journals" ADD COLUMN "last_write_digest" text;

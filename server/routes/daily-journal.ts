@@ -4,7 +4,7 @@ import { parseJournalChapters } from "../../src/journey/dailyJournal";
 import { JournalWriteError, readDailyJournal, writeDailyJournal } from "../repositories/daily-journal-repository";
 import { readJsonObject } from "./json-body";
 import { serverConfig } from "../config";
-import { suggestJournalReading } from "../itinerary/create-itinerary-recognition";
+import { suggestJournalReading } from "../itinerary/daily-journal-recognition";
 import { ItineraryRecognitionUnavailableError } from "../itinerary/itinerary-recognition";
 
 export const dailyJournalRoutes = new Hono();
@@ -41,10 +41,10 @@ dailyJournalRoutes.post("/:id/journal/suggest", async (c) => {
   const body = await readJsonObject(() => c.req.json());
   const chapters = body && parseJournalChapters(body.chapters);
   if (!chapters) return c.json({ error: "INVALID_JOURNAL" }, 400);
-  if (serverConfig.itineraryRecognitionDriver !== "http-model" || !serverConfig.itineraryRecognitionBaseUrl) throw new ItineraryRecognitionUnavailableError("AI 未配置；可以继续手动编辑和保存手记。");
+  if (serverConfig.intentDriver !== "http-model" || !serverConfig.intentBaseUrl || !serverConfig.intentApiKey || !serverConfig.intentModel) throw new ItineraryRecognitionUnavailableError("手记 AI 需要现有 INTENT_* 标准模型通道；目前未配置，可继续手动编辑和保存。");
   const suggestions = await suggestJournalReading(chapters, {
-    baseUrl: serverConfig.itineraryRecognitionBaseUrl, apiKey: serverConfig.itineraryRecognitionApiKey,
-    model: serverConfig.itineraryRecognitionModel, timeoutMs: serverConfig.itineraryRecognitionTimeoutMs,
+    baseUrl: serverConfig.intentBaseUrl, apiKey: serverConfig.intentApiKey,
+    model: serverConfig.intentModel, timeoutMs: serverConfig.intentTimeoutMs,
   });
   return c.json({ suggestions });
 });

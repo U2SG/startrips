@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createEmailVerificationToken } from "better-auth/api";
 import { eq, inArray } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { app } from "../app";
 import { serverConfig } from "../config";
 import { atlases, journeys, journeyJournals, mediaAssets } from "../db/app-schema";
@@ -109,9 +109,9 @@ describe("private daily journal API and PostgreSQL", () => {
     }
   });
   it("round trips long text and local evidence with no media; duplicate concurrent save writes once", async () => {
-    chapters[0].events[1].localTime = "23:30";
-    chapters[0].events[2].localTime = "18:20";
-    chapters[0].events[3].status = "cancelled";
+    chapters[0].events[0].localTime = "23:30";
+    chapters[0].events[1].localTime = "18:20";
+    chapters[0].events[2].status = "cancelled";
     const payload = { baseRevision: 0, chapters };
     const responses = await Promise.all([request("", "PUT", owner.cookie, payload), request("", "PUT", owner.cookie, payload)]);
     expect(responses.map((r) => r.status)).toEqual([200, 200]);
@@ -121,19 +121,19 @@ describe("private daily journal API and PostgreSQL", () => {
     expect((await db.select().from(journeyJournals).where(eq(journeyJournals.journeyId, journeyId)))).toHaveLength(1);
   });
   it("blocks stale edits, foreign links, non-actual pins and source replacement", async () => {
-    const changed = structuredClone(chapters); changed[0].events[1].text = "她手工改写了正文"; changed[0].events[1].edited = true;
+    const changed = structuredClone(chapters); changed[0].events[0].text = "她手工改写了正文"; changed[0].events[0].edited = true;
     expect((await request("", "PUT", owner.cookie, { baseRevision: 0, chapters: changed })).status).toBe(409);
     for (const foreign of [true, false]) {
-      const bad = structuredClone(changed); bad[0].events[1].status = "actual";
-      if (foreign) bad[0].events[1].routePointId = foreignPointId;
-      else bad[0].events[1].mediaIds = [foreignMediaId];
+      const bad = structuredClone(changed); bad[0].events[0].status = "actual";
+      if (foreign) bad[0].events[0].routePointId = foreignPointId;
+      else bad[0].events[0].mediaIds = [foreignMediaId];
       expect((await request("", "PUT", owner.cookie, { baseRevision: 1, chapters: bad })).status).toBe(400);
     }
-    const bad = structuredClone(changed); bad[0].events[1].routePointId = pointId;
+    const bad = structuredClone(changed); bad[0].events[0].routePointId = pointId;
     expect((await request("", "PUT", owner.cookie, { baseRevision: 1, chapters: bad })).status).toBe(400);
-    bad[0].events[1].routePointId = null; bad[0].source = "替换原文";
+    bad[0].events[0].routePointId = null; bad[0].source = "替换原文";
     expect((await request("", "PUT", owner.cookie, { baseRevision: 1, chapters: bad })).status).toBe(400);
-    changed[0].events[1].status = "actual"; changed[0].events[1].routePointId = pointId;
+    changed[0].events[0].status = "actual"; changed[0].events[0].routePointId = pointId;
     expect((await request("", "PUT", owner.cookie, { baseRevision: 1, chapters: changed })).status).toBe(200);
     expect((await request("", "PUT", owner.cookie, { baseRevision: 1, chapters })).status).toBe(409);
   });
@@ -145,6 +145,42 @@ describe("private daily journal API and PostgreSQL", () => {
     expect((await request("", "PUT", owner.cookie, { baseRevision: 2, chapters })).status).toBe(403);
     expect((await request("/suggest", "POST", owner.cookie, { chapters })).status).toBe(403);
     await db.update(member).set({ role: "owner" }).where(eq(member.userId, owner.userId));
+  });
+  it("clears only previously owned dead references, keeping prose editable after media deletion", async () => {
+    const [asset] = await db.insert(mediaAssets).values({ journeyId, storageDriver: "disabled", storageKey: randomUUID(), fileName: "own.jpg", mimeType: "image/jpeg", bytes: 1, uploadedByUserId: owner.userId }).returning();
+    const before = (await (await request()).json()).journal as DailyJournal;
+    before.chapters[0].events[0].mediaIds = [asset.id];
+    expect((await request("", "PUT", owner.cookie, { baseRevision: before.revision, chapters: before.chapters })).status).toBe(200);
+    await db.delete(mediaAssets).where(eq(mediaAssets.id, asset.id));
+    const current = (await (await request()).json()).journal as DailyJournal;
+    current.chapters[0].events[0].text = "照片删除后仍可修改";
+    const response = await request("", "PUT", owner.cookie, { baseRevision: current.revision, chapters: current.chapters });
+    expect(response.status).toBe(200);
+    const updated = (await response.json()).journal;
+    expect(updated.chapters[0].events[0]).toMatchObject({ mediaIds: [], text: "照片删除后仍可修改" });
+    const replay = await request("", "PUT", owner.cookie, { baseRevision: current.revision, chapters: current.chapters });
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).journal).toEqual(updated);
+  });
+  it("routes journal AI through the existing standard model adapter, not a custom document endpoint", async () => {
+    const prior = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel };
+    Object.assign(serverConfig, { intentDriver: "http-model", intentBaseUrl: "https://model.example.test/v1", intentApiKey: "mock-only-key", intentModel: "mock-model" });
+    const upstream = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const body = JSON.parse(init!.body as string);
+      const document = JSON.parse(body.messages[1].content);
+      return Response.json({ choices: [{ message: { content: JSON.stringify({ suggestions: document.chapters.flatMap((c: { events: {eventId:string;source:string}[] }) => c.events.map((e) => ({ eventId:e.eventId, text:e.source, questions:[], background:"" }))) }) } }] });
+    });
+    try {
+      const before = await (await request()).json();
+      const response = await request("/suggest", "POST", owner.cookie, { chapters });
+      expect(response.status).toBe(200);
+      expect(upstream).toHaveBeenCalledTimes(1);
+      expect(upstream.mock.calls[0][0]).toBe("https://model.example.test/v1/chat/completions");
+      const body = JSON.parse(upstream.mock.calls[0][1]!.body as string);
+      expect(body.response_format.json_schema.strict).toBe(true);
+      expect(body).not.toHaveProperty("document");
+      expect(await (await request()).json()).toEqual(before);
+    } finally { upstream.mockRestore(); Object.assign(serverConfig, prior); }
   });
   it("refuses deleted journeys and cascades private data on hard deletion", async () => {
     await db.update(journeys).set({ deletionStartedAt: new Date() }).where(eq(journeys.id, journeyId));

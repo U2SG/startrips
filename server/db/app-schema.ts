@@ -1265,5 +1265,6 @@ export const providerIdTokenConsumptions = pgTable(
 export const journeyJournals = pgTable("journey_journals", {
   journeyId: uuid("journey_id").primaryKey().references(() => journeys.id, { onDelete: "cascade" }),
   revision: integer("revision").notNull().default(1),
+  lastWriteDigest: text("last_write_digest"),
   chapters: jsonb("chapters").$type<JournalChapter[]>().notNull().default([]),
 });
