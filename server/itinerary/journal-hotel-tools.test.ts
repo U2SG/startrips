@@ -59,6 +59,22 @@ describe("hotel tool boundaries", () => {
       expect(result.hotels).toEqual([]); expect(result.questions).toHaveLength(1); expect(s.search.search).not.toHaveBeenCalled();
     }
   });
+  it.each([
+    ["实际：她在虚构城入住星桥酒店，晚餐去了山谷酒店。", "星桥酒店", "山谷酒店"],
+    ["实际：她在虚构城山谷酒店拍照后入住星桥酒店。", "星桥酒店", "山谷酒店"],
+    ["In Fiction City we stayed at Starbridge Hotel and ate at Valley Hotel.", "Starbridge Hotel", "Valley Hotel"],
+    ["In Fiction City we photographed Valley Hotel then checked in at Starbridge Hotel.", "Starbridge Hotel", "Valley Hotel"],
+  ])("stages only the stayed hotel in a mixed-purpose source: %s", async (source, stayed, visited) => {
+    const copy = structuredClone(journal); copy.chapters[0].source = source; copy.chapters[0].events[0].source = source;
+    const area = source.includes("Fiction City") ? "Fiction City" : "虚构城";
+    for (const name of [stayed, visited]) {
+      const s = setup([{ ...stay, name, area, evidence: source }], [{ ...candidate, label: name, context: area }]);
+      const result = await proposeJournalHotels(copy, [], s.model, s.search);
+      expect(result.hotels).toHaveLength(name === stayed ? 1 : 0);
+      if (name === stayed) expect(result.hotels[0].evidence).toBe(source);
+      else { expect(result.questions).toHaveLength(1); expect(s.search.search).not.toHaveBeenCalled(); }
+    }
+  });
   it("refuses punctuation-only area instead of matching every provider address", async () => {
     const s = setup([{ ...stay, area: "。" }]);
     const result = await proposeJournalHotels(journal, [], s.model, s.search);
