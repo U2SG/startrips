@@ -281,6 +281,13 @@
       "when": 1792569118428,
       "tag": "0039_stiff_firestar",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1793261824379,
+      "tag": "0040_daily_journal",
+      "breakpoints": true
     }
   ]
 }

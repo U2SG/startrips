@@ -1,3 +1,4 @@
+import { DailyJournalPanel } from "./DailyJournalPanel";
 import { StoryPresentationPicker } from "./StoryPresentationPicker";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type Ref, type RefObject, type WheelEvent } from "react";
 import { IconArrowUp, IconChevronLeft, IconChevronRight, IconMusic, IconMusicOff, IconPlayerPlay, IconX } from "@tabler/icons-react";
@@ -69,7 +70,7 @@ function damp(current: number, target: number, rate: number, dt: number) {
  * unfolds into the Journey's pictures, which keep flowing down it; notes are
  * written in the margin. Only the entry at the centre may hold the live video.
  */
-export function JourneyStream({
+function JourneyStreamContent({
   journeys,
   journeyId,
   routePointId = null,
@@ -79,7 +80,9 @@ export function JourneyStream({
   onOpenClassic,
   onNavigate,
   onObservationChange,
+  onOpenJournal,
 }: {
+  onOpenJournal?: () => void;
   journeys: readonly Journey[];
   journeyId: string;
   routePointId?: string | null;
@@ -97,7 +100,7 @@ export function JourneyStream({
   const previousJourney = journeyIndex > 0 ? journeys[journeyIndex - 1] : null;
   const nextJourney = journeyIndex >= 0 && journeyIndex < journeys.length - 1 ? journeys[journeyIndex + 1] : null;
   // Oldest first; drawn newest at the top so the downward flow plays forward.
-  const entries = useMemo(() => (journey ? journeyStreamEntries(journey) : []), [journey]);
+  const entries = useMemo(() => (journey ? journeyStreamEntries(journey, routePointId) : []), [journey, routePointId]);
   const soundtrack = journey ? journeySoundtrack(journey) : null;
 
   const [reduced, setReduced] = useState(prefersReducedMotion);
@@ -589,6 +592,7 @@ export function JourneyStream({
         </button>
         <p className="journey-stream__title">{journey.title}</p>
         <div className="journey-stream__actions">
+          {onOpenJournal ? <button type="button" onClick={onOpenJournal}>每日手记</button> : null}
           {soundtrack ? (
             <button
               type="button"
@@ -799,3 +803,16 @@ function StillCanvas({ canvas }: { canvas: HTMLCanvasElement }) {
 }
 
 export default JourneyStream;
+
+export function JourneyStream(props: Parameters<typeof JourneyStreamContent>[0]) {
+  const { dailyJournal } = useAtlasView();
+  const [openFor, setOpenFor] = useState<string | null>(null);
+  const [point, setPoint] = useState<{ journeyId: string; id: string } | null>(null);
+  const journey = props.journeys.find((j) => j.id === props.journeyId);
+  const scope = journey ? `${journey.atlasId}:${journey.id}` : null;
+  if (dailyJournal && journey && openFor === scope) return <DailyJournalPanel
+    key={scope} journey={journey} client={dailyJournal} onClose={() => setOpenFor(null)}
+    onPoint={(id) => { setPoint({ journeyId: journey.id, id }); setOpenFor(null); }} />;
+  return <JourneyStreamContent {...props} initialAssetId={point?.journeyId === props.journeyId ? null : props.initialAssetId} routePointId={point?.journeyId === props.journeyId ? point.id : props.routePointId}
+    onOpenJournal={dailyJournal && scope ? () => setOpenFor(scope) : undefined} />;
+}

@@ -48,6 +48,12 @@ function shape(entries: readonly JourneyStreamEntry[]): string[] {
 }
 
 describe("journeyStreamEntries", () => {
+  it("keeps an explicitly linked empty point addressable without inventing a note", () => {
+    const journey = { ...base, routePoints: [point("a"), point("b")] };
+    expect(shape(journeyStreamEntries(journey))).toEqual(["intro"]);
+    expect(journeyStreamEntries(journey, "b")[1]).toMatchObject({ kind: "note", place: "b", note: "", routePoint: { id: "b" } });
+    expect(shape(journeyStreamEntries(journey, "foreign"))).toEqual(["intro"]);
+  });
   it("keeps a note-only Route Point as a bead between its neighbours", () => {
     const journey: Journey = {
       ...base,
