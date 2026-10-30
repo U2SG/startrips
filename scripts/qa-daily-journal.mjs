@@ -23,7 +23,7 @@ if(new URLSearchParams(location.search).has("layout")) {
 fixture.title="虚构旅行与很长的章节标题".repeat(8);
 fixture.routePoints[0].note="沿途文字与路线记录。".repeat(80);
 fixture.media.push({id:"music",journeyId:fixture.id,routePointId:null,fileName:"虚构配乐.wav",mimeType:"audio/wav",bytes:50,sortOrder:1,createdAt:fixture.createdAt});
-const read=view.readMedia; view.readMedia=async asset=>asset.id==="music" ? {url:"data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQgAAACAgICAgICAgA==",expiresAt:"2099-01-01T00:00:00Z"} : read(asset);
+const read=view.readMedia; view.readMedia=async asset=>asset==="music" ? {url:"data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQgAAACAgICAgICAgA==",expiresAt:"2099-01-01T00:00:00Z"} : read(asset);
 }
 function Harness(){const [journey,setJourney]=useState(fixture);const [epoch,setEpoch]=useState(0);
 useEffect(()=>{const remount=()=>setEpoch(n=>n+1);window.addEventListener("qa-remount-stream",remount);return()=>window.removeEventListener("qa-remount-stream",remount)},[]);
@@ -148,6 +148,7 @@ try {
     await page.route(/\/api\/journeys\/[^/]+\/journal$/,route=>route.fulfill({json:{journal:{revision:1,chapters}}}));
     await page.goto(`${origin}/${output}/index.html?media=1&layout=1`);
     await page.getByRole("button",{name:"每日手记",exact:true}).waitFor();
+    await page.waitForFunction(()=>document.querySelector('.journey-stream__header button[aria-label="播放配乐"]')?.disabled===false);
     const assertLayout=async()=>{
       const bounds=await page.evaluate(()=>{
         const header=document.querySelector(".journey-stream__header").getBoundingClientRect();
