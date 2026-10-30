@@ -97,7 +97,7 @@ test("fails closed when final uses more than one commit", () => {
   assert.equal(result.reason, "final-commit-count-2");
 });
 
-test("workflow keeps all 40 logical browser suites across at most eight shards", () => {
+test("workflow keeps all 41 logical browser suites across at most eight shards", () => {
   const workflow = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".github", "workflows", "ci.yml"), "utf8").replace(/\r\n/g, "\n");
   const matrixStart = workflow.indexOf("      matrix:\n        include:");
   const stepsStart = workflow.indexOf("\n    steps:", matrixStart);
@@ -112,6 +112,7 @@ test("workflow keeps all 40 logical browser suites across at most eight shards",
     "home-base-context", "owner-share", "cover-reveal", "cover-reveal-opening", "entry-boundaries",
     "story-media-handoff", "playback-manual-camera", "media-motion-lab", "route-candidates",
     "soundtrack-ducking", "mobile-native", "story-note-beats",
+    "journal-hotels",
     "journey-book-3d-turns", "journey-book-3d-drags", "journey-book-3d-last-spread", "journey-book-3d-phone",
   ]);
   const shardNames = [...matrixText.matchAll(/^          - name: ([a-z0-9-]+)$/gm)].map((match) => match[1]);
@@ -122,8 +123,8 @@ test("workflow keeps all 40 logical browser suites across at most eight shards",
     for (const suite of match[1].split("|").filter(Boolean)) suites.add(suite);
   }
   assert.deepEqual(suites, expectedSuites);
-  assert.equal((matrixText.match(/pnpm qa:[a-z0-9-]+/g) ?? []).length, 42);
-  assert.equal((matrixText.match(/^\s+[a-z0-9][a-z0-9-]*::.+$/gm) ?? []).length, 40);
+  assert.equal((matrixText.match(/pnpm qa:[a-z0-9-]+/g) ?? []).length, 43);
+  assert.equal((matrixText.match(/^\s+[a-z0-9][a-z0-9-]*::.+$/gm) ?? []).length, 41);
 });
 
 function jobs({ productFailure = false, wrongLedgerFailure = false } = {}) {
