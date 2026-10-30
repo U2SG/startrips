@@ -205,6 +205,6 @@ test('CLI: submit exits while queued; later status/export resume that same job w
     }
     const exported = await cli(['llm-job-export', refPath, planPath]); assert.equal(exported.code, 0, exported.err);
     const envelope = validateEnvelope(JSON.parse(await readFile(planPath, 'utf8'))); assert.equal(JSON.parse(exported.out).planDigest, hash(envelope));
-    assert.equal(calls, 1); assert.equal((await readDailyJournal(owner.journeyId, owner.atlasId)).revision, 0);
+    assert.equal(calls, 1); const journal = await readDailyJournal(owner.journeyId, owner.atlasId); assert.ok(journal); assert.equal(journal.revision, 0);
   } finally { await cancelJournalJob(target(owner), id); await rm(directory, { recursive: true, force: true }); }
 });
