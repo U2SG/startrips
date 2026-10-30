@@ -9,6 +9,10 @@ export async function checkArrivalParticles(browser, origin, record) {
     viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1,
     reducedMotion: "no-preference",
   });
+  // This standalone synthetic preview has no API process or signed-in user.
+  await context.route("**/api/auth/get-session", (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: "null",
+  }));
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
