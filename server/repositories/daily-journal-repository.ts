@@ -62,8 +62,8 @@ export async function readDailyJournal(journeyId: string, atlasId: string): Prom
   const [row] = await db.select().from(journeyJournals).where(eq(journeyJournals.journeyId, journeyId));
   return row ? { revision: row.revision, chapters: row.chapters } : EMPTY_JOURNAL;
 }
-export async function writeDailyJournal(journeyId: string, atlasId: string, baseRevision: number, chapters: JournalChapter[]): Promise<DailyJournal | null> {
-  return db.transaction(async (tx) => {
+export async function writeDailyJournal(journeyId: string, atlasId: string, baseRevision: number, chapters: JournalChapter[], connection: Pick<typeof db, "transaction"> = db): Promise<DailyJournal | null> {
+  return connection.transaction(async (tx) => {
     if (!await lockActiveAtlas(tx, atlasId) || !await lockActiveJourney(tx, journeyId, atlasId)) return null;
     const [previous] = await tx.select().from(journeyJournals).where(eq(journeyJournals.journeyId, journeyId));
     const digest = createHash("sha256").update(JSON.stringify({ baseRevision, chapters })).digest("hex");
