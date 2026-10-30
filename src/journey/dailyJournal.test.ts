@@ -44,6 +44,46 @@ describe("daily journal evidence", () => {
 });
 
 describe("structured diary import", () => {
+  it.each([
+    ["### 5月1日（第一天）", "（第一天）"],
+    ["5月1日(第一天)", "(第一天)"],
+    ["2027年5月1日（第一天）", "（第一天）"],
+    ["2027-05-01(第一天)", "(第一天)"],
+    ["5月1日 第一天天气记录", "第一天天气记录"],
+    ["2027-05-01", ""],
+  ])("recognizes date heading %s without rewriting its source", (heading, title) => {
+    const raw = `${heading}\n实际：她抵达虚构城。`;
+    const [chapter] = previewJournalImport(raw, "2027-05-10");
+    expect(chapter.date).toBe("2027-05-01");
+    expect(chapter.title).toBe(title);
+    expect(chapter.source).toBe(raw);
+    expect(chapter.events.map((event) => event.source)).toEqual(["实际：她抵达虚构城。"]);
+  });
+  it("splits mixed parenthesized headings, preserves wall-time order and remains idempotent", () => {
+    const days = [
+      "### 5月1日（第一天）\n实际：23:30 她出发\n实际：18:20 她抵达",
+      "### 5月2日(第二天)\n计划：虚构公园\n取消：原定花园",
+      "5月3日 第三天\n待确认：位置未明",
+    ];
+    const raw = days.join("\n");
+    const chapters = previewJournalImport(raw, "2027-05-10");
+    expect(chapters.map((chapter) => chapter.date)).toEqual(["2027-05-01", "2027-05-02", "2027-05-03"]);
+    expect(chapters.map((chapter) => chapter.source)).toEqual(days);
+    expect(chapters[0].events.map((event) => event.localTime)).toEqual(["23:30", "18:20"]);
+    expect(chapters.flatMap((chapter) => chapter.events.map((event) => event.status))).toEqual(["actual", "actual", "planned", "cancelled", "uncertain"]);
+    chapters[0].events[0].text = "人工修改";
+    chapters[0].events[0].edited = true;
+    expect(previewJournalImport(raw, "2027-05-10", chapters)).toEqual(chapters);
+  });
+  it("does not split dates embedded in prose, clock times or date-like words", () => {
+    const lines = ["她回忆5月2日（昨天）的行程。", "5月3日记下见闻。", "05:04 她出发。", "5月123日（不是日期标题）"];
+    const raw = `5月1日（第一天）\n${lines.join("\n")}`;
+    const chapters = previewJournalImport(raw, "2027-05-10");
+    expect(chapters).toHaveLength(1);
+    expect(chapters[0].source).toBe(raw);
+    expect(chapters[0].events.map((event) => event.source)).toEqual(lines);
+    expect(() => previewJournalImport("5月32日（无效日期）", "2027-05-10")).toThrow();
+  });
   it("does not carry actual status through a planned or unknown Markdown section", () => {
     const [day] = previewJournalImport("2027-04-03\n实际：\n08:00 她抵达住处\n## 计划：次日路线\n09:00 虚构公园\n## 另一段内容\n10:00 位置未明", "2027-04-03");
     expect(day.events.map((e) => e.status)).toEqual(["actual", "planned", "uncertain"]);
