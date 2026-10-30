@@ -1,6 +1,7 @@
 export type HotelSelection = {
   eventId: string;
   evidence: string;
+  sourceName: string;
   label: string;
   context: string;
   sourceArea: string;
