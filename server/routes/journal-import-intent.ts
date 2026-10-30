@@ -5,16 +5,17 @@ import { streamSSE } from "hono/streaming";
 import { pool } from "../db/client";
 import { submitJournalJob, readJournalJob, cancelJournalJob, jobView, type JobInput } from "../itinerary/journal-import-jobs";
 import { Hono } from "hono";
-import { requireAtlasAccess } from "../authorization/atlas-access";
+import { AtlasAccessError, requireAtlasAccess } from "../authorization/atlas-access";
 import { serverConfig } from "../config";
 import { readJsonObject } from "./json-body";
-import { prepareAuthorizedJournalImport } from "../itinerary/journal-import-service";
+import { prepareAuthorizedJournalImport, journalProviderInfo } from "../itinerary/journal-import-service";
 import { hash } from "../admin/journal-import";
 
 /** One-sentence + attached source entry point, with the same use-case as offline administration. */
 export const journalImportIntentRoutes = new Hono();
 journalImportIntentRoutes.onError((error,c)=>{
   if(error instanceof HTTPException)return error.getResponse();
+  if(error instanceof AtlasAccessError)return c.json({error:error.code},error.status);
   const diagnostic=importDiagnostic(error,"llm-preview");
   const code=diagnostic.error;
   const status=code==="TARGET_NOT_FOUND"||code==="TARGET_PERMISSION_DENIED"?404:code==="INVALID_IMPORT"||code==="INVALID_TARGET"?400:code==="JOURNAL_JOB_BUSY"||code==="JOURNAL_JOB_CONFLICT"?409:"status" in diagnostic?diagnostic.status:500;
@@ -39,13 +40,13 @@ journalImportIntentRoutes.post("/journal-import", async c => {
 });
 
 journalImportIntentRoutes.get('/journal-import/provider', async c=>{
-  await requireAtlasAccess(c.req.raw,'update');
+  await requireAtlasAccess(c.req.raw,'update', {disableCookieCache:true});
   c.header('Cache-Control','private, no-store');
-  return c.json({available:serverConfig.intentDriver==='http-model'&&!!serverConfig.intentApiKey,baseUrl:serverConfig.intentBaseUrl,model:serverConfig.intentModel});
+  return c.json(journalProviderInfo());
 });
 journalImportIntentRoutes.post('/journal-import/jobs',async c=>{
   if(c.req.header('origin')!==serverConfig.appOrigin)return c.json({error:'JOURNAL_ORIGIN_REQUIRED'},403);
-  const {atlas,session}=await requireAtlasAccess(c.req.raw,'update');
+  const {atlas,session}=await requireAtlasAccess(c.req.raw,'update', {disableCookieCache:true});
   const body=await readJsonObject(()=>c.req.json());
   if(!body||typeof body.journeyId!=='string'||typeof body.requestId!=='string')return c.json({error:'INVALID_IMPORT'},400);
   const target={userId:session.user.id,email:session.user.email,atlasId:atlas.id,journeyId:body.journeyId};
@@ -53,7 +54,7 @@ journalImportIntentRoutes.post('/journal-import/jobs',async c=>{
   return c.json(await submitJournalJob(target,body.requestId,body as unknown as JobInput),202);
 });
 async function authorizedJob(c:Context) {
-  const {atlas,session}=await requireAtlasAccess(c.req.raw,'update');
+  const {atlas,session}=await requireAtlasAccess(c.req.raw,'update', {disableCookieCache:true});
   const id=c.req.param('jobId');
   if(!id||!/^[a-f0-9-]{36}$/i.test(id))throw new HTTPException(404);
   // Resolve the journey only within the authenticated account/Atlas; then recheck domain access.
@@ -77,7 +78,9 @@ journalImportIntentRoutes.get('/journal-import/jobs/:jobId/events',async c=>{
     // Reconnect observes the same durable job and never triggers a model request.
     const until=Date.now()+60_000;let previous='';
     while(!closed&&Date.now()<until){
-      const view=jobView(await readJournalJob(target,id));const value=JSON.stringify(view);
+      const authorized=await authorizedJob(c);
+      if(authorized.target.atlasId!==target.atlasId||authorized.target.userId!==target.userId)return;
+      const view=jobView(authorized.row);const value=JSON.stringify(view);
       const terminal=['completed','failed','cancelled','interrupted'].includes(view.status);
       if(value!==previous||terminal){await stream.writeSSE({event:view.status==='interrupted'?'failed':terminal?view.status:'progress',data:value});previous=value;}
       if(terminal)return;

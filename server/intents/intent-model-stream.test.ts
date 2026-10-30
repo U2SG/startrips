@@ -8,7 +8,7 @@ const request={systemPrompt:'test',userContent:'synthetic',schemaName:'test',sch
 const encoder=new TextEncoder();
 function run(chunks:string[],stream:Parameters<typeof requestIntentModelAnswer>[0]['stream']={},delay=0){
   let cancelled=false;
-  const fetcher=vi.fn(async()=>new Response(new ReadableStream({async start(c){for(const part of chunks){if(delay)await new Promise(r=>setTimeout(r,delay));if(cancelled)return;c.enqueue(encoder.encode(part));}if(!cancelled)c.close();},cancel(){cancelled=true;}}),{headers:{'content-type':'text/event-stream'}}));
+  const fetcher=vi.fn(async(_url:unknown,_init?:RequestInit)=>new Response(new ReadableStream({async start(c){for(const part of chunks){if(delay)await new Promise(r=>setTimeout(r,delay));if(cancelled)return;c.enqueue(encoder.encode(part));}if(!cancelled)c.close();},cancel(){cancelled=true;}}),{headers:{'content-type':'text/event-stream'}}));
   return {fetcher,result:requestIntentModelAnswer({baseUrl:'https://model.example.test/v1',model:'mock',apiKey:'test',timeoutMs:1,fetcher,stream},request)};
 }
 afterEach(()=>vi.useRealTimers());
@@ -35,4 +35,13 @@ it('cancels and cleans a stalled body',async()=>{
 });
 it('bounds stalled connection even if an adapter ignores abort',async()=>{
  await expect(requestIntentModelAnswer({baseUrl:'https://model.example.test',model:'mock',apiKey:'test',timeoutMs:1,fetcher:()=>new Promise(()=>{}),stream:{connectTimeoutMs:10}},request)).rejects.toMatchObject({code:'INTENT_CONNECT_TIMEOUT'});
+});
+it('pre-cancelled work sends nothing',async()=>{
+ const controller=new AbortController();controller.abort();const fetcher=vi.fn();
+ await expect(requestIntentModelAnswer({baseUrl:'https://model.example.test',model:'mock',apiKey:'test',timeoutMs:1,fetcher,stream:{signal:controller.signal}},request)).rejects.toMatchObject({code:'INTENT_CANCELLED'});expect(fetcher).not.toHaveBeenCalled();
+});
+it('rejects changed tool-call identity even when its combined JSON is valid',async()=>{
+ const first=frame({tool_calls:[{index:0,id:'call-a',function:{name:'stage',arguments:'{"ok":'}}]});
+ const second=frame({tool_calls:[{index:0,id:'call-b',function:{arguments:'true}'}}]},'tool_calls');
+ await expect(run([first,second,'data: [DONE]\n\n']).result).rejects.toMatchObject({code:'INTENT_STREAM_INVALID'});
 });

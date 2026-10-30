@@ -27,7 +27,11 @@ export async function previewImportedHotels(value: unknown, provider: unknown, d
   const search = dependencies?.search ?? createLocationSearch({ driver: serverConfig.locationSearchDriver, baseUrl: serverConfig.locationSearchBaseUrl,
     userAgent: serverConfig.locationSearchUserAgent, fallbackBaseUrl: serverConfig.locationSearchFallbackBaseUrl });
   const model = dependencies?.model ?? journalImportModel(provider);
-  if (!e.plan.provider || e.plan.provider.baseUrl !== model.baseUrl || e.plan.provider.model !== model.model) return fail("JOURNAL_PROVIDER_CHANGED");
+  if (!e.plan.provider) return fail("JOURNAL_PROVIDER_CHANGED");
+  if(e.plan.provider.baseUrl.startsWith("provider:")) {
+    const bound=journalImportModel(e.plan.provider);
+    if(bound.baseUrl!==model.baseUrl||bound.model!==model.model)return fail("JOURNAL_PROVIDER_CHANGED");
+  } else if(e.plan.provider.baseUrl!==model.baseUrl||e.plan.provider.model!==model.model)return fail("JOURNAL_PROVIDER_CHANGED");
   const scoped = { ...before, chapters: before.chapters.filter(c => e.plan.importedChapterIds.includes(c.id)) };
   const result = await proposeJournalHotels(scoped, journey.routePoints, model, search);
   const token = signHotelPlan({ atlasId: e.plan.target.atlasId, journeyId: journey.id, journalRevision: before.revision,

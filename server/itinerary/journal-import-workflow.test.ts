@@ -72,7 +72,7 @@ it("preserves negation and distinct undated import days", async () => {
   expect(new Set(second.chapters.flatMap(c => [c.id, ...c.events.map(e => e.id)])).size).toBe(4);
 });
 it("covers fourteen synthetic chapters with list-first clocks and preserves date-line order", async () => {
-  const blocks = Array.from({ length: 14 }, (_, i) => [`2028年6月${i + 1}日（虚构）`, "- 23:30 实际：她从甲城出发。", "- 18:20 实际：她抵达乙城。", "- 08:00 计划：虚构花园。", "- 09:00 取消：原酒店。"]);
+  const blocks = Array.from({ length: 14 }, (_, i) => [`2028年6月${i + 1}日`, "- 23:30 实际：她从甲城出发。", "- 18:20 实际：她抵达乙城。", "- 08:00 计划：虚构花园。", "- 09:00 取消：原酒店。"]);
   const source = blocks.flat().join("\n");
   const response = { chapters: blocks.map((lines, i) => ({ firstLine: i * 5, lastLine: i * 5 + 4, date: `2028-06-${String(i + 1).padStart(2, "0")}`, dateEnd: null, dateEvidence: lines[0],
     events: lines.slice(1).map((evidence, j) => ({ line: i * 5 + j + 1, evidence, status: ["actual", "actual", "planned", "cancelled"][j], localDate: null, dateEvidence: null,
