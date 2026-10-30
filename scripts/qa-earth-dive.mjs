@@ -25,6 +25,7 @@
 // particle Earth were visibly a different scale at the ownership edge, which is
 // exactly the mistake this lane exists to make impossible.
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { matchesCameraHandback } from "./qa-camera-handback.mjs";
 import { acknowledgedDiveWheel, hasPublishedDiveReveal, nextDiveFixtureInput } from "./qa-earth-dive-input.mjs";
 
 const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
@@ -1203,15 +1204,13 @@ try {
     policyTransitionFailures.push(`hard policy left detail DOM mounted: ${JSON.stringify(policyDisabled)}`);
   }
   if (observed.length === 2 && observed.every(Number.isFinite)) {
-    const [lon, lat] = observed;
-    if (Math.abs((policyDisabled.cameraHandbackLat ?? Number.NaN) - lat) > 0.0001
-      || Math.abs((policyDisabled.cameraHandbackLon ?? Number.NaN) - lon) > 0.0001) {
+    if (!matchesCameraHandback(observed, policyDisabled)) {
       policyTransitionFailures.push(`particle handback did not preserve the latest detail observation: ${JSON.stringify({ observed, disabled: policyDisabled })}`);
     }
   } else {
     policyTransitionFailures.push(`detail owner did not publish a geographic observation at policy activation: ${policyObservationAtActivation}`);
   }
-  if (!(policyDisabled.cameraHandbackErrorPx <= ANCHOR_TOLERANCE_PX)) {
+  if (!Number.isFinite(policyDisabled.cameraHandbackErrorPx) || !(policyDisabled.cameraHandbackErrorPx <= ANCHOR_TOLERANCE_PX)) {
     policyTransitionFailures.push(`particle camera handback missed the observed center by ${policyDisabled.cameraHandbackErrorPx}px`);
   }
   if (policyDefaultHeld.stage !== "particle" || policyDefaultHeld.mapDomCount !== 0) {
