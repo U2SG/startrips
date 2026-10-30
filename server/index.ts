@@ -1,3 +1,4 @@
+import { startJournalImportWorker } from "./itinerary/journal-import-jobs";
 import { serve } from "@hono/node-server";
 import { app } from "./app";
 import { serverConfig } from "./config";
@@ -16,6 +17,7 @@ startPreviewReconciler();
 startPreviewBackfill();
 startCoverRevealReconciler();
 startMapStyleCacheSweeper();
+const journalImports = startJournalImportWorker();
 const routeSnapping = startRouteSnappingReconciler();
 
 const server = serve(
@@ -35,7 +37,7 @@ function shutdown(signal: string) {
   shuttingDown = true;
   console.info(`${signal} received; draining connections`);
   // Abort the in-flight snapping step and let it settle before the pool closes.
-  const snappingDrained = routeSnapping.stop();
+  const snappingDrained = Promise.all([routeSnapping.stop(), journalImports.stop()]);
   server.close(() => {
     void snappingDrained.then(() => pool.end()).finally(() => process.exit(0));
   });

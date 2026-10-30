@@ -110,7 +110,7 @@ export async function prepareJournalImport(input: { sentence: string; source: st
     const heading = lines[c.firstLine];
     const datePrefix = /^\s*(?:#{1,6}\s*)?(?:(?:\d{4})[-年/.])?\d{1,2}[-月/.]\d{1,2}(?:日)?(?:\s*[–—~～至-]\s*\d{1,2}日)?/;
     const headingTail = heading.replace(datePrefix, "").trim();
-    const headingOnly = datePrefix.test(heading) && (/^\s*#{1,6}\s/.test(heading) || !headingTail || /^(?:（[^）]*）|\([^)]*\))$/.test(headingTail));
+    const headingOnly = datePrefix.test(heading) && (!headingTail || /^(?:（(?:星期|周)[一二三四五六日天]）|\((?:星期|周)[一二三四五六日天]\))$/.test(headingTail));
     const dates = groundedDates(c.dateEvidence, heading, input.fallbackDate.slice(0, 4));
     if (c.date !== null && (!dates || dates[0] !== c.date || (dates[1] ?? null) !== c.dateEnd)) throw bad();
     if (c.date === null && c.dateEnd !== null) throw bad();

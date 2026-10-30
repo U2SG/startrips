@@ -1268,3 +1268,22 @@ export const journeyJournals = pgTable("journey_journals", {
   lastWriteDigest: text("last_write_digest"),
   chapters: jsonb("chapters").$type<JournalChapter[]>().notNull().default([]),
 });
+
+/** Private, short-lived model preview state; never exposed through public journey reads. */
+export const journalImportJobs = pgTable("journal_import_jobs", {
+  id: uuid("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => authUser.id, { onDelete: "cascade" }),
+  atlasId: uuid("atlas_id").notNull().references(() => atlases.id, { onDelete: "cascade" }),
+  journeyId: uuid("journey_id").notNull().references(() => journeys.id, { onDelete: "cascade" }),
+  inputDigest: text("input_digest").notNull(),
+  payload: jsonb("payload"),
+  status: text("status").notNull().default("queued"),
+  phase: text("phase").notNull().default("queued"),
+  characters: integer("characters").notNull().default(0),
+  chunks: integer("chunks").notNull().default(0),
+  lease: uuid("lease"),
+  envelope: jsonb("envelope"),
+  error: jsonb("error"),
+  createdAt: timestamp("created_at", {withTimezone:true}).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", {withTimezone:true}).notNull().defaultNow(),
+}, t=>[index("journal_import_jobs_status_idx").on(t.status,t.createdAt)]);

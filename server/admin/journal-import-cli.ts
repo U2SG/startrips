@@ -1,3 +1,4 @@
+import { submitJournalJob, readJournalJob, cancelJournalJob, jobView } from "../itinerary/journal-import-jobs";
 import { importDiagnostic } from "./journal-import-diagnostic";
 import { previewImportedHotels, applyImportedHotels } from "./journal-hotel-import";
 import { prepareAuthorizedJournalImport } from "../itinerary/journal-import-service";
@@ -20,7 +21,17 @@ const timer = setTimeout(() => { process.stderr.write('{"error":"DEADLINE_OUTCOM
 const [command, ...args] = process.argv.slice(2);
 try {
   let result: unknown;
-  if (command === "inspect" && args.length === 0) {
+  if (command === "llm-job-submit" && args.length === 1) {
+    const request=await input();
+    const ref={target:request.target,...await submitJournalJob(request.target,request.requestId,request)};
+    await writePrivate(args[0],ref);result={jobId:ref.jobId,stage:"queued"};
+  } else if (["llm-job-status","llm-job-cancel","llm-job-export"].includes(command) && args.length === (command==="llm-job-export"?2:1)) {
+    const ref=await readPrivate(args[0]) as {target:import("./journal-import").Target;jobId:string};
+    const row=await readJournalJob(ref.target,ref.jobId);
+    if(command==="llm-job-cancel"){const view=await cancelJournalJob(ref.target,ref.jobId);result={jobId:view.jobId,status:view.status};}
+    else if(command==="llm-job-export"){if(row.status!=="completed")throw new Error("JOURNAL_JOB_NOT_COMPLETED");await writePrivate(args[1],row.envelope);result={jobId:ref.jobId,planDigest:hash(row.envelope),stage:"journal-preview"};}
+    else {const {envelope: _privatePlan,...view}=jobView(row) as ReturnType<typeof jobView> & {envelope?:unknown};result=view;}
+  } else if (command === "inspect" && args.length === 0) {
     result = { candidates: await inspectAccount((await input()).email) };
   } else if ((command === "preview" || command === "llm-preview") && args.length === 1) {
     const request = await input();

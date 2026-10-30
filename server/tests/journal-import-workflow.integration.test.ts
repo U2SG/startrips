@@ -1,3 +1,4 @@
+import { submitJournalJob, runJournalJob, readJournalJob, cancelJournalJob, jobView } from "../itinerary/journal-import-jobs";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -230,4 +231,33 @@ it("hotel stage validates signed candidates, backs up before writing, and repeat
   expect((await applyImportedHotels(checkpoint, hash(checkpoint), backup)).state).toBe("hotels-already-applied"); later.mockRestore();
   await db.update(member).set({ role: "viewer" }).where(eq(member.userId, owner.userId));
   await expect(applyImportedHotels(checkpoint, hash(checkpoint), backup)).rejects.toThrow("TARGET_PERMISSION_DENIED");
+});
+
+it("durable streaming job shares validated use-case, resumes without another provider call, and never writes a journal",async()=>{
+  const j=await createJourneyForAtlas(owner.atlasId,owner.userId,{title:"stream fixture",startedOn:"2028-06-01",endedOn:"2028-06-09",note:null,lightColor:"#ffffff",routePoints:[]});
+  const target={...owner,email:authUserEmails[0],journeyId:j!.id};
+  const input={source,sentence:"导入原稿",fallbackDate:"2028-06-01",provider};const id=randomUUID();
+  const before=await readDailyJournal(j!.id,owner.atlasId);let calls=0;
+  journalImportDependencies.fetcher=async(url,init)=>{
+    calls++;expect(JSON.parse(init!.body as string).stream).toBe(true);
+    const value=await (await model.fetcher(url,init)).json();const call=value.choices[0].message.tool_calls[0];
+    const chunks=[JSON.stringify({choices:[{index:0,delta:{tool_calls:[{index:0,id:"fixture-call",type:"function",function:{name:call.function.name,arguments:call.function.arguments.slice(0,20)}}]},finish_reason:null}]}),JSON.stringify({choices:[{index:0,delta:{tool_calls:[{index:0,function:{arguments:call.function.arguments.slice(20)}}]},finish_reason:"tool_calls"}]})];
+    return new Response(chunks.map(c=>`data: ${c}\n\n`).join("")+"data: [DONE]\n\n",{headers:{"content-type":"text/event-stream"}});
+  };
+  try{
+    expect(await submitJournalJob(target,id,input)).toEqual({jobId:id});
+    expect(await submitJournalJob(target,id,input)).toEqual({jobId:id});
+    await expect(submitJournalJob(target,id,{...input,source:source+"x"})).rejects.toThrow("JOURNAL_JOB_CONFLICT");
+    await expect(submitJournalJob(target,randomUUID(),input)).rejects.toThrow("JOURNAL_JOB_BUSY");
+    await Promise.all([runJournalJob(),runJournalJob()]);
+    const row=await readJournalJob(target,id);expect(row.status).toBe("completed");expect(row.payload).toBeNull();expect(calls).toBe(1);
+    expect(validateEnvelope(row.envelope).plan.after.chapters).toHaveLength(1);
+    expect((jobView(row) as any).planDigest).toBe(hash(row.envelope));
+    await runJournalJob();expect(calls).toBe(1);
+    expect((await cancelJournalJob(target,id)).status).toBe("completed");
+    await expect(readJournalJob({...target,userId:other.userId,email:authUserEmails[1]},id)).rejects.toThrow();
+    expect(await readDailyJournal(j!.id,owner.atlasId)).toEqual(before);
+    const cancelled=randomUUID();await submitJournalJob(target,cancelled,input);await cancelJournalJob(target,cancelled);await runJournalJob();expect(calls).toBe(1);
+    expect((await readJournalJob(target,cancelled)).envelope).toBeNull();
+  }finally{journalImportDependencies.fetcher=model.fetcher;}
 });

@@ -8,6 +8,7 @@
  * that outlives `timeoutMs` is a 504.
  */
 
+import { requestModelStream, type ModelStreamOptions } from "./intent-model-stream";
 import type { ShareIntentError } from "./create-share-intent";
 
 export type IntentModelOptions = {
@@ -16,6 +17,7 @@ export type IntentModelOptions = {
   model: string;
   timeoutMs: number;
   fetcher?: typeof fetch;
+  stream?: ModelStreamOptions;
 };
 
 export function isDashScope(baseUrl: string) {
@@ -43,18 +45,7 @@ export async function requestIntentModelAnswer(
 ): Promise<unknown> {
   const { baseUrl, apiKey, model, timeoutMs } = options;
   const fetcher = options.fetcher ?? fetch;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    let response: Response;
-    try {
-      response = await fetcher(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
+  const body = {
           model,
           messages: [
             { role: "system", content: request.systemPrompt },
@@ -75,7 +66,20 @@ export async function requestIntentModelAnswer(
               schema: request.schema,
             },
           } }),
-        }),
+        };
+  if (options.stream) return requestModelStream(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, apiKey, body, request.toolName, options.stream, fetcher, request.fail);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    let response: Response;
+    try {
+      response = await fetcher(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
     } catch (error) {
