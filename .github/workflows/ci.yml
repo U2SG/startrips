@@ -291,13 +291,14 @@ jobs:
               soundtrack-ducking::pnpm qa:soundtrack-ducking
               journey-book-3d-turns::pnpm qa:journey-book-3d-turns
           - name: labels-recovery
-            suites: "|city-label-anchoring|recovery-surfaces|mobile-native|journey-book-3d-last-spread|journey-book-3d-phone|"
+            suites: "|city-label-anchoring|recovery-surfaces|mobile-native|journey-book-3d-last-spread|journey-book-3d-phone|journal-hotels|"
             commands: |
               city-label-anchoring::pnpm qa:city-label-anchoring
               recovery-surfaces::pnpm qa:recovery-surfaces
               mobile-native::pnpm qa:mobile-native
               journey-book-3d-last-spread::pnpm qa:journey-book-3d-last-spread
               journey-book-3d-phone::pnpm qa:journey-book-3d-phone
+              journal-hotels::pnpm qa:journal-hotels
           - name: reveal-share
             suites: "|cover-reveal-opening|cover-reveal|owner-share|playback-map-bridge|"
             commands: |
