@@ -104,3 +104,35 @@ Real-provider acceptance is an operator step after mock/review/CI: validate the
 configured provider identity, run only preview stages first, inspect full private
 output (including ambiguous/mixed cases), and apply solely within the explicitly
 authorized target and data scope. The repository fixtures are fictional.
+
+## Failure diagnostics and long-input acceptance
+
+CLI failure stderr is one JSON object with allowlisted `error`, command `stage`,
+`kind` (`transport`, `schema`, `configuration`, `operation`) and, for model errors,
+the application's mapped HTTP `status`. It never prints exception messages,
+causes, provider response bodies, private source, keys or URLs. In journal
+extraction, `INTENT_TIMEOUT`, `INTENT_UNREACHABLE` and `INTENT_FAILED` remain
+transport errors; `JOURNAL_IMPORT_MALFORMED` means the response could not satisfy
+the tool/schema/evidence boundary. A schema failure does not imply a timeout.
+The status is the application's mapping, not the provider's raw HTTP status.
+
+An earlier real acceptance attempt returned only `IMPORT_FAILED`; that lost
+cause cannot be reconstructed from elapsed time. This diagnostic repair does not
+claim the provider extraction succeeded. Run at most one explicitly authorized
+new preview with the repaired bundle; inspect its stable code and absence/presence
+of a plan before deciding the next step. No automatic retry or timeout increase.
+
+Whole-source extraction still uses one response. Hundreds of events, including
+verbatim evidence and reading fields, can exceed a short provider latency/output
+budget even when input bytes are small. Mock tests do not establish real-provider
+throughput. A future bounded extraction checkpoint should bind the full source
+hash, exact target, provider, before revision and global line indexes; retain the
+full date-heading context; issue one bounded chapter/window request per invocation;
+store validated results privately; and seal a final plan only after proving complete,
+nonoverlapping coverage/order. A failed window must not erase earlier validated
+windows, silently resubmit them, or save a partial journal. Date-range, midnight,
+and international date-line context must cross boundaries without inferred dates.
+Heading/window detection may select source spans, but may not replace model fact
+classification with a regular-expression import. This resumable extraction layer
+is not implemented by the diagnostic repair; current checkpoints resume the
+journal/hotel stages, not partial model responses.

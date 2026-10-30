@@ -1,3 +1,4 @@
+import { importDiagnostic } from "./journal-import-diagnostic";
 import { previewImportedHotels, applyImportedHotels } from "./journal-hotel-import";
 import { prepareAuthorizedJournalImport } from "../itinerary/journal-import-service";
 import { applyImport, checkRollback, readImportState, hash, inspectAccount, previewImport, type Envelope } from "./journal-import";
@@ -16,8 +17,8 @@ async function input() {
 }
 // Hard operational bound. A killed apply has UNKNOWN outcome; inspect/replay the same plan.
 const timer = setTimeout(() => { process.stderr.write('{"error":"DEADLINE_OUTCOME_UNKNOWN"}\n'); process.exit(2); }, 70_000);
+const [command, ...args] = process.argv.slice(2);
 try {
-  const [command, ...args] = process.argv.slice(2);
   let result: unknown;
   if (command === "inspect" && args.length === 0) {
     result = { candidates: await inspectAccount((await input()).email) };
@@ -52,8 +53,7 @@ try {
   } else throw new Error("INVALID_ARGUMENTS");
   process.stdout.write(JSON.stringify(result) + "\n");
 } catch (error) {
-  const message = error instanceof Error ? error.message : "FAILED";
-  // Never print source-containing parser errors, SQL values, paths, or connection details.
-  process.stderr.write(JSON.stringify({ error: /^[A-Z_]+$/.test(message) ? message : "IMPORT_FAILED" }) + "\n");
+  // Stable allowlisted metadata only; never serialize messages, causes or provider bodies.
+  process.stderr.write(JSON.stringify(importDiagnostic(error, command)) + "\n");
   process.exitCode = 1;
 } finally { await pool.end(); clearTimeout(timer); }

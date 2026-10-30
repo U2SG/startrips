@@ -123,6 +123,46 @@ it("one-sentence API authenticates target/provider before sending source and sha
   expect(JSON.stringify(model.fetcher.mock.calls)).not.toContain("private edited reading");
   await expect(previewImportedHotels(envelope, provider, { model, search })).rejects.toThrow("JOURNAL_STAGE_NOT_CURRENT");
 });
+it.each([
+  ["timeout", "INTENT_TIMEOUT", "transport", 504],
+  ["body-timeout", "INTENT_TIMEOUT", "transport", 504],
+  ["body-disconnect", "INTENT_UNREACHABLE", "transport", 502],
+  ["unreachable", "INTENT_UNREACHABLE", "transport", 502],
+  ["http", "INTENT_FAILED", "transport", 502],
+  ["schema", "JOURNAL_IMPORT_MALFORMED", "schema", 502],
+] as const)("actual CLI preserves %s diagnosis without private output or writes", async (mode, code, kind, status) => {
+  let calls = 0;
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) { /* consume private input without logging it */ }
+    calls++;
+    if (mode === "timeout") return;
+    if (mode === "body-timeout" || mode === "body-disconnect") {
+      response.writeHead(200, { "content-type": "application/json" }); response.flushHeaders(); response.write("{");
+      if (mode === "body-disconnect") setImmediate(() => response.destroy());
+      return;
+    }
+    if (mode === "unreachable") { request.socket.destroy(); return; }
+    response.statusCode = mode === "http" ? 503 : 200;
+    response.end(JSON.stringify({ privateProviderBody: source }));
+  });
+  await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
+  const baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`;
+  const directory = await mkdtemp(join(tmpdir(), "llm-journal-error-")), path = join(directory, "plan.json");
+  const before = await readDailyJournal(journeyId, owner.atlasId);
+  try {
+    const result = await new Promise<{ code: number | null; out: string; err: string }>((done, reject) => {
+      const child = spawn(process.execPath, ["--import", "tsx", process.env.JOURNAL_ADMIN_TEST_ENTRY ?? resolve("server/admin/journal-import-cli.ts"), "llm-preview", path],
+        { env: { ...process.env, INTENT_DRIVER: "http-model", INTENT_BASE_URL: baseUrl, INTENT_MODEL: "mock", INTENT_API_KEY: "mock-only", INTENT_TIMEOUT_MS: "1000" } });
+      let out = "", err = ""; child.stdout.on("data", d => out += d); child.stderr.on("data", d => err += d);
+      child.on("error", reject); child.on("close", code => done({ code, out, err }));
+      child.stdin.end(JSON.stringify({ target: { userId: owner.userId, email: authUserEmails[0], atlasId: owner.atlasId, journeyId }, sentence: "导入并关联酒店", source, fallbackDate: "2028-06-01", provider: { baseUrl, model: "mock" } }));
+    });
+    expect(result.code).toBe(1); expect(result.out).toBe("");
+    expect(JSON.parse(result.err)).toEqual({ error: code, stage: "llm-preview", kind, status });
+    expect(calls).toBe(1); await expect(readFile(path)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readDailyJournal(journeyId, owner.atlasId)).toEqual(before);
+  } finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); await rm(directory, { recursive: true, force: true }); }
+});
 it("actual admin CLI uses the same model use-case through a local mock provider", async () => {
   const server = createServer(async (request, response) => {
     let body = ""; for await (const chunk of request) body += chunk;

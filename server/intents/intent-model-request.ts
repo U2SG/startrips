@@ -91,7 +91,13 @@ export async function requestIntentModelAnswer(
         `The ${request.providerName} answered ${response.status}`,
       );
     }
-    const payload = await response.json().catch(() => null) as {
+    const payload = await response.json().catch((error: unknown) => {
+      // A response header is not a completed response: preserve abort/network
+      // failures while reading the body instead of misreporting schema failure.
+      if (controller.signal.aborted) throw error;
+      if (error instanceof SyntaxError) return null;
+      throw request.fail("INTENT_UNREACHABLE", `The ${request.providerName} response could not be read`);
+    }) as {
       choices?: Array<{ message?: { content?: unknown; tool_calls?: Array<{ type?: string; function?: { name?: string; arguments?: unknown } }> } }>;
     } | null;
     const message = payload?.choices?.[0]?.message;

@@ -18,7 +18,10 @@ Understand bullets followed by clocks then labels, labels followed by clocks, pr
 Dates must be explicit source dates, normalized YYYY-MM-DD using the supplied fallback year only for an omitted year. A date-range heading stays ONE chapter with date/dateEnd and exact dateEvidence; never fabricate daily allocation. Without a grounded chapter date use null. localDate must have its OWN explicit dateEvidence in that event; never infer next day from midnight or clock order. No UTC/time zones may be invented; preserve international date-line narrative order.
 Time/timeEnd are local HH:mm; timeEvidence must be the exact complete single clock or range substring. A range must include BOTH endpoints. Invalid, approximate or absent clocks stay null, not guessed. Keep ranges crossing midnight without inventing dates.
 Reading is an OPTIONAL extractive suggestion (empty string is allowed): copy the WHOLE source line, never crop negation, paraphrase or add new lived facts. Do not add weather, emotion, roads, coordinates, visits or measured quantities. Missing or conflicting information becomes questions. No account IDs, place IDs, coordinates or arbitrary HTTP/SQL. Return only the named tool call.`;
-const bad = () => new ShareIntentError("JOURNAL_IMPORT_MALFORMED", "模型草稿缺少原文证据或结构无效；没有写入。", 502);
+class JournalImportError extends ShareIntentError {
+  override readonly stage = "journal-import";
+}
+const bad = () => new JournalImportError("JOURNAL_IMPORT_MALFORMED", "模型草稿缺少原文证据或结构无效；没有写入。", 502);
 const id = (s: string) => "ji_" + createHash("sha256").update(s).digest("hex").slice(0, 32);
 const clock = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 const statuses = new Set(["actual", "planned", "cancelled", "uncertain"]);
@@ -65,7 +68,7 @@ export async function prepareJournalImport(input: { sentence: string; source: st
     || !input.source.trim() || input.source.length > JOURNAL_MAX_TEXT || !isPersistedCalendarDate(input.fallbackDate)) throw bad();
   const source = input.source.replace(/\r\n?/g, "\n"), lines = source.split("\n");
   const answer = await requestIntentModelAnswer(model, { toolName: "stage_journal_import", systemPrompt: JOURNAL_IMPORT_PROMPT,
-    schemaName: "journal_import", schema: JOURNAL_IMPORT_SCHEMA, providerName: "journal import model", fail: () => bad(),
+    schemaName: "journal_import", schema: JOURNAL_IMPORT_SCHEMA, providerName: "journal import model", fail: (code, message, status) => new JournalImportError(code, message, status),
     userContent: JSON.stringify({ sentence: input.sentence, fallbackYear: input.fallbackDate.slice(0, 4), lines: lines.map((text, line) => ({ line, text })) }),
   }) as { chapters?: unknown } | null;
   if (!answer || !Array.isArray(answer.chapters) || !answer.chapters.length || answer.chapters.length > 120) throw bad();
