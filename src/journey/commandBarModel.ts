@@ -18,8 +18,6 @@ import { MAX_SHARE_JOURNEYS, SHARE_EXPIRY_PRESETS } from "./shareLinks";
 export const COMMAND_BAR_CUE_DELAY_MS = 300;
 /** From here the wait says what it is doing and can be stopped. */
 export const COMMAND_BAR_STAGED_DELAY_MS = 2_000;
-/** The client's own cap: two provider stages plus their margins. */
-export const COMMAND_BAR_TIMEOUT_MS = 65_000;
 /** The longest sentence any routed intent accepts (the Composer's own bound). */
 export const MAX_COMMAND_TEXT_LENGTH = 500;
 
@@ -156,9 +154,6 @@ export function commandBarFailure(error: unknown): CommandBarFailure {
   }
   return { text: "暂时无法理解这句话，请重试。" + manual, refetchCapabilities: false };
 }
-
-/** Said when the client's own cap ends a wait. */
-export const COMMAND_BAR_TIMEOUT_TEXT = "等待太久，已停止。" + commandBarManualEntry(null);
 
 /**
  * A share proposal narrowed to the Journeys this view lists, each once, in

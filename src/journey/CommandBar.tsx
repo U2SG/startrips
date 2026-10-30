@@ -3,8 +3,6 @@ import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
 import {
   COMMAND_BAR_NOTHING_HERE,
   COMMAND_BAR_STORY_NOTHING_HERE,
-  COMMAND_BAR_TIMEOUT_MS,
-  COMMAND_BAR_TIMEOUT_TEXT,
   commandBarFailure,
   commandBarLatencyStage,
   commandBarManualEntry,
@@ -63,7 +61,6 @@ export function CommandBar({
   const sequenceRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const submittedRef = useRef("");
-  const timedOutRef = useRef(0);
   const cardRef = useRef(card);
   cardRef.current = card;
   const pendingRef = useRef(pending);
@@ -151,10 +148,6 @@ export function CommandBar({
     abortRef.current = controller;
     submittedRef.current = sentence;
     setPending({ sequence, startedAt: performance.now() });
-    const timer = window.setTimeout(() => {
-      timedOutRef.current = sequence;
-      controller.abort();
-    }, COMMAND_BAR_TIMEOUT_MS);
     try {
       const answer = await routeCommand(sentence, {
         surface: context.surface,
@@ -174,14 +167,13 @@ export function CommandBar({
     } catch (error) {
       if (sequence !== sequenceRef.current) return;
       if (controller.signal.aborted) {
-        setFailure(timedOutRef.current === sequence ? COMMAND_BAR_TIMEOUT_TEXT : null);
+        setFailure(null);
         return;
       }
       const result = commandBarFailure(error);
       setFailure(result.text);
       if (result.refetchCapabilities) onCapabilitiesStale();
     } finally {
-      window.clearTimeout(timer);
       if (sequence === sequenceRef.current) {
         setPending(null);
         abortRef.current = null;
