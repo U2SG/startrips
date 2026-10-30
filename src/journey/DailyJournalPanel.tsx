@@ -7,6 +7,8 @@ import type { Journey, JourneyMediaAsset } from "./types";
 import { useReaderReads } from "./journeyReaderMedia";
 import "../styles/daily-journal.css";
 
+import type { HotelPreview } from "./journalHotels";
+
 const statusLabels: Record<JournalStatus, string> = { actual: "实际", planned: "计划", cancelled: "取消", uncertain: "待确认" };
 
 function JournalMedia({ assets }: { assets: JourneyMediaAsset[] }) {
@@ -21,8 +23,8 @@ function JournalMedia({ assets }: { assets: JourneyMediaAsset[] }) {
   })}</div>;
 }
 
-export function DailyJournalPanel({ journey, client, onClose, onPoint }: {
-  journey: Journey; client: DailyJournalClient; onClose: () => void; onPoint: (id: string) => void;
+export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourneyChanged }: {
+  journey: Journey; client: DailyJournalClient; onClose: () => void; onPoint: (id: string) => void; onJourneyChanged?: (journey: Journey) => void;
 }) {
   const [saved, setSaved] = useState<DailyJournal | null>(null);
   const [draft, setDraft] = useState<DailyJournal | null>(null);
@@ -31,13 +33,14 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint }: {
   const [busy, setBusy] = useState<string | null>("读取");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [hotels, setHotels] = useState<HotelPreview | null>(null);
   const [confirmClose, setConfirmClose] = useState(false);
   const active = useRef<AbortController | null>(null);
   const requestClose = () => { if (busy === "保存") return; if (draft || source) setConfirmClose(true); else onClose(); };
   const root = useModalFocus<HTMLDivElement>(requestClose);
   useEffect(() => {
     const controller = new AbortController(); active.current = controller;
-    setSaved(null); setDraft(null); setError(""); setBusy("读取");
+    setSaved(null); setDraft(null); setHotels(null); setError(""); setBusy("读取");
     client.read(journey.id, controller.signal).then((journal) => {
       if (!controller.signal.aborted) setSaved(journal);
     }).catch((e: unknown) => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "读取失败"); })
@@ -80,8 +83,25 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint }: {
             setDraft({ ...base, chapters }); setError(""); setNotice(`新增 ${chapters.length - base.chapters.length} 个章节；请检查日期、正文和事件状态后确认保存。`);
           } catch (e) { setError(e instanceof Error ? e.message : "无法生成预览"); }
         }}>生成导入预览</button>
-        {!draft ? <button disabled={!!busy} onClick={() => setDraft(structuredClone(saved))}>编辑已有手记</button> : null}
+        {!draft ? <button disabled={!!busy || !!hotels} onClick={() => setDraft(structuredClone(saved))}>编辑已有手记</button> : null}
       </section>
+      {!draft && !source && client.previewHotels && client.applyHotels ? <section aria-label="酒店工具导入">
+        <p>AI 向已配置模型发送原文事件，用酒店名称与地区检索地点。先预览再确认；不推测坐标，不改变正文或当地时间。</p>
+        <button disabled={!!busy} onClick={() => run("检索酒店", async signal => {
+          setHotels(null);
+          const preview = await client.previewHotels!(journey.id, signal);
+          if (!signal.aborted) setHotels(preview);
+        })}>用 AI 查找已入住酒店</button>
+        {hotels ? <><ul>{hotels.hotels.map(h => <li key={h.eventId}><strong>{h.label}</strong> · {h.context}<p>原文：{h.evidence}</p><span>{h.existingPointId ? "复用已有地点" : "新增住宿地点"}；确认后记为实际入住</span></li>)}</ul>
+          {hotels.questions.map((q, i) => <p key={i}>{q}</p>)}
+          {!hotels.hotels.length ? <p>没有可可靠确认的住宿地点；未写入。</p> : null}
+          <button disabled={!!busy || !hotels.hotels.length} onClick={() => run("保存", async signal => {
+            const result = await client.applyHotels!(journey.id, hotels.token, signal);
+            if (!signal.aborted) { setSaved(result.journal); setHotels(null); onJourneyChanged?.(result.journey); setNotice("酒店地点及手记关联已保存。"); }
+          })}>确认批量添加及关联</button>
+          <button disabled={busy === "保存"} onClick={() => { active.current?.abort(); active.current = null; setBusy(null); setHotels(null); }}>取消酒店预览</button>
+        </> : null}
+      </section> : null}
       {draft ? <div className="daily-journal__toolbar">
         <strong>未保存预览</strong>
         <button disabled={!!busy || !draft.chapters.length} onClick={() => run("整理建议", async (signal) => {

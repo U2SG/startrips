@@ -5016,6 +5016,7 @@ export function LivingAtlasApp({
             onClose={() => closeJourneyStory(null)}
             onNavigate={navigateStoryJourney}
             onOpenClassic={openClassicStory}
+            onJourneyUpdated={canEditJourney ? (updated) => setJourneys((current) => mergeJourney(current, updated)) : undefined}
           />
         </Suspense>
       ) : storyJourneyId && storyReader === "book-3d" ? (

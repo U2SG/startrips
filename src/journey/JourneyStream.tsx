@@ -83,6 +83,7 @@ function JourneyStreamContent({
   onOpenJournal,
 }: {
   onOpenJournal?: () => void;
+  onJourneyUpdated?: (journey: Journey) => void;
   journeys: readonly Journey[];
   journeyId: string;
   routePointId?: string | null;
@@ -808,11 +809,13 @@ export function JourneyStream(props: Parameters<typeof JourneyStreamContent>[0])
   const { dailyJournal } = useAtlasView();
   const [openFor, setOpenFor] = useState<string | null>(null);
   const [point, setPoint] = useState<{ journeyId: string; id: string } | null>(null);
-  const journey = props.journeys.find((j) => j.id === props.journeyId);
+  const [updated, setUpdated] = useState<Journey | null>(null);
+  const journeys = props.journeys.map(j => updated && j.id === updated.id && j.atlasId === updated.atlasId && j.revision < updated.revision ? updated : j);
+  const journey = journeys.find((j) => j.id === props.journeyId);
   const scope = journey ? `${journey.atlasId}:${journey.id}` : null;
   if (dailyJournal && journey && openFor === scope) return <DailyJournalPanel
-    key={scope} journey={journey} client={dailyJournal} onClose={() => setOpenFor(null)}
+    key={scope} journey={journey} client={dailyJournal} onJourneyChanged={(next) => { setUpdated(next); props.onJourneyUpdated?.(next); }} onClose={() => setOpenFor(null)}
     onPoint={(id) => { setPoint({ journeyId: journey.id, id }); setOpenFor(null); }} />;
-  return <JourneyStreamContent {...props} initialAssetId={point?.journeyId === props.journeyId ? null : props.initialAssetId} routePointId={point?.journeyId === props.journeyId ? point.id : props.routePointId}
+  return <JourneyStreamContent {...props} journeys={journeys} initialAssetId={point?.journeyId === props.journeyId ? null : props.initialAssetId} routePointId={point?.journeyId === props.journeyId ? point.id : props.routePointId}
     onOpenJournal={dailyJournal && scope ? () => setOpenFor(scope) : undefined} />;
 }

@@ -7,6 +7,8 @@ import { serverConfig } from "../config";
 import { atlases, journeys, journeyJournals, mediaAssets } from "../db/app-schema";
 import { organization as authOrganizations, rateLimit, user as authUsers, member } from "../db/auth-schema";
 import { db, pool } from "../db/client";
+import { signHotelPlan } from "../itinerary/journal-hotel-tools";
+import { writeDailyJournal } from "../repositories/daily-journal-repository";
 import { createJourneyForAtlas } from "../repositories/journey-repository";
 import { previewJournalImport, type DailyJournal } from "../../src/journey/dailyJournal";
 const TEST_ORIGIN = "http://127.0.0.1:5173";
@@ -181,6 +183,134 @@ describe("private daily journal API and PostgreSQL", () => {
       expect(body).not.toHaveProperty("document");
       expect(await (await request()).json()).toEqual(before);
     } finally { upstream.mockRestore(); Object.assign(serverConfig, prior); }
+  });
+  it("exposes hotel preview through the authenticated standard tool endpoint without writing", async () => {
+    const j = await createJourneyForAtlas(owner.atlasId, owner.userId, { title: "工具预览", startedOn: "2027-05-01", endedOn: null, note: "", lightColor: "#ffffff", routePoints: [{ label: "星桥酒店", regionContext: "虚构城，中心路", latitude: 10, longitude: 20, isStop: true, occurredAt: null }] });
+    const cs = previewJournalImport("2027-05-01\n实际：她在虚构城入住星桥酒店。", "2027-05-01");
+    await writeDailyJournal(j!.id, owner.atlasId, 0, cs);
+    const prior = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel };
+    Object.assign(serverConfig, { intentDriver: "http-model", intentBaseUrl: "https://model.example.test/v1", intentApiKey: "mock-only", intentModel: "mock" });
+    const upstream = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      expect(url).toBe("https://model.example.test/v1/chat/completions");
+      const body = JSON.parse(init!.body as string), name = body.tool_choice.function.name;
+      const args = name === "search_hotels" ? { stays: [{ eventId: cs[0].events[0].id, evidence: "在虚构城入住星桥酒店", name: "星桥酒店", area: "虚构城" }], questions: [] }
+        : { matches: [{ eventId: cs[0].events[0].id, candidateId: `existing:${j!.routePoints[0].id}` }] };
+      return Response.json({ choices: [{ message: { tool_calls: [{ type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
+    });
+    const preview = (cookie: string) => app.request(`${TEST_ORIGIN}/api/journeys/${j!.id}/journal/hotels/preview`, { method: "POST", headers: authHeaders(cookie), body: "{}" });
+    try {
+      expect((await preview(other.cookie)).status).toBe(404); expect(upstream).not.toHaveBeenCalled();
+      const response = await preview(owner.cookie); expect(response.status).toBe(200);
+      expect((await response.json()).preview.hotels[0].existingPointId).toBe(j!.routePoints[0].id);
+      expect(upstream).toHaveBeenCalledTimes(2);
+      const [row] = await db.select().from(journeyJournals).where(eq(journeyJournals.journeyId, j!.id));
+      expect(row.revision).toBe(1); expect(row.chapters).toEqual(cs);
+    } finally { upstream.mockRestore(); Object.assign(serverConfig, prior); }
+  });
+  it("atomically confirms hotel tools, replays concurrent clicks and rejects stale/foreign plans", async () => {
+    const hotelJourney = await createJourneyForAtlas(owner.atlasId, owner.userId, { title: "虚构住宿测试", startedOn: "2027-05-01", endedOn: null, note: "", lightColor: "#ffffff", routePoints: [{ label: "起点", latitude: 0, longitude: 0, isStop: true, occurredAt: null }] });
+    const cs = previewJournalImport("2027-05-01\n实际：23:40她在虚构城入住星桥酒店。\n2027-05-02\n实际：00:20她在虚构城再次入住星桥酒店。\n取消：山谷酒店。\n她取消了在虚构城星桥酒店入住的计划。", "2027-05-01");
+    cs[0].events[0].text = "保留手工正文"; cs[0].events[0].edited = true;
+    await writeDailyJournal(hotelJourney!.id, owner.atlasId, 0, cs);
+    const hotels = [cs[0].events[0], cs[1].events[0]].map(e => ({ eventId: e.id, evidence: e.source, label: "星桥酒店", context: "虚构城", sourceArea: "虚构城", latitude: 10, longitude: 20, providerId: "mock-provider", existingPointId: null }));
+    const plan = { atlasId: owner.atlasId, journeyId: hotelJourney!.id, journalRevision: 1, journeyRevision: hotelJourney!.revision, expires: Date.now() + 60000, hotels };
+    const token = signHotelPlan(plan, serverConfig.authSecret);
+    const apply = (cookie: string, body: unknown) => app.request(`${TEST_ORIGIN}/api/journeys/${hotelJourney!.id}/journal/hotels/apply`, { method: "POST", headers: authHeaders(cookie), body: JSON.stringify(body) });
+    expect((await apply(owner.cookie, { token })).status).toBe(400);
+    expect((await apply(owner.cookie, { token: token + "x", confirmed: true })).status).toBe(400);
+    expect((await apply(other.cookie, { token, confirmed: true })).status).toBe(404);
+    await db.update(member).set({ role: "viewer" }).where(eq(member.userId, owner.userId));
+    expect((await apply(owner.cookie, { token, confirmed: true })).status).toBe(403);
+    await db.update(member).set({ role: "owner" }).where(eq(member.userId, owner.userId));
+    const cancelled = cs[1].events[2];
+    const badPlan = signHotelPlan({ ...plan, hotels: [{ ...hotels[0], eventId: cancelled.id, evidence: cancelled.source }] }, serverConfig.authSecret);
+    expect((await apply(owner.cookie, { token: badPlan, confirmed: true })).status).toBe(409);
+    const cropped = signHotelPlan({ ...plan, hotels: [{ ...hotels[0], evidence: "入住" }] }, serverConfig.authSecret);
+    expect((await apply(owner.cookie, { token: cropped, confirmed: true })).status).toBe(409);
+    const responses = await Promise.all([apply(owner.cookie, { token, confirmed: true }), apply(owner.cookie, { token, confirmed: true })]);
+    expect(responses.map(r => r.status)).toEqual([200, 200]);
+    const [a, b] = await Promise.all(responses.map(r => r.json()));
+    expect(a.journal).toEqual(b.journal); expect(a.journey.routePoints).toHaveLength(2);
+    expect(a.journal.chapters[0].events[0]).toMatchObject({ text: "保留手工正文", edited: true, localTime: cs[0].events[0].localTime, source: cs[0].events[0].source });
+    expect(a.journal.chapters[0].source).toBe(cs[0].source);
+    expect(a.journal.chapters[0].events[0].routePointId).toBe(a.journal.chapters[1].events[0].routePointId);
+    expect(a.journal.chapters[1].events[1]).toMatchObject({ status: "cancelled", routePointId: null });
+    expect(a.journey.routePoints[1]).toMatchObject({ occurredAt: null, placeRole: "accommodation" });
+    const changed = structuredClone(a.journal.chapters); changed[0].events[0].text = "稍后手改";
+    await writeDailyJournal(hotelJourney!.id, owner.atlasId, a.journal.revision, changed);
+    expect((await apply(owner.cookie, { token, confirmed: true })).status).toBe(409);
+    const staleJourney = signHotelPlan({ ...plan, journalRevision: a.journal.revision + 1 }, serverConfig.authSecret);
+    expect((await apply(owner.cookie, { token: staleJourney, confirmed: true })).status).toBe(409);
+  });
+  it("rechecks named stay attribution when applying signed mixed-purpose plans", async () => {
+    for (const [source, stayed, visited] of [
+      ["实际：她在虚构城入住星桥酒店，晚餐去了山谷酒店。", "星桥酒店", "山谷酒店"],
+      ["实际：她在远方城山谷酒店拍照后，在虚构城入住星桥酒店。", "星桥酒店", "山谷酒店"],
+      ["In Fiction City we stayed at Starbridge Hotel and ate at Valley Hotel.", "Starbridge Hotel", "Valley Hotel"],
+      ["We photographed Valley Hotel in Other City then checked in at Starbridge Hotel in Fiction City.", "Starbridge Hotel", "Valley Hotel"],
+    ]) {
+      const j = await createJourneyForAtlas(owner.atlasId, owner.userId, { title: "Synthetic mixed purpose", startedOn: "2027-05-01", endedOn: null, note: "", lightColor: "#ffffff", routePoints: [{ label: "起点", latitude: 0, longitude: 0, isStop: true, occurredAt: null }] });
+      const cs = previewJournalImport(`2027-05-01\n${source}`, "2027-05-01");
+      await writeDailyJournal(j!.id, owner.atlasId, 0, cs);
+      const apply = (label: string) => app.request(`${TEST_ORIGIN}/api/journeys/${j!.id}/journal/hotels/apply`, {
+        method: "POST", headers: authHeaders(owner.cookie), body: JSON.stringify({ confirmed: true, token: signHotelPlan({
+          atlasId: owner.atlasId, journeyId: j!.id, journalRevision: 1, journeyRevision: j!.revision, expires: Date.now() + 60000,
+          hotels: [{ eventId: cs[0].events[0].id, evidence: cs[0].events[0].source, label, context: source.includes("Fiction City") ? "Fiction City" : "虚构城", sourceArea: source.includes("Fiction City") ? "Fiction City" : "虚构城", latitude: 10, longitude: 20, providerId: "synthetic", existingPointId: null }],
+        }, serverConfig.authSecret) }),
+      });
+      expect((await apply(visited)).status).toBe(409);
+      const [unchanged] = await db.select().from(journeyJournals).where(eq(journeyJournals.journeyId, j!.id));
+      expect(unchanged.revision).toBe(1); expect(unchanged.chapters).toEqual(cs);
+      const accepted = await apply(stayed); expect(accepted.status).toBe(200);
+      const saved = await accepted.json(); expect(saved.journey.routePoints).toHaveLength(2);
+      expect(saved.journey.routePoints[1].label).toBe(stayed);
+      expect(saved.journal.chapters[0].events[0].source).toBe(cs[0].events[0].source);
+    }
+  });
+  it("binds signed geography to the exact stay, rejects tampering and preserves dates", async () => {
+    const j = await createJourneyForAtlas(owner.atlasId, owner.userId, { title: "Synthetic geography", startedOn: "2027-05-01", endedOn: null, note: "", lightColor: "#ffffff", routePoints: [{ label: "起点", latitude: 0, longitude: 0, isStop: true, occurredAt: null }] });
+    const cs = previewJournalImport("2027-05-01\n实际：23:40在虚构城入住星桥酒店。\n实际：下午到远方城。", "2027-05-01");
+    await writeDailyJournal(j!.id, owner.atlasId, 0, cs);
+    const hotel = { eventId: cs[0].events[0].id, evidence: cs[0].events[0].source, label: "星桥酒店", sourceArea: "虚构城", context: "虚构城，中心路", latitude: 10, longitude: 20, providerId: "synthetic", existingPointId: null };
+    const plan = { atlasId: owner.atlasId, journeyId: j!.id, journalRevision: 1, journeyRevision: j!.revision, expires: Date.now() + 60000, hotels: [hotel] };
+    const apply = (token: string) => app.request(`${TEST_ORIGIN}/api/journeys/${j!.id}/journal/hotels/apply`, { method: "POST", headers: authHeaders(owner.cookie), body: JSON.stringify({ token, confirmed: true }) });
+    // Even server-signed stale/invalid provenance cannot turn another event's city into a stay.
+    for (const change of [
+      { sourceArea: "远方城", context: "远方城，中心路" }, { sourceArea: undefined },
+      { context: "远方城，中心路" }, { evidence: "入住星桥酒店" },
+      { eventId: cs[0].events[1].id }, { eventId: "missing-event" },
+    ]) expect((await apply(signHotelPlan({ ...plan, hotels: [{ ...hotel, ...change } as typeof hotel] }, serverConfig.authSecret))).status).toBe(409);
+    expect((await apply(signHotelPlan({ ...plan, hotels: [hotel, hotel] }, serverConfig.authSecret))).status).toBe(409);
+    expect((await apply(signHotelPlan({ ...plan, journalRevision: 0 }, serverConfig.authSecret))).status).toBe(409);
+    expect((await apply(signHotelPlan({ ...plan, journeyRevision: j!.revision + 1 }, serverConfig.authSecret))).status).toBe(409);
+    const token = signHotelPlan(plan, serverConfig.authSecret);
+    const [body, signature] = token.split(".");
+    for (const change of [{ sourceArea: "远方城" }, { latitude: 40 }, { providerId: "forged-candidate" }, { evidence: "changed source" }]) {
+      const altered = JSON.parse(Buffer.from(body, "base64url").toString()); Object.assign(altered.hotels[0], change);
+      expect((await apply(`${Buffer.from(JSON.stringify(altered)).toString("base64url")}.${signature}`)).status).toBe(400);
+    }
+    const [before] = await db.select().from(journeyJournals).where(eq(journeyJournals.journeyId, j!.id));
+    expect(before.revision).toBe(1); expect(before.chapters).toEqual(cs);
+    const response = await apply(token); expect(response.status).toBe(200);
+    const result = await response.json(); expect(result.journey.routePoints).toHaveLength(2);
+    expect(result.journey.routePoints[1]).toMatchObject({ label: hotel.label, regionContext: hotel.context, occurredAt: null });
+    expect(result.journal.chapters[0].events[0]).toMatchObject({ source: hotel.evidence, localDate: cs[0].events[0].localDate, localTime: cs[0].events[0].localTime });
+    expect(result.journal.chapters[0].events[1]).toEqual(cs[0].events[1]);
+    expect((await apply(token)).status).toBe(200);
+  });
+  it("rejects a signed York stay against New York candidate or existing-point geography", async () => {
+    const j = await createJourneyForAtlas(owner.atlasId, owner.userId, { title: "Synthetic region boundary", startedOn: "2027-05-01", endedOn: null, note: "", lightColor: "#ffffff", routePoints: [{ label: "Starbridge Hotel", regionContext: "New York, USA", latitude: 10, longitude: 20, isStop: true, occurredAt: null }] });
+    const cs = previewJournalImport("2027-05-01\nWe checked in at Starbridge Hotel in York.", "2027-05-01");
+    await writeDailyJournal(j!.id, owner.atlasId, 0, cs);
+    for (const context of ["New York, USA", "York, UK"]) {
+      const token = signHotelPlan({ atlasId: owner.atlasId, journeyId: j!.id, journalRevision: 1, journeyRevision: j!.revision, expires: Date.now() + 60000,
+        hotels: [{ eventId: cs[0].events[0].id, evidence: cs[0].events[0].source, label: "Starbridge Hotel", sourceArea: "York", context, latitude: 10, longitude: 20, providerId: "synthetic", existingPointId: j!.routePoints[0].id }],
+      }, serverConfig.authSecret);
+      const response = await app.request(`${TEST_ORIGIN}/api/journeys/${j!.id}/journal/hotels/apply`, { method: "POST", headers: authHeaders(owner.cookie), body: JSON.stringify({ token, confirmed: true }) });
+      expect(response.status).toBe(409);
+    }
+    const [unchanged] = await db.select().from(journeyJournals).where(eq(journeyJournals.journeyId, j!.id));
+    expect(unchanged.chapters).toEqual(cs); expect(unchanged.revision).toBe(1);
   });
   it("refuses deleted journeys and cascades private data on hard deletion", async () => {
     await db.update(journeys).set({ deletionStartedAt: new Date() }).where(eq(journeys.id, journeyId));

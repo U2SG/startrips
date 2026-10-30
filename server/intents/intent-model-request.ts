@@ -33,6 +33,8 @@ export async function requestIntentModelAnswer(
     userContent: string;
     schemaName: string;
     schema: object;
+    /** Optional single whitelisted function; never executes arbitrary model calls. */
+    toolName?: string;
     /** Names the provider in error messages, e.g. "share intent provider". */
     providerName: string;
     /** Builds the stage error the caller's route maps to `{ error, message }`. */
@@ -61,14 +63,18 @@ export async function requestIntentModelAnswer(
           // DashScope's own switch; strict OpenAI-compatible services
           // reject unknown request fields, so only DashScope receives it.
           ...(isDashScope(baseUrl) ? { enable_thinking: false } : {}),
-          response_format: {
+          ...(request.toolName ? {
+            tools: [{ type: "function", function: { name: request.toolName, description: request.systemPrompt, strict: true, parameters: request.schema } }],
+            tool_choice: { type: "function", function: { name: request.toolName } },
+            parallel_tool_calls: false,
+          } : { response_format: {
             type: "json_schema",
             json_schema: {
               name: request.schemaName,
               strict: true,
               schema: request.schema,
             },
-          },
+          } }),
         }),
         signal: controller.signal,
       });
@@ -86,9 +92,11 @@ export async function requestIntentModelAnswer(
       );
     }
     const payload = await response.json().catch(() => null) as {
-      choices?: Array<{ message?: { content?: unknown } }>;
+      choices?: Array<{ message?: { content?: unknown; tool_calls?: Array<{ type?: string; function?: { name?: string; arguments?: unknown } }> } }>;
     } | null;
-    const content = payload?.choices?.[0]?.message?.content;
+    const message = payload?.choices?.[0]?.message;
+    if (request.toolName && (message?.tool_calls?.length !== 1 || message.tool_calls[0].type !== "function" || message.tool_calls[0].function?.name !== request.toolName)) return null;
+    const content = request.toolName ? message?.tool_calls?.[0]?.function?.arguments : message?.content;
     if (typeof content !== "string") return null;
     try {
       return JSON.parse(content) as unknown;
