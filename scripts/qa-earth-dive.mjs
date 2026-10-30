@@ -25,6 +25,7 @@
 // particle Earth were visibly a different scale at the ownership edge, which is
 // exactly the mistake this lane exists to make impossible.
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { matchesCameraHandback } from "./qa-camera-handback.mjs";
 import { acknowledgedDiveWheel, hasPublishedDiveReveal, nextDiveFixtureInput } from "./qa-earth-dive-input.mjs";
 
 const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
@@ -1166,7 +1167,16 @@ try {
   await forward.page.mouse.up();
   await forward.page.waitForTimeout(250);
   const policyBeforeDisable = await readDive(forward.page);
+  // Drag inertia can advance between Playwright's read and Enter commands.
+  // Sample at the actual activation event, before React handles the policy
+  // switch, so handback is compared with the latest observation it received.
+  await forward.page.locator('[data-qa-earth-policy="particle-only"]').evaluate(button => {
+    button.addEventListener("click", () => {
+      button.dataset.qaObservationAtActivation = document.querySelector(".detailed-earth-map")?.dataset.mapCameraObservation ?? "";
+    }, { capture: true, once: true });
+  });
   await activateButton(forward.page, forward.page.locator('[data-qa-earth-policy="particle-only"]'));
+  const policyObservationAtActivation = await forward.page.locator('[data-qa-earth-policy="particle-only"]').getAttribute("data-qa-observation-at-activation");
   await forward.page.waitForFunction(() => {
     const globe = document.querySelector(".living-atlas-globe");
     return globe?.getAttribute("data-earth-policy") === "particle-only"
@@ -1186,7 +1196,7 @@ try {
   ), null, { timeout: 5_000 });
   const policyFreshIntent = await readDive(forward.page);
   const policyTransitionFailures = [];
-  const observed = policyBeforeDisable.mapCameraObservation?.split(",").map(Number) ?? [];
+  const observed = policyObservationAtActivation?.split(",").map(Number) ?? [];
   if (policyDisabled.mapRemovalCount !== policyBeforeDisable.mapConstructionCount) {
     policyTransitionFailures.push(`hard policy did not release every constructed map: ${JSON.stringify({ before: policyBeforeDisable, after: policyDisabled })}`);
   }
@@ -1194,15 +1204,13 @@ try {
     policyTransitionFailures.push(`hard policy left detail DOM mounted: ${JSON.stringify(policyDisabled)}`);
   }
   if (observed.length === 2 && observed.every(Number.isFinite)) {
-    const [lon, lat] = observed;
-    if (Math.abs((policyDisabled.cameraHandbackLat ?? Number.NaN) - lat) > 0.0001
-      || Math.abs((policyDisabled.cameraHandbackLon ?? Number.NaN) - lon) > 0.0001) {
+    if (!matchesCameraHandback(observed, policyDisabled)) {
       policyTransitionFailures.push(`particle handback did not preserve the latest detail observation: ${JSON.stringify({ observed, disabled: policyDisabled })}`);
     }
   } else {
-    policyTransitionFailures.push(`detail owner did not publish a geographic observation before policy switch: ${policyBeforeDisable.mapCameraObservation}`);
+    policyTransitionFailures.push(`detail owner did not publish a geographic observation at policy activation: ${policyObservationAtActivation}`);
   }
-  if (!(policyDisabled.cameraHandbackErrorPx <= ANCHOR_TOLERANCE_PX)) {
+  if (!Number.isFinite(policyDisabled.cameraHandbackErrorPx) || !(policyDisabled.cameraHandbackErrorPx <= ANCHOR_TOLERANCE_PX)) {
     policyTransitionFailures.push(`particle camera handback missed the observed center by ${policyDisabled.cameraHandbackErrorPx}px`);
   }
   if (policyDefaultHeld.stage !== "particle" || policyDefaultHeld.mapDomCount !== 0) {
@@ -1213,6 +1221,7 @@ try {
   }
   result.particleOnlyTransition = {
     beforeDisable: policyBeforeDisable,
+    observationAtActivation: policyObservationAtActivation,
     disabled: policyDisabled,
     defaultHeld: policyDefaultHeld,
     freshIntent: policyFreshIntent,

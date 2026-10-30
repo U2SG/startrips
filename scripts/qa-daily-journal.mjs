@@ -12,11 +12,18 @@ import {AtlasViewProvider,createOwnerAtlasView} from "/src/journey/atlasView";
 import "/src/styles/tokens.css";
 import "/src/styles/controls.css";
 import "/src/app.css";
+import "/src/styles/living-atlas.css";
 const fixture=${JSON.stringify(fixture)};
 const view=createOwnerAtlasView();
 if(new URLSearchParams(location.search).has("media")) {
 fixture.media=[{id:"photo-one",journeyId:fixture.id,routePointId:null,fileName:"虚构照片.svg",mimeType:"image/svg+xml",bytes:100,sortOrder:0,createdAt:fixture.createdAt}];
 view.readMedia=async()=>({url:"/artifacts/daily-journal/fictional-photo.svg",expiresAt:"2099-01-01T00:00:00Z"});
+}
+if(new URLSearchParams(location.search).has("layout")) {
+fixture.title="虚构旅行与很长的章节标题".repeat(8);
+fixture.routePoints[0].note="沿途文字与路线记录。".repeat(80);
+fixture.media.push({id:"music",journeyId:fixture.id,routePointId:null,fileName:"虚构配乐.wav",mimeType:"audio/wav",bytes:50,sortOrder:1,createdAt:fixture.createdAt});
+const read=view.readMedia; view.readMedia=async asset=>asset==="music" ? {url:"data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQgAAACAgICAgICAgA==",expiresAt:"2099-01-01T00:00:00Z"} : read(asset);
 }
 function Harness(){const [journey,setJourney]=useState(fixture);const [epoch,setEpoch]=useState(0);
 useEffect(()=>{const remount=()=>setEpoch(n=>n+1);window.addEventListener("qa-remount-stream",remount);return()=>window.removeEventListener("qa-remount-stream",remount)},[]);
@@ -135,4 +142,56 @@ try {
   await page.screenshot({path:`${output}/journal-media-390.png`});
   await context.close();
   console.log("daily journal inline media passed");
+  for(const [width,height] of [[320,700],[390,844],[844,390],[1112,402],[1280,900]]) {
+    const context=await browser.newContext({viewport:{width,height},reducedMotion:"reduce"});
+    const page=await context.newPage();
+    const long="虚构的长篇记录，保留原有叙事顺序。".repeat(160);
+    const chapters=[1,2].map(day=>({id:`day-${day}`,date:`2027-04-0${day}`,importDate:`2027-04-0${day}`,title:"虚构章节".repeat(20),source:long,suggestions:[],events:[{id:`event-${day}`,source:long,text:long,status:"uncertain",localDate:null,localTime:null,timeContext:"当地时间",routePointId:null,mediaIds:[],edited:false}]}));
+    await page.route(/\/api\/journeys\/[^/]+\/journal$/,route=>route.fulfill({json:{journal:{revision:1,chapters}}}));
+    await page.goto(`${origin}/${output}/index.html?media=1&layout=1`);
+    await page.getByRole("button",{name:"每日手记",exact:true}).waitFor();
+    await page.waitForFunction(()=>document.querySelector('.journey-stream__header button[aria-label="播放配乐"]')?.disabled===false);
+    const assertLayout=async()=>{
+      const bounds=await page.evaluate(()=>{
+        const header=document.querySelector(".journey-stream__header").getBoundingClientRect();
+        const flow=document.querySelector(".journey-stream__flow").getBoundingClientRect();
+        const button=document.querySelector(".journey-stream__text-action");
+        return {bottom:header.bottom,top:flow.top,height:flow.height,right:header.right,width:innerWidth,buttonHeight:button?.getBoundingClientRect().height,buttons:[...document.querySelectorAll(".journey-stream__header button")].map(b=>{const r=b.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom}})};
+      });
+      assert.ok(bounds.top>=bounds.bottom-1,"flow must be clipped below the actual header");
+      assert.ok(bounds.height>100 && bounds.right<=bounds.width+1);
+      assert.ok(bounds.buttonHeight>=44,"journal uses the shared touch target");
+      for(const b of bounds.buttons) assert.ok(b.left>=0 && b.right<=bounds.width+1 && b.top>=0 && b.bottom<=bounds.bottom+1);
+    };
+    await assertLayout();
+    // Content must follow a taller header without a fixed pixel offset.
+    await page.locator(".journey-stream__header").evaluate(el=>el.style.paddingTop="42px");
+    await assertLayout();
+    await page.locator(".journey-stream__header").evaluate(el=>el.style.removeProperty("padding-top"));
+    await page.setViewportSize({width:height,height:width});
+    await assertLayout();
+    await page.setViewportSize({width,height});
+    await assertLayout();
+    await page.screenshot({path:`${output}/stream-layout-${width}.png`});
+    await page.evaluate(()=>{const chrome=document.createElement("div");chrome.id="qa-underlying-chrome";chrome.style.cssText="position:fixed;inset:0;z-index:200;background:red";document.querySelector(".living-atlas").append(chrome)});
+    for(let cycle=0;cycle<3;cycle++) {
+      await page.getByRole("button",{name:"每日手记",exact:true}).click();
+      const panel=page.getByRole("dialog",{name:"每日手记",exact:true});
+      await panel.getByRole("navigation").waitFor();
+      assert.equal(await panel.evaluate(el=>el.contains(document.elementFromPoint(20,20))),true,"journal stays above underlying Atlas chrome");
+      assert.equal(await panel.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,"long prose must not overflow horizontally");
+      await panel.getByRole("link").last().click();
+      const second=panel.locator("article").last();
+      assert.ok((await second.boundingBox()).y>=-1,"date navigation remains inside the journal scrollport");
+      await panel.evaluate(el=>el.scrollTop=el.scrollHeight);
+      const bottom=await panel.evaluate(el=>({top:el.scrollTop,max:el.scrollHeight-el.clientHeight,body:document.scrollingElement.scrollTop}));
+      assert.ok(Math.abs(bottom.top-bottom.max)<=1 && bottom.body===0);
+      await panel.evaluate(el=>el.scrollTop=0);
+      if(cycle===0) await page.screenshot({path:`${output}/journal-layout-${width}.png`});
+      await page.getByRole("button",{name:"返回 Stream",exact:true}).click();
+      await assertLayout();
+    }
+    await context.close();
+    console.log(`daily journal layout passed: ${width}x${height}`);
+  }
 } finally { await browser.close(); }
