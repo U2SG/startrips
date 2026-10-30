@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  COMMAND_BAR_TIMEOUT_TEXT,
   commandBarExpiryLabel,
   commandBarFailure,
   commandBarLatencyStage,
@@ -88,7 +87,7 @@ describe("commandBarFailure", () => {
       expect(failure.text).not.toContain("intent");
       expect(failure.text).toContain("「");
     }
-    expect(COMMAND_BAR_TIMEOUT_TEXT).toContain("「");
+    expect(commandBarFailure(new JourneyApiError(504, "INTENT_TIMEOUT", "x")).text).toContain("请重试");
   });
 });
 

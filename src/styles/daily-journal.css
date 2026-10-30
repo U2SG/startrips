@@ -23,3 +23,5 @@
 .daily-journal__progress { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .daily-journal__progress > [role=status] { flex: 1 1 180px; min-width: 0; }
 .daily-journal__progress > button { flex: 0 0 auto; margin: 0; }
+
+.daily-journal__ai-import input { width: 100%; box-sizing: border-box; }

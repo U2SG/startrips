@@ -1,7 +1,9 @@
+import { journalImportClient, type JournalImportClient } from "./journalImportApi";
 import type { DailyJournal, JournalChapter, JournalSuggestion } from "./dailyJournal";
 import type { HotelPreview } from "./journalHotels";
 import type { Journey } from "./types";
 export type DailyJournalClient = {
+  importJournal?: JournalImportClient;
   previewHotels?: (id: string, signal: AbortSignal) => Promise<HotelPreview>;
   applyHotels?: (id: string, token: string, signal: AbortSignal) => Promise<{ journal: DailyJournal; journey: Journey }>;
   read: (id: string, signal: AbortSignal) => Promise<DailyJournal>;
@@ -21,6 +23,7 @@ async function request(id: string, suffix: string, method: string, body: unknown
   return payload;
 }
 export const dailyJournalClient: DailyJournalClient = {
+  importJournal: journalImportClient,
   previewHotels: async (id, signal) => (await request(id, "/hotels/preview", "POST", {}, signal)).preview,
   applyHotels: async (id, token, signal) => request(id, "/hotels/apply", "POST", { token, confirmed: true }, signal),
   read: async (id, signal) => (await request(id, "", "GET", undefined, signal)).journal,
