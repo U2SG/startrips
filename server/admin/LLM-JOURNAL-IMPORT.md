@@ -136,3 +136,9 @@ Heading/window detection may select source spans, but may not replace model fact
 classification with a regular-expression import. This resumable extraction layer
 is not implemented by the diagnostic repair; current checkpoints resume the
 journal/hotel stages, not partial model responses.
+
+Explicit meridiem cues are part of clock evidence: for example, `晚上9:00` or
+`9:00 PM` grounds `21:00`, not `09:00`. Cropped cues are rejected. Ambiguous Chinese
+noon/midnight phrasing, approximate clocks, and ranges missing one endpoint's cue
+must remain unresolved with a question. Explicit ranges retain source context
+without inferring a next-day date.

@@ -16,7 +16,7 @@ export const JOURNAL_IMPORT_PROMPT = `Prepare a journal import from the complete
 Return contiguous chapters covering EVERY supplied line in original order, using firstLine/lastLine indexes. Each nonempty line must be one event, except an explicit date heading at a chapter's firstLine. Never drop a plan, cancellation, subtitle or difficult line. Copy each event's WHOLE original line verbatim as evidence. Do not crop contradictory clauses. Preserve third person and every sequential detail.
 Understand bullets followed by clocks then labels, labels followed by clocks, prose and date ranges. Classify explicit completed facts, plans and cancellations separately. A line mixing planned and actual activities stays uncertain; do not mark the whole line actual. Cancellation of an original plan remains cancelled. Preparation for sleep is not sleep, waking is not a precise get-up time, felt temperature is not a measurement. Replacements do not prove the old destination was visited. Unknown stays uncertain with a question.
 Dates must be explicit source dates, normalized YYYY-MM-DD using the supplied fallback year only for an omitted year. A date-range heading stays ONE chapter with date/dateEnd and exact dateEvidence; never fabricate daily allocation. Without a grounded chapter date use null. localDate must have its OWN explicit dateEvidence in that event; never infer next day from midnight or clock order. No UTC/time zones may be invented; preserve international date-line narrative order.
-Time/timeEnd are local HH:mm; timeEvidence must be the exact complete single clock or range substring. A range must include BOTH endpoints. Invalid, approximate or absent clocks stay null, not guessed. Keep ranges crossing midnight without inventing dates.
+Time/timeEnd are local HH:mm; timeEvidence must be the exact complete single clock or range substring. A range must include BOTH endpoints. Include explicit 上午/下午/晚上/凌晨 or AM/PM cues in the COMPLETE timeEvidence and normalize unambiguous 12-hour clocks to HH:mm. Do not crop meridiem cues. Ambiguous noon/midnight or ranges with an omitted endpoint cue stay null with a question. Invalid, approximate or absent clocks stay null, not guessed. Keep ranges crossing midnight without inventing dates.
 Reading is an OPTIONAL extractive suggestion (empty string is allowed): copy the WHOLE source line, never crop negation, paraphrase or add new lived facts. Do not add weather, emotion, roads, coordinates, visits or measured quantities. Missing or conflicting information becomes questions. No account IDs, place IDs, coordinates or arbitrary HTTP/SQL. Return only the named tool call.`;
 class JournalImportError extends ShareIntentError {
   override readonly stage = "journal-import";
@@ -41,18 +41,47 @@ function groundedDate(value: unknown, quote: unknown, source: string, year: stri
   const dates = groundedDates(quote, source, year);
   return typeof value === "string" && dates?.length === 1 && dates[0] === value;
 }
+const meridiem = "上午|下午|晚上|凌晨|早上|中午|晚间|傍晚|a\\.?m\\.?|p\\.?m\\.?";
+function groundedClock(piece: string) {
+  const match = /^(?:(上午|下午|晚上|凌晨|早上|中午|am|pm)\s*)?(\d{1,2}):(\d{2})(?:\s*(a\.?m\.?|p\.?m\.?))?$/i.exec(piece.trim());
+  if (!match) throw bad();
+  const prefix = match[1]?.toLowerCase(), suffix = match[4]?.replace(/\./g, "").toLowerCase();
+  const cue = prefix ?? suffix;
+  if (prefix && suffix) throw bad(); // Conflicting or redundant contexts need clarification.
+  let hour = Number(match[2]);
+  if (cue) {
+    if (hour > 12 || hour === 0) throw bad();
+    // Only unambiguous daypart/hour pairs; e.g. 晚上1点 can mean after midnight.
+    const allowed: Record<string, number[]> = { 上午: [6, 7, 8, 9, 10, 11], 早上: [5, 6, 7, 8, 9, 10, 11],
+      下午: [1, 2, 3, 4, 5, 6], 晚上: [6, 7, 8, 9, 10, 11], 凌晨: [12, 1, 2, 3, 4, 5], 中午: [12, 1] };
+    if (allowed[cue] && !allowed[cue].includes(hour)) throw bad();
+    if (["下午", "晚上", "中午", "pm"].includes(cue)) {
+      if (cue === "晚上" && hour === 12) throw bad();
+      hour = hour % 12 + 12;
+    } else {
+      if (["上午", "早上"].includes(cue) && hour === 12) throw bad();
+      hour %= 12;
+    }
+  }
+  const value = `${String(hour).padStart(2, "0")}:${match[3]}`;
+  if (!clock.test(value)) throw bad();
+  return { value, hasCue: !!cue };
+}
 function groundedTime(start: unknown, end: unknown, quote: unknown, source: string) {
   if (start === null && end === null && quote === null) return { localTime: null, timeContext: "当地时间（具体时区未确认）" };
   if (typeof start !== "string" || !clock.test(start) || (end !== null && (typeof end !== "string" || !clock.test(end)))
     || typeof quote !== "string" || !source.includes(quote)) throw bad();
   const normalized = quote.replace(/：/g, ":").trim();
   const pieces = normalized.split(/\s*[-–—~～至]\s*/);
-  const clocks = pieces.map(p => p.replace(/^(\d):/, "0$1:"));
+  const parsedClocks = pieces.map(groundedClock);
+  if (parsedClocks.length === 2 && parsedClocks[0].hasCue !== parsedClocks[1].hasCue) throw bad();
+  const clocks = parsedClocks.map(p => p.value);
   if (clocks.length !== (end === null ? 1 : 2) || clocks[0] !== start || (end !== null && clocks[1] !== end)) throw bad();
   // Reject cropped starts of ranges and clocks embedded in invalid/approximate tokens.
   const index = source.indexOf(quote), before = source.slice(0, index), after = source.slice(index + quote.length);
-  if (/[\d:：约近~～]$/.test(before) || /(?:约|大约|大概|近|about|around)\s*$/iu.test(before)
-    || /\d[:：]\d{2}\s*[-–—~～至]\s*$/.test(before) || /^\s*[-–—~～至]/.test(after) || /^[\d:：]/.test(after) || /^\s*(?:左右|前后|许)/.test(after)) throw bad();
+  if (new RegExp(`(?:${meridiem})[\\s\\p{P}]*$`, "iu").test(before) || new RegExp(`^[\\s\\p{P}]*(?:${meridiem})(?![a-z])`, "iu").test(after)
+    || /[\d:：约近~～]$/.test(before) || /(?:约|大约|大概|近|about|around)\s*$/iu.test(before)
+    || new RegExp(`\\d[:：]\\d{2}\\s*(?:${meridiem})?\\s*[-–—~～至]\\s*$`, "iu").test(before) || /^\s*[-–—~～至]/.test(after) || /^[\d:：]/.test(after) || /^\s*(?:左右|前后|许)/.test(after)) throw bad();
   return { localTime: end === null ? start : null, timeContext: end === null ? "当地时间（具体时区未确认）" : `当地时间区间 ${quote}（跨日日期未确认）` };
 }
 function factualStatus(status: JournalStatus, source: string): JournalStatus {

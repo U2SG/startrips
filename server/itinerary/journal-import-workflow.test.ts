@@ -97,3 +97,39 @@ it("does not silently accept missing structured clocks with no uncertainty quest
   const draft = fictionalDraft(); Object.assign(draft.chapters[0].events[0], { time: null, timeEnd: null, timeEvidence: null });
   await expect(prepareJournalImport(input, { revision: 0, chapters: [] }, { ...model, fetcher: async () => toolResponse("stage_journal_import", draft) })).rejects.toThrow();
 });
+
+async function prepareClock(source: string, time: string | null, evidence: string | null, timeEnd: string | null = null) {
+  const draft = { chapters: [{ firstLine: 0, lastLine: 0, date: null, dateEnd: null, dateEvidence: null, events: [{ line: 0, evidence: source, status: "actual", localDate: null, dateEvidence: null,
+    time, timeEnd, timeEvidence: evidence, reading: "", questions: time === null ? ["钟点上下文待确认"] : [] }] }] };
+  return prepareJournalImport({ ...input, source }, { revision: 0, chapters: [] }, { ...model, fetcher: async () => toolResponse("stage_journal_import", draft) });
+}
+it.each([
+  ["上午9:00", "09:00"], ["下午3:15", "15:15"], ["晚上9:00", "21:00"], ["凌晨1:30", "01:30"],
+  ["9:00 AM", "09:00"], ["9:00 PM", "21:00"], ["12:00 AM", "00:00"], ["12:00 PM", "12:00"], ["9:00 p.m.", "21:00"], ["凌晨12:00", "00:00"], ["中午12:00", "12:00"], ["下午1:00", "13:00"], ["晚上6:00", "18:00"],
+])("binds complete meridiem evidence %s to %s", async (evidence, time) => {
+  const source = `${evidence} 实际：入住虚构酒店。`;
+  const result = await prepareClock(source, time, evidence);
+  expect(result.chapters[0].events[0]).toMatchObject({ source, localTime: time, localDate: null });
+  if (time !== "09:00") await expect(prepareClock(source, "09:00", evidence)).rejects.toThrow();
+});
+it.each([
+  ["上午9:00", "9:00", "09:00"], ["下午3:15", "3:15", "03:15"], ["晚上9:00", "9:00", "09:00"], ["凌晨1:30", "1:30", "01:30"],
+  ["9:00 AM", "9:00", "09:00"], ["9:00 PM", "9:00", "09:00"], ["9:00 p.m.", "9:00", "09:00"],
+  ["晚上，9:00", "9:00", "09:00"], ["约晚上9:00", "晚上9:00", "21:00"],
+  ["9:00 PM–10:00 PM", "10:00 PM", "22:00"], ["下午1:00–3:00", "下午1:00–3:00", "13:00"],
+  ["晚上1:30", "晚上1:30", "13:30"], ["中午9:00", "中午9:00", "21:00"], ["凌晨9:00", "凌晨9:00", "09:00"],
+  ["9:00 (PM)", "9:00", "09:00"], ["晚上（9:00）", "9:00", "09:00"], ["9:00【PM】", "9:00", "09:00"],
+  ["上午12:00", "上午12:00", "00:00"], ["晚上12:00", "晚上12:00", "00:00"],
+])("rejects cropped, approximate or ambiguous meridiem in %s", async (text, evidence, time) => {
+  const source = `${text} 实际：入住虚构酒店。`;
+  await expect(prepareClock(source, time, evidence, text === "下午1:00–3:00" ? "03:00" : null)).rejects.toThrow();
+  const unresolved = await prepareClock(source, null, null);
+  expect(unresolved.chapters[0].events[0].localTime).toBeNull();
+  expect(unresolved.chapters[0].suggestions[0].questions).toContain("钟点上下文待确认");
+});
+it("preserves an explicit meridiem range without inferring midnight dates", async () => {
+  const source = "晚上11:30–凌晨1:00 实际：途中。";
+  const result = await prepareClock(source, "23:30", "晚上11:30–凌晨1:00", "01:00");
+  expect(result.chapters[0].events[0]).toMatchObject({ source, localTime: null, localDate: null });
+  expect(result.chapters[0].events[0].timeContext).toContain("晚上11:30–凌晨1:00");
+});
