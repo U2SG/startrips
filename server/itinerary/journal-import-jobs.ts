@@ -1,16 +1,22 @@
+import { isPersistedCalendarDate } from "../../src/journey/calendarDate";
+import { JOURNAL_MAX_TEXT } from "../../src/journey/dailyJournal";
 /** Durable preview jobs: the application owns the model request, not an SSH/client connection. */
 import { sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { pool, db } from '../db/client';
 import { hash, lockedTarget, sealJournalDraft, type Target, type Envelope } from '../admin/journal-import';
-import { journalImportModel } from './journal-import-service';
+import { journalImportModel, journalProviderInfo } from './journal-import-service';
 import { prepareJournalImport } from './journal-import-workflow';
 import { importDiagnostic } from '../admin/journal-import-diagnostic';
 export type JobInput = { sentence: string; source: string; fallbackDate: string; provider: {baseUrl:string;model:string} };
 const fail = (code:string):never => {throw new Error(code);};
 export async function submitJournalJob(target:Target, requestId:string, input:JobInput) {
-  if (!/^[a-f0-9-]{36}$/i.test(requestId) || typeof input.source !== 'string' || input.source.length > 100_000 || !input.source.trim() || typeof input.sentence !== 'string' || input.sentence.length > 500 || !input.sentence.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(input.fallbackDate)) fail('INVALID_IMPORT');
+  if(!target||!input||!input.provider)fail('INVALID_IMPORT');
+  target={userId:target.userId,email:target.email,atlasId:target.atlasId,journeyId:target.journeyId};
+  input={source:input.source,sentence:input.sentence,fallbackDate:input.fallbackDate,provider:{baseUrl:input.provider.baseUrl,model:input.provider.model}};
+  if (!/^[a-f0-9-]{36}$/i.test(requestId) || typeof input.source !== 'string' || input.source.length > JOURNAL_MAX_TEXT || !input.source.trim() || typeof input.sentence !== 'string' || input.sentence.length > 500 || !input.sentence.trim() || !isPersistedCalendarDate(input.fallbackDate)) fail('INVALID_IMPORT');
   const configured=journalImportModel(input.provider);
+  const identity=journalProviderInfo();input.provider={baseUrl:identity.baseUrl,model:identity.model};
   const configDigest=hash({baseUrl:configured.baseUrl,model:configured.model,apiKey:configured.apiKey});
   const digest=hash({target,input,configDigest});
   await db.transaction(async tx=>{
@@ -29,11 +35,12 @@ export async function submitJournalJob(target:Target, requestId:string, input:Jo
   });
   return {jobId:requestId};
 }
-export async function readJournalJob(target:Target,id:string) {
-  await db.transaction(tx=>lockedTarget(tx,target));
-  const {rows}=await pool.query('SELECT * FROM journal_import_jobs WHERE id=$1 AND user_id=$2 AND atlas_id=$3 AND journey_id=$4',[id,target.userId,target.atlasId,target.journeyId]);
-  const row=rows[0]; if(!row) return fail('TARGET_NOT_FOUND');
-  return row;
+export async function readJournalJob(target:Target,id:string):Promise<Record<string,any>> {
+  return db.transaction(async tx=>{
+    await lockedTarget(tx,target);
+    const result=await tx.execute(sql`SELECT * FROM journal_import_jobs WHERE id=${id} AND user_id=${target.userId} AND atlas_id=${target.atlasId} AND journey_id=${target.journeyId}`);
+    const row=result.rows[0] as Record<string,any>|undefined;if(!row)return fail('TARGET_NOT_FOUND');return {...row,envelope:typeof row.envelope==='string'?JSON.parse(row.envelope):null};
+  });
 }
 export function jobView(row:any) {
   const common={jobId:row.id,status:row.status,phase:row.phase,characters:row.characters,chunks:row.chunks};
@@ -41,8 +48,12 @@ export function jobView(row:any) {
   return row.status==='completed' ? {...common,envelope:row.envelope as Envelope,planDigest:hash(row.envelope)} : row.error ? {...common,...error,...(statusCode?{statusCode}:{})} : common;
 }
 export async function cancelJournalJob(target:Target,id:string) {
-  await readJournalJob(target,id);
-  await pool.query(`UPDATE journal_import_jobs SET status='cancelled',updated_at=now(),payload=NULL WHERE id=$1 AND status IN ('queued','running')`,[id]);
+  await db.transaction(async tx=>{
+    await lockedTarget(tx,target);
+    const result=await tx.execute(sql`SELECT id FROM journal_import_jobs WHERE id=${id} AND user_id=${target.userId} AND atlas_id=${target.atlasId} AND journey_id=${target.journeyId} FOR UPDATE`);
+    if(!result.rows.length)fail('TARGET_NOT_FOUND');
+    await tx.execute(sql`UPDATE journal_import_jobs SET status='cancelled',updated_at=now(),payload=NULL WHERE id=${id} AND status IN ('queued','running')`);
+  });
   return jobView(await readJournalJob(target,id));
 }
 /** Single step is also injectable in integration tests. No automatic replay of failed/interrupted calls. */
@@ -69,7 +80,7 @@ export async function runJournalJob(signal?:AbortSignal) {
       if(hash(await lockedTarget(tx,target))!==hash(before))fail('JOURNAL_CHANGED');
       if(controller.signal.aborted)fail('JOURNAL_JOB_INTERRUPTED');
       const envelope=sealJournalDraft(target,input.source,before,draft.chapters,draft.importedChapterIds,input.provider);
-      await tx.execute(sql`UPDATE journal_import_jobs SET status='completed',phase='validating',envelope=${JSON.stringify(envelope)}::jsonb,payload=NULL,characters=${progress.characters},chunks=${progress.chunks},updated_at=now() WHERE id=${row.id} AND lease=${token} AND status='running'`);
+      await tx.execute(sql`UPDATE journal_import_jobs SET status='completed',phase='validating',envelope=${JSON.stringify(envelope)},payload=NULL,characters=${progress.characters},chunks=${progress.chunks},updated_at=now() WHERE id=${row.id} AND lease=${token} AND status='running'`);
     });
   } catch(error) {
     const diagnostic=importDiagnostic(error,'llm-preview');

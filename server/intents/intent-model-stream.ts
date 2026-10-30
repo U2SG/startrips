@@ -26,8 +26,9 @@ export async function requestModelStream(url: string, apiKey: string, body: obje
   options.onProgress?.({ phase: "connecting", characters: 0, chunks: 0 });
   arm("connect", options.connectTimeoutMs ?? 30_000);
   try {
+    if(controller.signal.aborted)throw new Error("STREAM_ABORTED");
     let response: Response;
-    try { response = await abortable(fetcher(url, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ ...body, stream: true }), signal: controller.signal })); }
+    try { response = await abortable(fetcher(url, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ ...body, stream: true }), signal: controller.signal }).then(response=>{if(controller.signal.aborted)void response.body?.cancel().catch(()=>undefined);return response;})); }
     catch (e) { if (controller.signal.aborted) throw e; throw fail("INTENT_UNREACHABLE", "The model provider could not be reached", 502); }
     if (!response.ok) throw fail("INTENT_FAILED", "The model provider rejected the request", 502);
     if (!response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") || !response.body) throw invalid();

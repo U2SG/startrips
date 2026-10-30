@@ -1282,7 +1282,7 @@ export const journalImportJobs = pgTable("journal_import_jobs", {
   characters: integer("characters").notNull().default(0),
   chunks: integer("chunks").notNull().default(0),
   lease: uuid("lease"),
-  envelope: jsonb("envelope"),
+  envelope: text("envelope"),
   error: jsonb("error"),
   createdAt: timestamp("created_at", {withTimezone:true}).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", {withTimezone:true}).notNull().defaultNow(),

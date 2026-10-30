@@ -2,7 +2,7 @@
 
 The application worker owns the provider SSE connection. A client or SSH command observes a durable job; reconnecting never starts another model request. No partial output becomes a journal or plan. Existing journal save/apply confirmation remains required.
 
-- `GET /api/intents/journal-import/provider`: `{available,baseUrl,model}` (no key).
+- `GET /api/intents/journal-import/provider`: `{available,baseUrl,model,displayName}` (no key). `baseUrl` is an opaque `provider:…` consent identity, not a request URL; echo it unchanged. `displayName` is only the configured hostname. Provider URL paths, query and userinfo never leave the server.
 - `POST /api/intents/journal-import/jobs`: `{requestId:UUID,journeyId,source,sentence,fallbackDate,provider:{baseUrl,model}}` → 202 `{jobId}`. Repeating the identical requestId/input is idempotent. A different input with the same ID conflicts. Only one active job per Atlas.
 - `GET /api/intents/journal-import/jobs/:jobId`: current snapshot.
 - `POST /api/intents/journal-import/jobs/:jobId/cancel`: cancel; terminal jobs stay terminal.

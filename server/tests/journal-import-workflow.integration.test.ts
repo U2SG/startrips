@@ -189,7 +189,7 @@ it("actual admin CLI uses the same model use-case through a local mock provider"
     expect(JSON.parse(result.out)).toMatchObject({ mode: "model", stage: "journal-preview", statuses: { actual: 1, cancelled: 1 }, localClocks: 2 });
     const saved = JSON.parse(await readFile(path, "utf8"));
     expect(saved.plan.after.chapters).toEqual(envelope.plan.after.chapters);
-    expect(saved.plan.provider).toEqual({ baseUrl, model: "mock" });
+    expect(saved.plan.provider).toEqual({ baseUrl: expect.stringMatching(/^provider:[a-f0-9]{64}$/), model: "mock" });
   } finally { await new Promise<void>((r, reject) => server.close(error => error ? reject(error) : r())); await rm(directory, { recursive: true, force: true }); }
 });
 it("applies journal with a backup, survives replay and preserves prior manual text/media", async () => {
@@ -234,7 +234,8 @@ it("hotel stage validates signed candidates, backs up before writing, and repeat
 });
 
 it("durable streaming job shares validated use-case, resumes without another provider call, and never writes a journal",async()=>{
-  const j=await createJourneyForAtlas(owner.atlasId,owner.userId,{title:"stream fixture",startedOn:"2028-06-01",endedOn:"2028-06-09",note:null,lightColor:"#ffffff",routePoints:[]});
+  await db.update(member).set({role:"owner"}).where(eq(member.userId,owner.userId));
+  const j=await createJourneyForAtlas(owner.atlasId,owner.userId,{title:"stream fixture",startedOn:"2028-06-01",endedOn:"2028-06-09",note:"",lightColor:"#ffffff",routePoints:[{label:"旧点",latitude:1,longitude:2,isStop:true,occurredAt:null}]});
   const target={...owner,email:authUserEmails[0],journeyId:j!.id};
   const input={source,sentence:"导入原稿",fallbackDate:"2028-06-01",provider};const id=randomUUID();
   const before=await readDailyJournal(j!.id,owner.atlasId);let calls=0;
@@ -259,5 +260,33 @@ it("durable streaming job shares validated use-case, resumes without another pro
     expect(await readDailyJournal(j!.id,owner.atlasId)).toEqual(before);
     const cancelled=randomUUID();await submitJournalJob(target,cancelled,input);await cancelJournalJob(target,cancelled);await runJournalJob();expect(calls).toBe(1);
     expect((await readJournalJob(target,cancelled)).envelope).toBeNull();
+    // A running provider body is aborted; cancellation wins over all later completion writes.
+    let upstream:AbortSignal|undefined;let began!:()=>void;const started=new Promise<void>(r=>{began=r;});
+    journalImportDependencies.fetcher=async(_url,init)=>{calls++;upstream=init?.signal??undefined;began();return new Response(new ReadableStream(),{headers:{"content-type":"text/event-stream"}});};
+    const running=randomUUID();await submitJournalJob(target,running,input);const worker=runJournalJob();await started;
+    await cancelJournalJob(target,running);await worker;expect(upstream?.aborted).toBe(true);
+    expect(await readJournalJob(target,running)).toMatchObject({status:"cancelled",payload:null,envelope:null});
+    const count=calls;const stale=randomUUID();await submitJournalJob(target,stale,input);
+    await pool.query("UPDATE journal_import_jobs SET status='running',updated_at=now()-interval '30 seconds' WHERE id=$1",[stale]);
+    await runJournalJob();expect((await readJournalJob(target,stale)).status).toBe("interrupted");expect(calls).toBe(count);
+    const changed=randomUUID();await submitJournalJob(target,changed,input);
+    await writeDailyJournal(j!.id,owner.atlasId,0,previewJournalImport("2028-05-01\n实际：手工内容。","2028-05-01"));
+    await runJournalJob();expect((await readJournalJob(target,changed)).error).toMatchObject({error:"JOURNAL_CHANGED"});expect(calls).toBe(count);
+    const revoked=randomUUID();await submitJournalJob(target,revoked,input);await db.update(member).set({role:"viewer"}).where(eq(member.userId,owner.userId));
+    await runJournalJob();await expect(readJournalJob(target,revoked)).rejects.toThrow("TARGET_PERMISSION_DENIED");
+    await db.update(member).set({role:"owner"}).where(eq(member.userId,owner.userId));
+    expect((await readJournalJob(target,revoked)).error).toMatchObject({error:"TARGET_PERMISSION_DENIED"});expect(calls).toBe(count);
+
   }finally{journalImportDependencies.fetcher=model.fetcher;}
+});
+it('provider discovery returns only an opaque identity and safe hostname, never URL credentials',async()=>{
+  const previous=serverConfig.intentBaseUrl;
+  Object.assign(serverConfig,{intentBaseUrl:'https://user:private-password@model.example.test/private-path-secret/v1?credential=private-query'});
+  try{
+    const response=await app.request(`${TEST_ORIGIN}/api/intents/journal-import/provider`,{headers:authHeaders(owner.cookie)});
+    expect(response.status).toBe(200);const data=await response.json();
+    expect(data.baseUrl).toMatch(/^provider:[a-f0-9]{64}$/);expect(data.displayName).toBe('model.example.test');
+    const synchronous=await request(owner.cookie,{baseUrl:data.baseUrl,model:data.model});expect(synchronous.status).toBe(200);
+    const output=JSON.stringify({data,result:await synchronous.json()});for(const secret of ['private-password','private-path-secret','private-query','mock-only'])expect(output).not.toContain(secret);
+  }finally{Object.assign(serverConfig,{intentBaseUrl:previous});}
 });

@@ -10,7 +10,7 @@ CREATE TABLE "journal_import_jobs" (
 	"characters" integer DEFAULT 0 NOT NULL,
 	"chunks" integer DEFAULT 0 NOT NULL,
 	"lease" uuid,
-	"envelope" jsonb,
+	"envelope" text,
 	"error" jsonb,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
