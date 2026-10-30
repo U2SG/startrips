@@ -593,7 +593,7 @@ function JourneyStreamContent({
         </button>
         <p className="journey-stream__title">{journey.title}</p>
         <div className="journey-stream__actions">
-          {onOpenJournal ? <button type="button" onClick={onOpenJournal}>每日手记</button> : null}
+          {onOpenJournal ? <button type="button" className="journey-stream__text-action" onClick={onOpenJournal}>每日手记</button> : null}
           {soundtrack ? (
             <button
               type="button"

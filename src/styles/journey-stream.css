@@ -13,6 +13,8 @@
   inset: 0;
   z-index: var(--z-overlay-220);
   overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   color: var(--startrips-starlight);
   font-family: var(--archive-serif);
   outline: none;
@@ -68,8 +70,13 @@
 }
 
 .journey-stream__flow {
-  position: absolute;
-  inset: 0;
+  /* The header owns its intrinsic row, including wrapping and safe areas.
+     ResizeObserver measures this remaining viewport for motion/layout. */
+  position: relative;
+  grid-row: 2;
+  grid-column: 1;
+  min-height: 0;
+  min-width: 0;
   overflow: hidden;
   /* Vertical drags move the stream; horizontal ones change Journey. */
   touch-action: none;
@@ -266,8 +273,10 @@
 }
 
 .journey-stream__header {
-  position: absolute;
-  inset: 0 0 auto;
+  position: relative;
+  grid-row: 1;
+  grid-column: 1;
+  min-width: 0;
   z-index: 3;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -276,7 +285,7 @@
   padding:
     max(10px, env(safe-area-inset-top))
     max(12px, env(safe-area-inset-right))
-    0
+    10px
     max(12px, env(safe-area-inset-left));
   opacity: 0;
   transition: opacity var(--motion-content) ease 700ms;
@@ -296,6 +305,8 @@
 
 .journey-stream__actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 4px;
 }
@@ -431,6 +442,11 @@
 
 @media (max-width: 700px) {
   .journey-stream .journey-stream__side { display: none; }
+}
+
+@media (max-width: 480px) {
+  .journey-stream__header { grid-template-columns: auto minmax(0, 1fr); }
+  .journey-stream__title { grid-row: 2; grid-column: 1 / -1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
