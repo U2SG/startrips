@@ -17,7 +17,11 @@ reads. Both invoke production transport/extraction code, never a QA parser.
 The fixture provider is synthetic; no real model request is made.
 
 The database suite requires a disposable PostgreSQL database at exactly
-`127.0.0.1:55432/qa_journal_streaming`. It refuses any other destination. Apply the
+`127.0.0.1:55432/qa_journal_streaming` (local) or
+`127.0.0.1:5432/qa_journal_streaming` (CI). It refuses other hosts, ports and database names.
+The required CI `core` job creates a separate disposable database, migrates it,
+then runs both explicit suites under Node 24. A failed suite fails `core` and
+therefore the aggregate verify gate; no separate optional check is used. Apply the
 repository migrations, including 0042, to that database before running:
 
 ```sh

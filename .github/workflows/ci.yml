@@ -179,6 +179,20 @@ jobs:
         run: pnpm test
       - name: Build
         run: pnpm build
+      - name: Use Node 24 for independent streaming acceptance
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Create isolated streaming acceptance database
+        run: |
+          node --input-type=module -e 'import pg from "pg"; const client = new pg.Client({connectionString: process.env.DATABASE_URL}); await client.connect(); try { await client.query("CREATE DATABASE qa_journal_streaming"); } finally { await client.end(); }'
+      - name: Journal streaming provider and durable job acceptance
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/qa_journal_streaming
+        run: |
+          pnpm db:migrate
+          node --import tsx --test scripts/qa-journal-streaming.node-test.ts
+          node --import tsx --test scripts/qa-journal-streaming-jobs.node-test.ts
 
   keepsake-render:
     name: keepsake-render

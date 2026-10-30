@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { before, after, test } from 'node:test';
 import { qaInput, qaDraft, qaModel, qaResponse, qaSse, qaDelta } from './qa-journal-streaming-fixtures';
 const database = new URL(process.env.DATABASE_URL ?? 'http://missing.invalid');
-assert.ok(database.hostname === '127.0.0.1' && database.port === '55432' && database.pathname === '/qa_journal_streaming', 'QA requires its named disposable loopback database');
+assert.ok(database.hostname === '127.0.0.1' && ['55432', '5432'].includes(database.port) && database.pathname === '/qa_journal_streaming', 'QA requires its named disposable loopback database');
 const { app } = await import('../server/app');
 const { serverConfig } = await import('../server/config');
 const { pool, db } = await import('../server/db/client');
