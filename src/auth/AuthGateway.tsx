@@ -1815,7 +1815,7 @@ export function AuthGateway({ children }: { children: ReactNode }) {
       ) : null}
       <div key="atlas-workspace" className="auth-continuity__atlas">
         <WorkspaceGate
-          key={`${session.data.session.activeOrganizationId ?? "none"}-${revision}`}
+          key={`${session.data.user.id}-${session.data.session.activeOrganizationId ?? "none"}-${revision}`}
           activeOrganizationId={session.data.session.activeOrganizationId ?? undefined}
           userName={session.data.user.name}
           userEmail={session.data.user.email}
