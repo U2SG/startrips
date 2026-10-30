@@ -109,7 +109,10 @@ afterAll(async () => {
   journalImportDependencies.fetcher = undefined; Object.assign(serverConfig, prior);
   if (atlasIds.length) await db.delete(atlases).where(inArray(atlases.id, atlasIds));
   if (authOrganizationIds.length) await db.delete(authOrganizations).where(inArray(authOrganizations.id, authOrganizationIds));
-  if (authUserEmails.length) await db.delete(authUsers).where(inArray(authUsers.email, authUserEmails)); await pool.end();
+  if (authUserEmails.length) await db.delete(authUsers).where(inArray(authUsers.email, authUserEmails));
+  // This isolated fixture creates auth rate-limit rows; do not contaminate later suites.
+  await db.delete(rateLimit);
+  await pool.end();
 });
 let envelope: Envelope;
 const request = (cookie = owner.cookie, consent: unknown = provider) => app.request(`${TEST_ORIGIN}/api/intents/journal-import`, { method: "POST", headers: authHeaders(cookie), body: JSON.stringify({ journeyId, source, sentence: "导入原稿并关联已入住酒店", fallbackDate: "2028-06-01", provider: consent }) });
