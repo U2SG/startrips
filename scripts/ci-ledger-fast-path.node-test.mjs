@@ -124,7 +124,7 @@ test("workflow keeps all 42 logical browser suites across at most eight shards",
     for (const suite of match[1].split("|").filter(Boolean)) suites.add(suite);
   }
   assert.deepEqual(suites, expectedSuites);
-  assert.equal((matrixText.match(/pnpm qa:[a-z0-9-]+/g) ?? []).length, 43);
+  assert.equal((matrixText.match(/pnpm qa:[a-z0-9-]+/g) ?? []).length, 44);
   assert.equal((matrixText.match(/^\s+[a-z0-9][a-z0-9-]*::.+$/gm) ?? []).length, 42);
 });
 
