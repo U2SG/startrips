@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { proposeJournalHotels, signHotelPlan, verifyHotelPlan } from "./journal-hotel-tools";
+import { hotelSourceHash, proposeJournalHotels, signHotelPlan, verifyHotelPlan } from "./journal-hotel-tools";
 import { previewJournalImport } from "../../src/journey/dailyJournal";
 import type { LocationSearch } from "../location/location-search";
 
@@ -111,5 +111,31 @@ describe("hotel tool boundaries", () => {
     const token = signHotelPlan(plan, "test-secret"); expect(verifyHotelPlan(token, "test-secret")).toEqual(plan);
     expect(verifyHotelPlan(token + "x", "test-secret")).toBeNull(); expect(verifyHotelPlan(token, "wrong")).toBeNull();
     expect(verifyHotelPlan(signHotelPlan({ ...plan, expires: 1 }, "test-secret"), "test-secret")).toBeNull();
+  });
+  it("keeps source spelling when a provider or owned label differs only in separators", async () => {
+    const copy = structuredClone(journal);
+    copy.chapters[0].source = copy.chapters[0].events[0].source = "We checked in at Starbridge-Hotel in York.";
+    const extracted = { ...stay, name: "Starbridge-Hotel", area: "York", evidence: copy.chapters[0].source };
+    const place = { ...candidate, label: "Starbridge Hotel", context: "York, UK" };
+    for (const owned of [false, true]) {
+      const s = setup([extracted], [place], owned ? "existing:owned" : place.id);
+      const result = await proposeJournalHotels(copy, owned ? [{ ...place, id: "owned", regionContext: place.context }] : [], s.model, s.search);
+      expect(result.hotels[0]).toMatchObject({ sourceName: "Starbridge-Hotel", label: "Starbridge Hotel", evidence: copy.chapters[0].source });
+    }
+  });
+  it("signs bounded full-source fingerprints for long evidence and batches", () => {
+    const evidence = "We checked in at Starbridge Hotel in York. " + "A quiet fictional record. ".repeat(4000);
+    const hotel = { eventId: "event", evidence, sourceName: "Starbridge Hotel", label: "Starbridge Hotel", context: "York, UK", sourceArea: "York", latitude: 10, longitude: 20, providerId: "mock", existingPointId: null };
+    const plan = { atlasId: "a", journeyId: "j", journalRevision: 1, journeyRevision: 1, expires: Date.now() + 10000, hotels: Array.from({ length: 30 }, (_, i) => ({ ...hotel, eventId: `event-${i}` })) };
+    expect(Buffer.from(JSON.stringify({ ...plan, hotels: [hotel] })).toString("base64url").length).toBeGreaterThan(100000);
+    const token = signHotelPlan(plan, "test-secret");
+    expect(token.length).toBeLessThan(100000);
+    const verified = verifyHotelPlan(token, "test-secret")!;
+    expect(verified.hotels).toHaveLength(30);
+    expect(verified.hotels[0]).toMatchObject({ sourceName: hotel.sourceName, sourceHash: hotelSourceHash(evidence) });
+    expect(verified.hotels[0]).not.toHaveProperty("evidence");
+    expect(hotelSourceHash(evidence + " ")).not.toBe(verified.hotels[0].sourceHash);
+    expect(() => signHotelPlan({ ...plan, hotels: [...plan.hotels, hotel] }, "test-secret")).toThrow("容量");
+    expect(() => signHotelPlan({ ...plan, hotels: [{ ...hotel, providerId: "x".repeat(100000) }] }, "test-secret")).toThrow("容量");
   });
 });

@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { requestIntentModelAnswer, type IntentModelOptions } from "../intents/intent-model-request";
 import { ShareIntentError } from "../intents/create-share-intent";
 import type { DailyJournal } from "../../src/journey/dailyJournal";
@@ -13,7 +13,8 @@ const string = { type: "string" };
 const schema = object({ stays: { type: "array", items: object({ eventId: string, evidence: string, name: string, area: string }) }, questions: { type: "array", items: string } });
 const selectionSchema = object({ matches: { type: "array", items: object({ eventId: string, candidateId: { type: ["string", "null"] } }) } });
 const norm = (s: string) => s.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
-export const sameHotel = (a: Pick<HotelSelection, "label" | "latitude" | "longitude">, b: Pick<HotelSelection, "label" | "latitude" | "longitude">) => norm(a.label) === norm(b.label) && Math.abs(a.latitude - b.latitude) < 0.0001 && Math.abs(a.longitude - b.longitude) < 0.0001;
+export const sameHotelName = (a: string, b: string) => norm(a) !== "" && norm(a) === norm(b);
+export const sameHotel = (a: Pick<HotelSelection, "label" | "latitude" | "longitude">, b: Pick<HotelSelection, "label" | "latitude" | "longitude">) => sameHotelName(a.label, b.label) && Math.abs(a.latitude - b.latitude) < 0.0001 && Math.abs(a.longitude - b.longitude) < 0.0001;
 
 /** Two bounded, named tool calls. Only the configured location adapter gets search terms. */
 export async function proposeJournalHotels(journal: DailyJournal, points: Pick<RoutePoint, "id" | "label" | "latitude" | "longitude" | "regionContext">[], model: IntentModelOptions, search: LocationSearch, signal?: AbortSignal) {
@@ -39,10 +40,10 @@ export async function proposeJournalHotels(journal: DailyJournal, points: Pick<R
     if (query.length > 120) { questions.push(`${event.id}：酒店名称/地址过长，请核对。`); continue; }
     if (signal?.aborted) throw fail();
     // Provider coordinates, not LLM coordinates. Require explicit name + area and exactly one reliable branch.
-    const ownedMatches = points.filter(p => norm(p.label) === norm(name as string) && hotelContextMatchesArea(p.regionContext, area));
+    const ownedMatches = points.filter(p => sameHotelName(p.label, name as string) && hotelContextMatchesArea(p.regionContext, area));
     if (ownedMatches.length > 1) { questions.push(`${event.id}：已有多个相同酒店，请先核对。`); continue; }
     const found = ownedMatches.length ? ownedMatches.map(p => ({ ...p, id: `existing:${p.id}`, context: p.regionContext! })) : await search.search(query, { limit: 8, signal });
-    const unique = [...new Map(found.map(p => [p.id, p])).values()].filter(p => norm(p.label) === norm(name as string)
+    const unique = [...new Map(found.map(p => [p.id, p])).values()].filter(p => sameHotelName(p.label, name as string)
       && p.label.length <= 200 && p.context.length <= 500 && hotelContextMatchesArea(p.context, area) && Number.isFinite(p.latitude) && Math.abs(p.latitude) <= 90 && Number.isFinite(p.longitude) && Math.abs(p.longitude) <= 180);
     if (unique.length !== 1) { questions.push(`${event.id}：${name} / ${area} 尚不能唯一确认分店，未建点。`); continue; }
     const p = unique[0];
@@ -53,7 +54,7 @@ export async function proposeJournalHotels(journal: DailyJournal, points: Pick<R
     const existing = points.filter(point => sameHotel(point, p));
     if (existing.some(point => !hotelContextMatchesArea(point.regionContext, area))) { questions.push(`${event.id}：已有地点地区不一致，未关联。`); continue; }
     if (existing.length > 1) { questions.push(`${event.id}：已有多个相同地点，请先核对。`); continue; }
-    searches.push({ eventId: event.id, evidence: event.source, candidates: [{ eventId: event.id, evidence: event.source, label: p.label, context: p.context, sourceArea: area as string,
+    searches.push({ eventId: event.id, evidence: event.source, candidates: [{ eventId: event.id, evidence: event.source, sourceName: name as string, label: p.label, context: p.context, sourceArea: area as string,
       latitude: p.latitude, longitude: p.longitude, providerId: p.id, existingPointId: existing[0]?.id ?? null }] });
   }
   if (!searches.length) return { hotels: [], questions };
@@ -73,13 +74,23 @@ export async function proposeJournalHotels(journal: DailyJournal, points: Pick<R
   return { hotels, questions };
 }
 
-export type HotelPlan = { atlasId: string; journeyId: string; journalRevision: number; journeyRevision: number; expires: number; hotels: HotelSelection[] };
-export function signHotelPlan(plan: HotelPlan, secret: string) {
-  const body = Buffer.from(JSON.stringify(plan)).toString("base64url");
-  return `${body}.${createHmac("sha256", secret).update(body).digest("base64url")}`;
+type HotelPlanInput = { atlasId: string; journeyId: string; journalRevision: number; journeyRevision: number; expires: number; hotels: HotelSelection[] };
+export type HotelPlan = Omit<HotelPlanInput, "hotels"> & { hotels: (Omit<HotelSelection, "evidence"> & { sourceHash: string })[] };
+export const hotelSourceHash = (source: string) => createHash("sha256").update(source).digest("hex");
+const MAX_HOTEL_TOKEN_LENGTH = 100000;
+export function signHotelPlan(plan: HotelPlanInput, secret: string) {
+  const capacityError = () => new ShareIntentError("HOTEL_PLAN_TOO_LARGE", "酒店确认内容超过单次容量，请分批处理；没有写入地点。", 422);
+  if (plan.hotels.length > 30) throw capacityError();
+  // Keep full evidence in the preview, but bind its exact bytes in a bounded
+  // signed plan. Confirmation re-reads the owned journal under revision locks.
+  const compact: HotelPlan = { ...plan, hotels: plan.hotels.map(({ evidence, ...hotel }) => ({ ...hotel, sourceHash: hotelSourceHash(evidence) })) };
+  const body = Buffer.from(JSON.stringify(compact)).toString("base64url");
+  const token = `${body}.${createHmac("sha256", secret).update(body).digest("base64url")}`;
+  if (token.length > MAX_HOTEL_TOKEN_LENGTH) throw capacityError();
+  return token;
 }
 export function verifyHotelPlan(token: unknown, secret: string): HotelPlan | null {
-  if (typeof token !== "string" || token.length > 100000) return null;
+  if (typeof token !== "string" || token.length > MAX_HOTEL_TOKEN_LENGTH) return null;
   const [body, sig, extra] = token.split("."); if (!body || !sig || extra) return null;
   const expected = createHmac("sha256", secret).update(body).digest();
   const supplied = Buffer.from(sig, "base64url");
