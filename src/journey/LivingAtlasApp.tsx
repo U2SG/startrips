@@ -5196,6 +5196,7 @@ export function LivingAtlasApp({
           stacking, so nothing inside it can paint above the Story. */}
       {commandBarOpen && commandBarReachable ? hostCommandBar(
         <CommandBar
+          key={`${commandSurface}:${activeJourneyId ?? ""}`}
           routed={commandIntents}
           context={{
             surface: commandSurface,
