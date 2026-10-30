@@ -118,7 +118,7 @@ try {
   });
   await page.goto(`${origin}/${output}/index.html?media=1`);
   await page.getByRole("button",{name:"每日手记",exact:true}).click();
-  const fortnight=Array.from({length:14},(_,i)=>`2027-04-${String(i+1).padStart(2,"0")} 虚构记录\n实际：她留下了一张照片。\n计划：次日虚构公园\n取消：原定花园`).join("\n");
+  const fortnight=Array.from({length:14},(_,i)=>`### 2027年4月${i+1}日${i%2 ? "(虚构记录)" : "（虚构记录）"}\n实际：她留下了一张照片。\n计划：次日虚构公园\n取消：原定花园`).join("\n");
   await page.getByLabel("原始流水账",{exact:true}).fill(fortnight);
   await page.getByRole("button",{name:"生成导入预览"}).click();
   await page.getByLabel("关联照片或视频（可多选）",{exact:true}).nth(0).selectOption(["photo-one"]);
@@ -128,6 +128,8 @@ try {
   await page.waitForFunction(()=>document.querySelector(".daily-journal__media img")?.naturalWidth===600);
   assert.deepEqual(stored.chapters[0].events[0].mediaIds,["photo-one"]);
   assert.equal(stored.chapters.length,14);
+  assert.deepEqual(stored.chapters.map(chapter=>chapter.date),Array.from({length:14},(_,i)=>`2027-04-${String(i+1).padStart(2,"0")}`));
+  assert.equal(stored.chapters.map(chapter=>chapter.source).join("\n"),fortnight);
   for(const chapter of stored.chapters) assert.deepEqual(chapter.events.map(e=>e.status),["actual","planned","cancelled"]);
   assert.equal(await page.getByRole("navigation",{name:"手记日期目录"}).getByRole("link").count(),14);
   await page.screenshot({path:`${output}/journal-media-390.png`});

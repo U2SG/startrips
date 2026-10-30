@@ -103,7 +103,7 @@ export function previewJournalImport(source: string, fallbackDate: string, exist
   if (!source.trim() || source.length > JOURNAL_MAX_TEXT || !isPersistedCalendarDate(fallbackDate)) throw new Error("请输入有效日期及不超过 20 万字的原文。");
   const chunks: { date: string; title: string; lines: string[]; heading: boolean }[] = [];
   for (const line of source.replace(/\r\n?/g, "\n").split("\n")) {
-    const match = line.match(/^\s*(?:#{1,6}\s*)?(?:(\d{4})[-年/.])?(\d{1,2})[-月/.](\d{1,2})(?:日)?(?:\s|$)(.*)$/);
+    const match = line.match(/^\s*(?:#{1,6}\s*)?(?:(\d{4})[-年/.])?(\d{1,2})[-月/.](\d{1,2})(?:日)?(?=\s|$|[（(])\s*(.*)$/);
     if (match) {
       const date = `${match[1] ?? fallbackDate.slice(0, 4)}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
       if (!isPersistedCalendarDate(date)) throw new Error(`日期无效：${line}`);
