@@ -2483,6 +2483,7 @@ export function ParticleEarthScene({
         host.dataset.arrivalPhase = "idle";
         host.dataset.arrivalGlow = "0";
         host.dataset.arrivalTwist = "0";
+        host.dataset.arrivalAge = "0";
       }
       if (shellMaterial.uniforms.uArrivalGlow) {
         shellMaterial.uniforms.uArrivalGlow.value = 0;
@@ -6518,6 +6519,7 @@ export function ParticleEarthScene({
         host.dataset.arrivalPhase = arrivalParticles.phase;
         host.dataset.arrivalGlow = String(arrivalParticles.glow);
         host.dataset.arrivalTwist = String(arrivalParticles.twist);
+        host.dataset.arrivalAge = String(arrivalParticles.age);
         host.dataset.arrivalVariant = currentArrivalExperiment ?? "bloom";
       }
       renderer.render(scene, camera);
