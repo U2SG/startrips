@@ -305,7 +305,7 @@ jobs:
               soundtrack-ducking::pnpm qa:soundtrack-ducking
               journey-book-3d-turns::pnpm qa:journey-book-3d-turns
           - name: labels-recovery
-            suites: "|city-label-anchoring|recovery-surfaces|mobile-native|journey-book-3d-last-spread|journey-book-3d-phone|journal-hotels|"
+            suites: "|city-label-anchoring|recovery-surfaces|mobile-native|journey-book-3d-last-spread|journey-book-3d-phone|journal-hotels|journal-streaming|"
             commands: |
               city-label-anchoring::pnpm qa:city-label-anchoring
               recovery-surfaces::pnpm qa:recovery-surfaces
@@ -313,6 +313,7 @@ jobs:
               journey-book-3d-last-spread::pnpm qa:journey-book-3d-last-spread
               journey-book-3d-phone::pnpm qa:journey-book-3d-phone
               journal-hotels::pnpm qa:journal-hotels
+              journal-streaming::pnpm qa:journal-streaming
           - name: reveal-share
             suites: "|cover-reveal-opening|cover-reveal|owner-share|playback-map-bridge|"
             commands: |
@@ -405,6 +406,14 @@ jobs:
           name: ci-timings-${{ matrix.name }}-${{ github.run_attempt }}
           path: artifacts/ci-timings/
           if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload synthetic journal streaming captures
+        if: ${{ always() && contains(matrix.suites, '|journal-streaming|') }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: journal-streaming-${{ github.run_attempt }}
+          path: artifacts/qa-journal-streaming-ui/*.png
+          if-no-files-found: error
           retention-days: 7
       - name: Upload route candidate evidence
         if: ${{ always() && matrix.name == 'route-candidates' }}
