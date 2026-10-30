@@ -1,3 +1,4 @@
+import { ArrivalParticles, type ArrivalExperiment } from "./arrivalParticles";
 import { useEffect, useRef, useState } from "react";
 import {
   AdditiveBlending,
@@ -1491,6 +1492,8 @@ interface ParticleEarthSceneProps {
   visibleRoutePointIds?: ReadonlySet<string>;
   /** First-Journey arrival: bloom the final Route Point once its flight settles. */
   routeArrivalBloom?: RouteArrivalBloomRequest | null;
+  /** QA preview only: undefined leaves the shipping shader and bloom unchanged. */
+  arrivalExperiment?: ArrivalExperiment;
   activeJourneyRouteId?: string | null;
   selectedJourneyRoutePoint?: RoutePointSelection;
   narrativeJourneyRoutePoint?: RoutePointSelection;
@@ -1905,6 +1908,7 @@ export function ParticleEarthScene({
   journeyRoutes = [],
   visibleRoutePointIds,
   routeArrivalBloom,
+  arrivalExperiment,
   activeJourneyRouteId,
   selectedJourneyRoutePoint,
   narrativeJourneyRoutePoint,
@@ -2017,6 +2021,9 @@ export function ParticleEarthScene({
     let lastTime = performance.now();
     let currentMode = latestMode.current;
     let currentQuality = latestQuality.current;
+    let currentArrivalExperiment = arrivalExperiment;
+    const arrivalParticles = new ArrivalParticles();
+    let arrivalRouteId: string | null = null;
     let currentCompactMobileLayout = latestCompactMobileLayout.current;
     let currentVisibilityHint = latestVisibilityHint.current;
     let currentRenderState: GlobeRenderState = "rendering";
@@ -2470,6 +2477,17 @@ export function ParticleEarthScene({
     let arrivalBloomElement: SVGElement | null = null;
     let arrivalBloomTimer = 0;
     const releaseArrivalBloom = () => {
+      arrivalParticles.cancel();
+      arrivalRouteId = null;
+      if (arrivalExperiment !== undefined) {
+        host.dataset.arrivalPhase = "idle";
+        host.dataset.arrivalGlow = "0";
+        host.dataset.arrivalTwist = "0";
+      }
+      if (shellMaterial.uniforms.uArrivalGlow) {
+        shellMaterial.uniforms.uArrivalGlow.value = 0;
+        shellMaterial.uniforms.uArrivalTwist.value = 0;
+      }
       window.clearTimeout(arrivalBloomTimer);
       arrivalBloomTimer = 0;
       if (!arrivalBloomElement) return;
@@ -2480,7 +2498,7 @@ export function ParticleEarthScene({
     };
     const playArrivalBloom = (routeId: string) => {
       releaseArrivalBloom();
-      if (latestReduceMotion.current) return;
+      if (latestReduceMotion.current && currentArrivalExperiment !== "particles") return;
       let finalPoint: SVGElement | null = null;
       let finalIndex = -1;
       const points = routeVectorLayer.querySelectorAll<SVGElement>(
@@ -2495,6 +2513,16 @@ export function ParticleEarthScene({
         }
       }
       if (!finalPoint) return;
+      if (currentArrivalExperiment === "particles" && shellMaterial.uniforms.uArrivalGlow) {
+        const route = latestJourneyRoutes.current.find((candidate) => candidate.id === routeId);
+        const anchor = route?.points[finalIndex];
+        if (!anchor) return;
+        shellMaterial.uniforms.uArrivalAnchor.value.copy(latLonToVector3(anchor.lat, anchor.lon, 1));
+        shellMaterial.uniforms.uArrivalColor.value.set(route.color);
+        arrivalRouteId = routeId;
+        arrivalParticles.start(currentQuality === "high" && !latestReduceMotion.current);
+        return;
+      }
       arrivalBloomElement = finalPoint;
       finalPoint.addEventListener("animationend", releaseArrivalBloom);
       finalPoint.addEventListener("animationcancel", releaseArrivalBloom);
@@ -2722,6 +2750,7 @@ export function ParticleEarthScene({
     }
     const shellGeometry = createPositionGeometry(shellPositions, shellPositions.slice());
     const shellMaterial = createParticleEarthMaterial({
+      arrivalParticles: arrivalExperiment !== undefined,
       color: 0xa8f6f3,
       opacity: 0.15,
       size: 8,
@@ -4420,6 +4449,7 @@ export function ParticleEarthScene({
       if (publishExternalOwnership) latestOnManualCameraInteraction.current?.();
       manualFocusRevision = latestFocusRevision.current;
       armedArrivalBloom = null;
+      if (arrivalExperiment !== undefined) releaseArrivalBloom();
       pointFocusSettling = false;
       routeFocusSettling = false;
       focusTarget = null;
@@ -5641,6 +5671,7 @@ export function ParticleEarthScene({
     const applyQuality = (nextQuality: keyof typeof QUALITY_PROFILE) => {
       if (currentQuality === nextQuality && landVisualReady) return;
       currentQuality = nextQuality;
+      arrivalParticles.step(0, nextQuality === "high" && !latestReduceMotion.current);
       host.dataset.quality = nextQuality;
       refinementBuildGuard.invalidate();
       requestedRefinementCacheKey = null;
@@ -6477,6 +6508,18 @@ export function ParticleEarthScene({
         }
       }
 
+      if (arrivalExperiment !== undefined) {
+        if (arrivalBloomElement && latestReduceMotion.current) releaseArrivalBloom();
+        if (arrivalRouteId && (arrivalRouteId !== latestActiveJourneyRouteId.current
+          || currentMode === "surfaceEarth" || currentVisibilityHint.opaqueMediaCover)) releaseArrivalBloom();
+        arrivalParticles.step(delta, currentQuality === "high" && !latestReduceMotion.current);
+        shellMaterial.uniforms.uArrivalGlow.value = arrivalParticles.glow;
+        shellMaterial.uniforms.uArrivalTwist.value = arrivalParticles.twist;
+        host.dataset.arrivalPhase = arrivalParticles.phase;
+        host.dataset.arrivalGlow = String(arrivalParticles.glow);
+        host.dataset.arrivalTwist = String(arrivalParticles.twist);
+        host.dataset.arrivalVariant = currentArrivalExperiment ?? "bloom";
+      }
       renderer.render(scene, camera);
       renderCallsTotal += renderer.info.render.calls;
       renderPointsTotal += renderer.info.render.points;
@@ -6542,6 +6585,10 @@ export function ParticleEarthScene({
     };
 
     const pauseRenderLoop = (state: GlobeRenderState) => {
+      if (arrivalExperiment !== undefined) {
+        armedArrivalBloom = null;
+        releaseArrivalBloom();
+      }
       currentRenderState = state;
       refinementBuildGuard.setVisible(false);
       requestedRefinementCacheKey = null;
@@ -6648,6 +6695,13 @@ export function ParticleEarthScene({
         latestHomeBasePresence.current = presence;
         wakeRenderLoop();
       },
+      setArrivalExperiment(next: ArrivalExperiment | undefined) {
+        if (next === currentArrivalExperiment) return;
+        releaseArrivalBloom();
+        armedArrivalBloom = null;
+        currentArrivalExperiment = next;
+        wakeRenderLoop();
+      },
       setQuality(nextQuality: keyof typeof QUALITY_PROFILE) {
         applyQuality(nextQuality);
       },
@@ -6667,6 +6721,7 @@ export function ParticleEarthScene({
           revision,
         );
         if (!focusOwnsState) return;
+        if (arrivalExperiment !== undefined) releaseArrivalBloom();
         activeFocusRevision = revision;
         const flightRouteId = intent?.kind === "route" ? intent.route?.id ?? null : null;
         const bloomRequest = latestRouteArrivalBloom.current;
@@ -6874,6 +6929,11 @@ export function ParticleEarthScene({
     if (!controllerRevision) return;
     controllerRef.current?.setHomeBasePresence(homeBasePresence);
   }, [controllerRevision, controllerRef, homeBasePresence]);
+
+  useEffect(() => {
+    if (!controllerRevision) return;
+    controllerRef.current?.setArrivalExperiment(arrivalExperiment);
+  }, [controllerRevision, controllerRef, arrivalExperiment]);
 
   useEffect(() => {
     if (!controllerRevision) return;

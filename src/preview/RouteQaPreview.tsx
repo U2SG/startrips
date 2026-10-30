@@ -1,7 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useCompactMobileLayout } from "../journey/mobileLayout";
 import type { JourneyRoute } from "../journey/types";
-import { ParticleEarthScene } from "../scene/ParticleEarthScene";
+import { onMotionPreferenceChange, prefersReducedMotion } from "../motion/preferences";
+import type { ArrivalExperiment } from "../scene/arrivalParticles";
+import { ParticleEarthScene, type RouteArrivalBloomRequest } from "../scene/ParticleEarthScene";
 import { archiveRecords } from "../data/archiveRecords";
 import { globeQaRoutes } from "./qaRoutes";
 
@@ -22,6 +24,14 @@ const labelArbitrationQaRoute: JourneyRoute = {
 
 export function JourneyRoutesQaPreview() {
   const qaParams = new URLSearchParams(window.location.search);
+  const arrivalQa = ["bloom", "particles"].includes(qaParams.get("qaArrival") ?? "");
+  const [arrivalVariant, setArrivalVariant] = useState<ArrivalExperiment>(
+    qaParams.get("qaArrival") === "particles" ? "particles" : "bloom",
+  );
+  const [arrivalRequest, setArrivalRequest] = useState<RouteArrivalBloomRequest | null>(null);
+  const [systemReducedMotion, setSystemReducedMotion] = useState(prefersReducedMotion);
+  useEffect(() => onMotionPreferenceChange(setSystemReducedMotion), []);
+  const [qaReducedMotion, setQaReducedMotion] = useState(qaParams.get("qaMotion") !== "animate");
   const routeOpticsQa = qaParams.get("qaRouteOptics") === "1";
   const labelArbitrationQa = qaParams.get("qaLabelArbitration") === "1";
   const [qaRouteDataUpdated, setQaRouteDataUpdated] = useState(false);
@@ -47,7 +57,7 @@ export function JourneyRoutesQaPreview() {
   const [activeRouteId, setActiveRouteId] = useState<string | null>(
     labelArbitrationQa
       ? labelArbitrationQaRoute.id
-      : routeOpticsQa ? "qa-route-southwest" : null,
+      : routeOpticsQa || arrivalQa ? "qa-route-southwest" : null,
   );
   const [focusRevision, setFocusRevision] = useState(0);
   const [routeOpticsStage, setRouteOpticsStage] = useState<"browse" | "playing" | "rewound">("browse");
@@ -137,6 +147,8 @@ export function JourneyRoutesQaPreview() {
           journeyRoutes={previewRoutes}
           temporalReveal={qaTemporalReveal}
           activeJourneyRouteId={activeRouteId}
+          arrivalExperiment={arrivalQa ? arrivalVariant : undefined}
+          routeArrivalBloom={arrivalQa ? arrivalRequest : null}
           selectedJourneyRoutePoint={labelArbitrationQa ? {
             // The chosen record is the SECOND of the two same-coordinate
             // records, so the arbitration has to prefer it over its twin.
@@ -177,7 +189,7 @@ export function JourneyRoutesQaPreview() {
           centerFocusPoint
           dragToRotate
           wheelToZoom
-          reduceMotion={new URLSearchParams(window.location.search).get("qaMotion") !== "animate"}
+          reduceMotion={arrivalQa ? qaReducedMotion || systemReducedMotion : qaParams.get("qaMotion") !== "animate"}
           compactMobileLayout={compactMobileLayout}
           visibilityHint={qaVisibilityHint}
         />
@@ -190,8 +202,28 @@ export function JourneyRoutesQaPreview() {
           left: 14,
           display: "flex",
           gap: 6,
+          ...(arrivalQa ? { flexWrap: "wrap", maxWidth: "calc(100% - 28px)" } as const : {}),
         }}
       >
+        {arrivalQa ? <>
+          {(["bloom", "particles"] as const).map((variant) => (
+            <button key={variant} type="button" data-qa-arrival-variant={variant}
+              aria-pressed={arrivalVariant === variant} onClick={() => {
+                setArrivalVariant(variant);
+                const url = new URL(window.location.href);
+                url.searchParams.set("qaArrival", variant);
+                window.history.replaceState(null, "", url);
+              }}>{variant === "bloom" ? "A" : "B"}</button>
+          ))}
+          <button type="button" data-qa-arrival-replay onClick={() => {
+            const routeId = activeRouteId ?? "qa-route-southwest";
+            setActiveRouteId(routeId);
+            setArrivalRequest((request) => ({ scope: "arrival-preview", routeId, revision: (request?.revision ?? 0) + 1 }));
+            setFocusRevision((revision) => revision + 1);
+          }}>重播</button>
+          <button type="button" data-qa-arrival-motion aria-pressed={qaReducedMotion}
+            onClick={() => setQaReducedMotion((value) => !value)}>减少动态</button>
+        </> : null}
         {routeOpticsQa ? (
           <>
             <button type="button" data-qa-route-optics-stage="browse" onClick={() => setRouteOpticsStage("browse")}>optics browse</button>
@@ -222,7 +254,7 @@ export function JourneyRoutesQaPreview() {
             <button type="button" data-qa-route-data="original" onClick={() => setQaRouteDataUpdated(false)}>restore route data</button>
           </>
         ) : null}
-        {previewRoutes.map((route) => (
+        {(arrivalQa ? previewRoutes.filter((route) => ["qa-route-southwest", "qa-route-rhine"].includes(route.id)) : previewRoutes).map((route) => (
           <button
             key={route.id}
             type="button"

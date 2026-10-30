@@ -1,6 +1,7 @@
 // #247 - finite Particle drawing-buffer cost + product-state cover suspension.
 // #88 - visited-imprint field stays bounded and captures real visual evidence.
 import { mkdirSync } from "node:fs";
+import { checkArrivalParticles } from "./qa-arrival-particles.mjs";
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
@@ -402,6 +403,7 @@ async function captureImprintStage(stage) {
 }
 
 try {
+  await checkArrivalParticles(browser, origin, record);
   await checkParticleBackendDegradation();
   await checkRouteReuse();
   for (const fixture of [

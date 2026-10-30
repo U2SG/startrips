@@ -18,6 +18,8 @@ import {
   DAY_NIGHT_TERMINATOR_START,
 } from "./sunPosition";
 
+import { ARRIVAL_PARTICLE_UNIFORMS, ARRIVAL_PARTICLE_VERTEX } from "./arrivalParticles";
+
 export const PARTICLE_DIM_POINT_LIMIT = 24;
 export const PARTICLE_ACTIVE_DIM_POINT_LIMIT = 12;
 
@@ -87,6 +89,7 @@ interface ParticleMaterialOptions {
   clipDepthBias?: number;
   visitedImprint?: boolean;
   dayNight?: boolean;
+  arrivalParticles?: boolean;
 }
 
 export function createParticleEarthMaterial({
@@ -99,6 +102,7 @@ export function createParticleEarthMaterial({
   clipDepthBias = 0,
   visitedImprint = false,
   dayNight = false,
+  arrivalParticles = false,
 }: ParticleMaterialOptions) {
   return new ParticleEarthMaterial({
     transparent: true,
@@ -106,6 +110,12 @@ export function createParticleEarthMaterial({
     blending: AdditiveBlending,
     uniforms: {
       uColor: { value: new Color(color) },
+      ...(arrivalParticles ? {
+        uArrivalAnchor: { value: new Vector3(0, 0, 1) },
+        uArrivalTwist: { value: 0 },
+        uArrivalGlow: { value: 0 },
+        uArrivalColor: { value: new Color(color) },
+      } : {}),
       uMorph: { value: 0 },
       uOpacity: { value: opacity },
       uPointSize: { value: size },
@@ -144,6 +154,7 @@ export function createParticleEarthMaterial({
       uDimInnerCos: { value: 0.994 },
     },
     vertexShader: `
+      ${arrivalParticles ? ARRIVAL_PARTICLE_UNIFORMS : ""}
       attribute vec3 targetPosition;
       ${spatialLod ? "attribute float lodThreshold;" : ""}
       uniform float uMorph;
@@ -191,6 +202,7 @@ export function createParticleEarthMaterial({
       void main() {
         vec3 transformed = mix(position, targetPosition, uMorph);
         vec3 surfaceDirection = normalize(transformed);
+        ${arrivalParticles ? ARRIVAL_PARTICLE_VERTEX : ""}
         float nearbyJourney = 0.0;
         for (int index = 0; index < ${PARTICLE_DIM_POINT_LIMIT}; index += 1) {
           if (index >= uDimPointCount) break;
@@ -310,6 +322,7 @@ export function createParticleEarthMaterial({
     `,
     fragmentShader: `
       uniform vec3 uColor;
+      ${arrivalParticles ? "uniform vec3 uArrivalColor; varying float vArrivalGlow;" : ""}
       uniform float uOpacity;
       varying float vStrength;
       varying float vTwinkle;
@@ -326,8 +339,9 @@ export function createParticleEarthMaterial({
           * vTwinkle
           * vDimBrightness
           * vLodAlpha;
+        ${arrivalParticles ? "alpha *= 1.0 + vArrivalGlow;" : ""}
         if (alpha < 0.015) discard;
-        gl_FragColor = vec4(uColor, alpha);
+        gl_FragColor = vec4(${arrivalParticles ? "mix(uColor, uArrivalColor, vArrivalGlow * 0.65)" : "uColor"}, alpha);
       }
     `,
   });
