@@ -159,3 +159,25 @@ it("retains complete 到 meridiem ranges and unresolved clocks without inventing
   const unresolved = await prepareClock(source, null, null);
   expect(unresolved.chapters[0].suggestions[0].questions).toContain("钟点上下文待确认");
 });
+
+it.each([
+  ["09:00到达酒店。", "09:00", "09:00"],
+  ["09:00 到酒店办理入住。", "09:00", "09:00"],
+  ["晚上9:00到达酒店。", "21:00", "晚上9:00"],
+  ["09:00 to Amsterdam", "09:00", "09:00"],
+  ["09:00 to Amman", "09:00", "09:00"],
+  ["09:00 to Amherst", "09:00", "09:00"],
+  ["Amsterdam 09:00 she arrives.", "09:00", "09:00"],
+  ["09:00-抵达酒店。", "09:00", "09:00"],
+])("keeps a grounded single clock in ordinary destination prose: %s", async (source, time, evidence) => {
+  const result = await prepareClock(source, time, evidence);
+  expect(result.chapters[0].events[0]).toMatchObject({ source, localTime: time, localDate: null });
+});
+it.each(["到上午10:00", " to 10:00 AM", "to AM 10:00", " 到 约10:00", " to around 10:00"])("does not crop a range with the grounded clock continuation %s", async tail => {
+  await expect(prepareClock(`09:00${tail} 实际：她散步。`, "09:00", "09:00")).rejects.toThrow();
+});
+it.each(["10:000", "100:00", "10:0", "99:00"])("does not reduce an invalid range ending %s to a valid first endpoint", async end => {
+  await expect(prepareClock(`09:00到${end} 实际：途中。`, "09:00", "09:00")).rejects.toThrow();
+  const result = await prepareClock(`09:00到${end} 实际：途中。`, null, null);
+  expect(result.chapters[0].suggestions[0].questions).toContain("钟点上下文待确认");
+});

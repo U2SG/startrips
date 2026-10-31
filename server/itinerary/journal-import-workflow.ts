@@ -41,7 +41,7 @@ function groundedDate(value: unknown, quote: unknown, source: string, year: stri
   const dates = groundedDates(quote, source, year);
   return typeof value === "string" && dates?.length === 1 && dates[0] === value;
 }
-const meridiem = "上午|下午|晚上|凌晨|早上|中午|晚间|傍晚|a\\.?m\\.?|p\\.?m\\.?";
+const meridiem = "上午|下午|晚上|凌晨|早上|中午|晚间|傍晚|(?<![a-z])(?:a\\.?m\\.?|p\\.?m\\.?)(?![a-z])";
 function groundedClock(piece: string) {
   const match = /^(?:(上午|下午|晚上|凌晨|早上|中午|am|pm)\s*)?(\d{1,2}):(\d{2})(?:\s*(a\.?m\.?|p\.?m\.?))?$/i.exec(piece.trim());
   if (!match) throw bad();
@@ -79,10 +79,15 @@ function groundedTime(start: unknown, end: unknown, quote: unknown, source: stri
   if (clocks.length !== (end === null ? 1 : 2) || clocks[0] !== start || (end !== null && clocks[1] !== end)) throw bad();
   // Reject cropped starts of ranges and clocks embedded in invalid/approximate tokens.
   const index = source.indexOf(quote), before = source.slice(0, index), after = source.slice(index + quote.length);
+  // A connector alone is not a range: 到达/到酒店 and 'to Amsterdam'
+  // are ordinary destination prose. Require a following clock-shaped token.
+  // Approximate/malformed endpoints still establish an unresolved range;
+  // groundedClock validates the exact endpoints if the whole range is supplied.
+  const followingClock = `(?:(?:约|大约|大概|近|about|around)\\s*)?(?:(?:${meridiem})\\s*)?\\d+[:：]\\d+`;
   if (new RegExp(`(?:${meridiem})[\\s\\p{P}]*$`, "iu").test(before) || new RegExp(`^[\\s\\p{P}]*(?:${meridiem})(?![a-z])`, "iu").test(after)
     || /[\d:：约近~～]$/.test(before) || /(?:约|大约|大概|近|about|around)\s*$/iu.test(before)
     || new RegExp(`\\d[:：]\\d{2}\\s*(?:${meridiem})?\\s*(?:[-–—~～至到]|to)\\s*$`, "iu").test(before)
-    || new RegExp(`^\\s*(?:[-–—~～至到]|to(?=\\s*(?:\\d|${meridiem})))`, "iu").test(after)
+    || new RegExp(`^\\s*(?:[-–—~～至到]|to)\\s*${followingClock}`, "iu").test(after)
     || /^[\d:：]/.test(after) || /^\s*(?:左右|前后|许)/.test(after)) throw bad();
   return { localTime: end === null ? start : null, timeContext: end === null ? "当地时间（具体时区未确认）" : `当地时间区间 ${quote}（跨日日期未确认）` };
 }
