@@ -290,3 +290,56 @@ it('provider discovery returns only an opaque identity and safe hostname, never 
     const output=JSON.stringify({data,result:await synchronous.json()});for(const secret of ['private-password','private-path-secret','private-query','mock-only'])expect(output).not.toContain(secret);
   }finally{Object.assign(serverConfig,{intentBaseUrl:previous});}
 });
+
+for (const path of ["sync", "job"] as const) {
+  it.each(["chapter-crop", "event-crop", "range", "unresolved"] as const)(`${path} date evidence: %s cannot bypass validation or change existing data`, async scenario => {
+    const j = await createJourneyForAtlas(owner.atlasId, owner.userId, { title: "date evidence fixture", startedOn: "2028-06-01", endedOn: "2028-06-09", note: "keep", lightColor: "#ffffff", routePoints: [{ label: "旧点", latitude: 1, longitude: 2, isStop: true, occurredAt: null }] });
+    const target = { ...owner, email: authUserEmails[0], journeyId: j!.id };
+    const manual = previewJournalImport("2028-05-01\n实际：手工内容。", "2028-05-01");
+    manual[0].events[0].text = "edited prior text"; manual[0].events[0].edited = true;
+    await writeDailyJournal(j!.id, owner.atlasId, 0, manual);
+    const before = await readDailyJournal(j!.id, owner.atlasId), journeyBefore = await getJourneyForAtlas(j!.id, owner.atlasId);
+    expect(journeyBefore).toBeDefined(); expect(journeyBefore!.routePoints).toHaveLength(1);
+    const evidence = "（2028年6月3日）到（2028年6月5日）", text = `记录：${evidence}。她沿湖步行。`;
+    const payload = { chapters: [{ firstLine: 0, lastLine: 0,
+      date: scenario === "chapter-crop" ? "2028-06-05" : scenario === "range" ? "2028-06-03" : null,
+      dateEnd: scenario === "range" ? "2028-06-05" : null,
+      dateEvidence: scenario === "chapter-crop" ? "2028年6月5日" : scenario === "range" ? evidence : null,
+      events: [{ line: 0, evidence: text, status: "actual", localDate: scenario === "event-crop" ? "2028-06-05" : null,
+        dateEvidence: scenario === "event-crop" ? "2028年6月5日" : null, time: null, timeEnd: null, timeEvidence: null, reading: text, questions: [] }] }] };
+    let calls = 0;
+    journalImportDependencies.fetcher = async (_url, init) => {
+      calls++;
+      const fn = { name: "stage_journal_import", arguments: JSON.stringify(payload) };
+      if (!JSON.parse(init!.body as string).stream) return Response.json({ choices: [{ message: { tool_calls: [{ type: "function", function: fn }] } }] });
+      const chunk = { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "date-fixture", type: "function", function: fn }] }, finish_reason: "tool_calls" }] };
+      return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+    };
+    try {
+      const input = { source: text, sentence: "导入合成日期记录", fallbackDate: "2028-06-01", provider };
+      const invalid = scenario.endsWith("crop"); let result: Envelope | null = null;
+      if (path === "sync") {
+        const response = await app.request(`${TEST_ORIGIN}/api/intents/journal-import`, { method: "POST", headers: authHeaders(owner.cookie), body: JSON.stringify({ ...input, journeyId: j!.id }) });
+        expect(response.status).toBe(invalid ? 502 : 200);
+        const body = await response.json();
+        if (invalid) { expect(body.error).toBe("JOURNAL_IMPORT_MALFORMED"); expect(body.envelope).toBeUndefined(); }
+        else result = body.envelope;
+      } else {
+        const id = randomUUID(); await submitJournalJob(target, id, input); await runJournalJob();
+        const row = await readJournalJob(target, id);
+        expect(row.status).toBe(invalid ? "failed" : "completed");
+        if (invalid) { expect(row.error).toMatchObject({ error: "JOURNAL_IMPORT_MALFORMED" }); expect(row.envelope).toBeNull(); }
+        else result = row.envelope;
+      }
+      if (!invalid) {
+        const plan = validateEnvelope(result).plan;
+        expect(plan.after.chapters[0]).toEqual(before!.chapters[0]);
+        const added = plan.after.chapters[1]; expect(added.source).toBe(text); expect(added.events[0].localDate).toBeNull();
+        expect(added.suggestions[0].questions.join()).toContain(scenario === "range" ? "2028-06-03 至 2028-06-05" : "日期范围待确认");
+      }
+      expect(calls).toBe(1);
+      expect(await readDailyJournal(j!.id, owner.atlasId)).toEqual(before);
+      expect(await getJourneyForAtlas(j!.id, owner.atlasId)).toEqual(journeyBefore);
+    } finally { journalImportDependencies.fetcher = model.fetcher; }
+  });
+}
