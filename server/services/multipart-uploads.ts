@@ -7,7 +7,7 @@ import {
   serializeRecordedEvidence,
   type MediaRecordedEvidence,
 } from "../media/media-evidence";
-import { PART_SIZE, mediaKindOf, parseParts, type parseStartUpload } from "../media/upload-protocol";
+import { PART_SIZE, UUID_PATTERN, mediaKindOf, parseParts, type parseStartUpload } from "../media/upload-protocol";
 import { lockActiveAtlas, lockActiveJourney } from "../repositories/journey-repository";
 import { attachRecordedEvidenceToNewAsset } from "../repositories/media-evidence-repository";
 import { getMultipartStorage, hasConfiguredStorageBackends } from "../storage/storage-registry";
@@ -561,6 +561,22 @@ export async function startUploadForAtlas(
     }
     throw error;
   }
+}
+
+/** Read persisted state without renewing the upload lease or contacting storage. */
+export async function readUploadStatusForAtlas(atlasId: string, uploadId: string) {
+  const upload = UUID_PATTERN.test(uploadId) ? await findUpload(uploadId, atlasId) : null;
+  if (!upload) return { body: { error: "UPLOAD_NOT_FOUND" }, status: 404 as const };
+  return {
+    body: {
+      uploadId: upload.id,
+      status: upload.status,
+      partSize: upload.partSize,
+      partCount: upload.partCount,
+      assetId: upload.status === "completed" ? upload.mediaAssetId : null,
+    },
+    status: 200 as const,
+  };
 }
 
 export async function signUploadPartForAtlas(

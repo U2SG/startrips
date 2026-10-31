@@ -12,7 +12,7 @@ export const MAX_MOVE_UNDO_ORDER = 10_000;
 export function moveUndoOrdersFitLimit(...orders: readonly string[][]) {
   return orders.every((order) => order.length <= MAX_MOVE_UNDO_ORDER);
 }
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const ALLOWED_MIME_TYPES = new Set([
   "image/avif",
   "image/jpeg",

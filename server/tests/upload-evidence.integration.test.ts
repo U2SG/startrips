@@ -3,6 +3,7 @@ import { createEmailVerificationToken } from "better-auth/api";
 import { eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { app } from "../app";
+import uploadStatusFixture from "./fixtures/ios-upload-status.json";
 import { serverConfig } from "../config";
 import {
   atlases,
@@ -245,6 +246,37 @@ afterAll(async () => {
     await db.delete(authUsers).where(inArray(authUsers.email, authUserEmails));
   }
   await pool.end();
+});
+
+describe("read an upload after an interrupted response", () => {
+  it("reports persisted state and the final asset without private storage fields", async () => {
+    const upload = await startedUpload();
+    const url = `${TEST_ORIGIN}/api/uploads/${upload.id}/status`;
+    const options = { headers: authHeaders(identity.cookie) };
+    const started = await app.request(url, options);
+    expect(started.status).toBe(200);
+    expect(started.headers.get("cache-control")).toContain("no-store");
+    expect(await started.json()).toEqual({ ...uploadStatusFixture, uploadId: upload.id });
+
+    const asset = await finalizeUpload(upload, contentHash("status-after-commit"));
+    const completed = await app.request(url, options);
+    expect(completed.status).toBe(200);
+    expect(await completed.json()).toEqual({
+      ...uploadStatusFixture, uploadId: upload.id, status: "completed", assetId: asset.id,
+    });
+  });
+
+  it("does not disclose another Atlas's upload or require a storage lookup for an invalid id", async () => {
+    const upload = await startedUpload();
+    const path = `${TEST_ORIGIN}/api/uploads/`;
+    for (const [id, cookie] of [[upload.id, outsiderIdentity.cookie], ["invalid", identity.cookie]]) {
+      const response = await app.request(`${path}${id}/status`, { headers: authHeaders(cookie) });
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "UPLOAD_NOT_FOUND" });
+    }
+    const anonymous = await app.request(`${path}${upload.id}/status`);
+    expect(anonymous.status).toBe(401);
+  });
 });
 
 describe("upload start validation", () => {
