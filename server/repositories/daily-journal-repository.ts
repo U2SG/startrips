@@ -62,21 +62,18 @@ export async function readDailyJournal(journeyId: string, atlasId: string): Prom
   const [row] = await db.select().from(journeyJournals).where(eq(journeyJournals.journeyId, journeyId));
   return row ? { revision: row.revision, chapters: row.chapters } : EMPTY_JOURNAL;
 }
-export async function writeDailyJournal(journeyId: string, atlasId: string, baseRevision: number, chapters: JournalChapter[]): Promise<DailyJournal | null> {
-  return db.transaction(async (tx) => {
-    if (!await lockActiveAtlas(tx, atlasId) || !await lockActiveJourney(tx, journeyId, atlasId)) return null;
-    const [previous] = await tx.select().from(journeyJournals).where(eq(journeyJournals.journeyId, journeyId));
-    const digest = createHash("sha256").update(JSON.stringify({ baseRevision, chapters })).digest("hex");
-    // Recognize the exact last accepted request, including any server-side cleanup.
-    if (previous?.lastWriteDigest === digest) return { revision: previous.revision, chapters: previous.chapters };
-    const points = await tx.select({ id: journeyRoutePoints.id }).from(journeyRoutePoints).where(eq(journeyRoutePoints.journeyId, journeyId));
-    const media = await tx.select({ id: mediaAssets.id }).from(mediaAssets).where(eq(mediaAssets.journeyId, journeyId));
+/** Caller holds the active Atlas/Journey locks; preview and write must agree. */
+export async function normalizeJournalReferences(journeyId: string, previous: JournalChapter[], chapters: JournalChapter[], tx: Pick<typeof db, "select">): Promise<JournalChapter[]> {
+    // Some deletion paths lock only the referenced row. Keep the validated
+    // ownership stable through private backup and the outer transaction commit.
+    const points = await tx.select({ id: journeyRoutePoints.id }).from(journeyRoutePoints).where(eq(journeyRoutePoints.journeyId, journeyId)).for("share");
+    const media = await tx.select({ id: mediaAssets.id }).from(mediaAssets).where(eq(mediaAssets.journeyId, journeyId)).for("share");
     const pointIds = new Set(points.map((p) => p.id));
     const mediaIds = new Set(media.map((m) => m.id));
-    const previousEvents = new Map(previous?.chapters.flatMap((c) => c.events.map((e) => [e.id, e] as const)) ?? []);
+    const previousEvents = new Map(previous.flatMap((c) => c.events.map((e) => [e.id, e] as const)));
     // Deleted/moved references that this exact event already held may be cleared.
     // A newly supplied foreign reference still cannot acquire authority here.
-    const cleaned = chapters.map((c) => ({ ...c, events: c.events.map((event) => {
+    return chapters.map((c) => ({ ...c, events: c.events.map((event) => {
       const prior = previousEvents.get(event.id);
       if (prior && prior.source !== event.source) throw new JournalWriteError("JOURNAL_SOURCE_CHANGED", 400);
       if ((event.routePointId && !pointIds.has(event.routePointId) && prior?.routePointId !== event.routePointId)
@@ -86,6 +83,15 @@ export async function writeDailyJournal(journeyId: string, atlasId: string, base
       return { ...event, routePointId: event.routePointId && pointIds.has(event.routePointId) ? event.routePointId : null,
         mediaIds: event.mediaIds.filter((id) => mediaIds.has(id)) };
     }) }));
+}
+export async function writeDailyJournal(journeyId: string, atlasId: string, baseRevision: number, chapters: JournalChapter[], connection: Pick<typeof db, "transaction"> = db): Promise<DailyJournal | null> {
+  return connection.transaction(async (tx) => {
+    if (!await lockActiveAtlas(tx, atlasId) || !await lockActiveJourney(tx, journeyId, atlasId)) return null;
+    const [previous] = await tx.select().from(journeyJournals).where(eq(journeyJournals.journeyId, journeyId));
+    const digest = createHash("sha256").update(JSON.stringify({ baseRevision, chapters })).digest("hex");
+    // Recognize the exact last accepted request, including any server-side cleanup.
+    if (previous?.lastWriteDigest === digest) return { revision: previous.revision, chapters: previous.chapters };
+    const cleaned = await normalizeJournalReferences(journeyId, previous?.chapters ?? [], chapters, tx);
     if (isDeepStrictEqual(previous?.chapters ?? [], cleaned)) return { revision: previous?.revision ?? 0, chapters: cleaned };
     if ((previous?.revision ?? 0) !== baseRevision) throw new JournalWriteError("JOURNAL_CHANGED", 409);
     // Existing raw evidence is immutable; deleting a chapter is explicit in the editor.
