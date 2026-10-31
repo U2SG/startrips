@@ -96,7 +96,7 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
         {client.importJournal ? <JournalImportControl client={client.importJournal}
           input={{ journeyId: journey.id, atlasId: journey.atlasId, source, fallbackDate: date }}
           disabled={!!draft || (!!busy && busy !== "导入")} control={importControl}
-          onBusy={value => setBusy(value ? "导入" : null)}
+          onBusy={value => setBusy(current => value ? "导入" : current === "导入" ? null : current)}
           onPreview={preview => {
             if (preview.revision !== saved.revision) { setError("手记已更新，请保留原文，重新打开后导入。"); return; }
             setDraft(preview); setHotels(null); setError(""); setNotice("请核对完整预览后确认保存。");

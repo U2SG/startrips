@@ -23,7 +23,17 @@ export function JournalImportControl({ client, input, disabled, control, onBusy,
   const inFlight = useRef(false);
   const [state, setState] = useState<JournalImportState | null>(null);
   const callbacks = useRef({ onBusy, onPreview }); callbacks.current = { onBusy, onPreview };
-  useLayoutEffect(() => () => { control.current?.dispose(); control.current = null; }, [client, input.journeyId, input.atlasId, control]);
+  useLayoutEffect(() => {
+    setState(null);
+    inFlight.current = false;
+    return () => {
+      control.current?.dispose();
+      control.current = null;
+      const wasBusy = inFlight.current;
+      inFlight.current = false;
+      if (wasBusy) callbacks.current.onBusy(false);
+    };
+  }, [client, input.journeyId, input.atlasId, control]);
   const active = !!state && ["submitting", "observing", "stopping", "paused"].includes(state.status);
   function start() {
     if (inFlight.current || disabled) return;

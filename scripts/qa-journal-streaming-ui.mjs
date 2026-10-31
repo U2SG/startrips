@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { launchQaBrowser } from './qa-browser.mjs';
+import { verifyJournalScope } from './qa-journal-scope.mjs';
 const origin = process.env.QA_ORIGIN ?? 'http://127.0.0.1:4173';
 const output = 'artifacts/qa-journal-streaming-ui';
 const source = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
@@ -103,5 +104,6 @@ try {
     await page.evaluate(()=>window.__qa.cancelled()); await page.getByText('面板已关闭',{exact:true}).waitFor(); assert.equal(await page.evaluate(()=>window.__qa.closed),1); cases++;
     assert.deepEqual(errors,[]); await context.close();
   }
+  cases += await verifyJournalScope(browser, origin, output);
   console.log(JSON.stringify({cases,viewports:['320x568','390x844','844x390'],screenshots:output,source}));
 } finally { await browser.close(); }

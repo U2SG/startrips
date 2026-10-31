@@ -775,6 +775,9 @@ export type CommandRouteAnswer = CommandRouteMeta & (
   | { intent: "unsupported"; proposal: null }
 );
 
+/** Ordinary command proposals have a deadline; durable journal jobs do not use it. */
+export const COMMAND_ROUTE_TIMEOUT_MS = 65_000;
+
 /** A proposal only: nothing is written until the member confirms the card. */
 export async function routeCommand(
   text: string,
@@ -782,11 +785,31 @@ export async function routeCommand(
   signal?: AbortSignal,
   fetcher: Fetcher = fetch,
 ): Promise<CommandRouteAnswer> {
-  return requestJson<CommandRouteAnswer>(
-    "/api/intents/route",
-    { method: "POST", body: JSON.stringify({ text, context }), signal },
-    fetcher,
-  );
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let abort: () => void = () => {};
+  try {
+    return await new Promise<CommandRouteAnswer>((resolve, reject) => {
+      abort = () => {
+        reject(new DOMException("Aborted", "AbortError"));
+        controller.abort();
+      };
+      if (signal?.aborted) { abort(); return; }
+      signal?.addEventListener("abort", abort, { once: true });
+      timer = setTimeout(() => {
+        reject(new JourneyApiError(504, "COMMAND_ROUTE_TIMEOUT", "Command request timed out"));
+        controller.abort();
+      }, COMMAND_ROUTE_TIMEOUT_MS);
+      // Bound the entire promise, including success/error response bodies. A
+      // non-cooperative transport cannot strand the caller after cancellation.
+      requestJson<CommandRouteAnswer>("/api/intents/route", {
+        method: "POST", body: JSON.stringify({ text, context }), signal: controller.signal,
+      }, fetcher).then(resolve, reject);
+    });
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+  }
 }
 
 export async function listShares(
