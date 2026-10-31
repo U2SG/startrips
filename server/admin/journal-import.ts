@@ -7,7 +7,7 @@ import { user, member } from "../db/auth-schema";
 import { hasAtlasPermission } from "../authorization/permissions";
 import { serverConfig } from "../config";
 import { lockActiveAtlas, lockActiveJourney } from "../repositories/journey-repository";
-import { writeDailyJournal } from "../repositories/daily-journal-repository";
+import { normalizeJournalReferences, writeDailyJournal } from "../repositories/daily-journal-repository";
 import { parseJournalChapters, previewJournalImport, type JournalChapter, type DailyJournal } from "../../src/journey/dailyJournal";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -60,6 +60,7 @@ export async function previewImport(target: Target, source: string, fallbackDate
     const before = await lockedTarget(tx, target);
     let chapters;
     try { chapters = previewJournalImport(source, fallbackDate, before.chapters); } catch { return fail("INVALID_IMPORT"); }
+    chapters = await normalizeJournalReferences(target.journeyId, before.chapters, chapters, tx);
     return sealJournalDraft(target, source, before, chapters);
   });
 }
@@ -71,6 +72,8 @@ export async function applyImport(value: unknown, expectedDigest: string, backup
     if (hash(current) === hash(e.plan.after)) return { state: "already-applied", revision: current.revision };
     if (e.plan.expires < Date.now()) return fail("PLAN_EXPIRED");
     if (hash(current) !== hash(e.plan.before)) return fail("JOURNAL_CHANGED");
+    const cleaned = await normalizeJournalReferences(e.plan.target.journeyId, current.chapters, e.plan.after.chapters, tx);
+    if (hash(cleaned) !== hash(e.plan.after.chapters)) return fail("JOURNAL_CHANGED");
     // Durable private backup must finish before any domain write, or transaction aborts.
     await backup(e);
     const saved = await writeDailyJournal(e.plan.target.journeyId, e.plan.target.atlasId, current.revision, e.plan.after.chapters, tx);
