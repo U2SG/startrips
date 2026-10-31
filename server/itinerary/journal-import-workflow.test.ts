@@ -133,3 +133,29 @@ it("preserves an explicit meridiem range without inferring midnight dates", asyn
   expect(result.chapters[0].events[0]).toMatchObject({ source, localTime: null, localDate: null });
   expect(result.chapters[0].events[0].timeContext).toContain("晚上11:30–凌晨1:00");
 });
+
+const clockRangeSeparators = ["到", " 到 ", " to ", "TO", "至", "–"];
+it.each(clockRangeSeparators)("preserves both endpoints of a %s clock range", async separator => {
+  const evidence = `09:00${separator}10:00`, source = `${evidence} 实际：她在虚构花园散步。`;
+  const result = await prepareClock(source, "09:00", evidence, "10:00");
+  expect(result.chapters[0].events[0]).toMatchObject({ source, localTime: null, localDate: null });
+  expect(result.chapters[0].events[0].timeContext).toContain(evidence);
+});
+it.each(clockRangeSeparators)("rejects a cropped left endpoint of a %s clock range", async separator => {
+  await expect(prepareClock(`09:00${separator}10:00 实际：她散步。`, "09:00", "09:00")).rejects.toThrow("模型草稿缺少原文证据或结构无效");
+});
+it.each(clockRangeSeparators)("rejects a cropped right endpoint of a %s clock range", async separator => {
+  await expect(prepareClock(`09:00${separator}10:00 实际：她散步。`, "10:00", "10:00")).rejects.toThrow("模型草稿缺少原文证据或结构无效");
+});
+it.each(["tomorrow", "together"])("does not mistake the ordinary word %s for a clock range", async word => {
+  const result = await prepareClock(`09:00 ${word} she walks.`, "09:00", "09:00");
+  expect(result.chapters[0].events[0].localTime).toBe("09:00");
+});
+it("retains complete 到 meridiem ranges and unresolved clocks without inventing midnight dates", async () => {
+  const source = "晚上11:30到凌晨1:00 实际：她在途中。";
+  const result = await prepareClock(source, "23:30", "晚上11:30到凌晨1:00", "01:00");
+  expect(result.chapters[0].events[0]).toMatchObject({ source, localTime: null, localDate: null });
+  expect(result.chapters[0].events[0].timeContext).toContain("晚上11:30到凌晨1:00");
+  const unresolved = await prepareClock(source, null, null);
+  expect(unresolved.chapters[0].suggestions[0].questions).toContain("钟点上下文待确认");
+});

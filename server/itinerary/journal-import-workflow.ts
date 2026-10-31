@@ -72,7 +72,7 @@ function groundedTime(start: unknown, end: unknown, quote: unknown, source: stri
   if (typeof start !== "string" || !clock.test(start) || (end !== null && (typeof end !== "string" || !clock.test(end)))
     || typeof quote !== "string" || !source.includes(quote)) throw bad();
   const normalized = quote.replace(/：/g, ":").trim();
-  const pieces = normalized.split(/\s*[-–—~～至]\s*/);
+  const pieces = normalized.split(/\s*(?:[-–—~～至到]|to)\s*/i);
   const parsedClocks = pieces.map(groundedClock);
   if (parsedClocks.length === 2 && parsedClocks[0].hasCue !== parsedClocks[1].hasCue) throw bad();
   const clocks = parsedClocks.map(p => p.value);
@@ -81,7 +81,9 @@ function groundedTime(start: unknown, end: unknown, quote: unknown, source: stri
   const index = source.indexOf(quote), before = source.slice(0, index), after = source.slice(index + quote.length);
   if (new RegExp(`(?:${meridiem})[\\s\\p{P}]*$`, "iu").test(before) || new RegExp(`^[\\s\\p{P}]*(?:${meridiem})(?![a-z])`, "iu").test(after)
     || /[\d:：约近~～]$/.test(before) || /(?:约|大约|大概|近|about|around)\s*$/iu.test(before)
-    || new RegExp(`\\d[:：]\\d{2}\\s*(?:${meridiem})?\\s*[-–—~～至]\\s*$`, "iu").test(before) || /^\s*[-–—~～至]/.test(after) || /^[\d:：]/.test(after) || /^\s*(?:左右|前后|许)/.test(after)) throw bad();
+    || new RegExp(`\\d[:：]\\d{2}\\s*(?:${meridiem})?\\s*(?:[-–—~～至到]|to)\\s*$`, "iu").test(before)
+    || new RegExp(`^\\s*(?:[-–—~～至到]|to(?=\\s*(?:\\d|${meridiem})))`, "iu").test(after)
+    || /^[\d:：]/.test(after) || /^\s*(?:左右|前后|许)/.test(after)) throw bad();
   return { localTime: end === null ? start : null, timeContext: end === null ? "当地时间（具体时区未确认）" : `当地时间区间 ${quote}（跨日日期未确认）` };
 }
 function factualStatus(status: JournalStatus, source: string): JournalStatus {
