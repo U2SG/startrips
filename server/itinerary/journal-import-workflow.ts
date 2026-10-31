@@ -83,11 +83,11 @@ function groundedTime(start: unknown, end: unknown, quote: unknown, source: stri
   // are ordinary destination prose. Require a following clock-shaped token.
   // Approximate/malformed endpoints still establish an unresolved range;
   // groundedClock validates the exact endpoints if the whole range is supplied.
-  const followingClock = `(?:(?:约|大约|大概|近|about|around)\\s*)?(?:(?:${meridiem})\\s*)?\\d+[:：]\\d+`;
+  const clockShape = `(?:(?:${meridiem}|约|大约|大概|近|about|around)\\s*)*\\d+[:：]\\d+(?:\\s*(?:${meridiem}|左右|前后|许))*`;
   if (new RegExp(`(?:${meridiem})[\\s\\p{P}]*$`, "iu").test(before) || new RegExp(`^[\\s\\p{P}]*(?:${meridiem})(?![a-z])`, "iu").test(after)
     || /[\d:：约近~～]$/.test(before) || /(?:约|大约|大概|近|about|around)\s*$/iu.test(before)
-    || new RegExp(`\\d[:：]\\d{2}\\s*(?:${meridiem})?\\s*(?:[-–—~～至到]|to)\\s*$`, "iu").test(before)
-    || new RegExp(`^\\s*(?:[-–—~～至到]|to)\\s*${followingClock}`, "iu").test(after)
+    || new RegExp(`${clockShape}\\s*(?:[-–—~～至到]|to)\\s*$`, "iu").test(before)
+    || new RegExp(`^\\s*(?:[-–—~～至到]|to)\\s*${clockShape}`, "iu").test(after)
     || /^[\d:：]/.test(after) || /^\s*(?:左右|前后|许)/.test(after)) throw bad();
   return { localTime: end === null ? start : null, timeContext: end === null ? "当地时间（具体时区未确认）" : `当地时间区间 ${quote}（跨日日期未确认）` };
 }

@@ -181,3 +181,15 @@ it.each(["10:000", "100:00", "10:0", "99:00"])("does not reduce an invalid range
   const result = await prepareClock(`09:00到${end} 实际：途中。`, null, null);
   expect(result.chapters[0].suggestions[0].questions).toContain("钟点上下文待确认");
 });
+it.each(["到", "至", " to "])("rejects a cropped right clock after malformed or approximate left endpoints with %s", async separator => {
+  for (const left of ["09:0", "09:00左右"]) {
+    const source = `${left}${separator}10:30 实际：途中。`;
+    await expect(prepareClock(source, "10:30", "10:30")).rejects.toThrow();
+    expect((await prepareClock(source, null, null)).chapters[0].events[0].localTime).toBeNull();
+  }
+});
+it.each(["到", "至", " to "])("rejects a cropped left clock before a cue-then-approximation endpoint with %s", async separator => {
+  const source = `09:00${separator}晚上约10:30 实际：途中。`;
+  await expect(prepareClock(source, "09:00", "09:00")).rejects.toThrow();
+  expect((await prepareClock(source, null, null)).chapters[0].suggestions[0].questions).toContain("钟点上下文待确认");
+});
