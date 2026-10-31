@@ -42,8 +42,69 @@ function groundedDate(value: unknown, quote: unknown, source: string, year: stri
   return typeof value === "string" && dates?.length === 1 && dates[0] === value;
 }
 const meridiem = "上午|下午|晚上|凌晨|早上|中午|晚间|傍晚|(?<![a-z])(?:a\\.?m\\.?|p\\.?m\\.?)(?![a-z])";
+const rangeConnector = /[-–—~～至到]|to/giu;
+const clockWrapperPairs: Record<string, string> = { "(": ")", "（": "）", "[": "]", "【": "】", "{": "}", "「": "」", "『": "』" };
+function unwrapClock(value: string): string {
+  value = value.trim();
+  while (clockWrapperPairs[value[0]]) {
+    const stack: string[] = []; let outerEnd = -1;
+    for (let i = 0; i < value.length; i++) {
+      if (clockWrapperPairs[value[i]]) stack.push(clockWrapperPairs[value[i]]);
+      else if (Object.values(clockWrapperPairs).includes(value[i])) {
+        if (stack.pop() !== value[i]) return value;
+        if (!stack.length) { outerEnd = i; break; }
+      }
+    }
+    if (outerEnd !== value.length - 1) break;
+    value = value.slice(1, -1).trim();
+  }
+  return value;
+}
+/** Find source spans before validating their meaning. Incomplete fields remain
+ * clock fragments, so a malformed endpoint cannot disappear through cropping. */
+function clockRangeSpans(source: string) {
+  const fragments = [...source.matchAll(/(?<!\d)(?:\d+[:：]\d*|[:：]\d+)/gu)];
+  const trailing = new RegExp(`^(?:\\s|[\\p{Ps}\\p{Pe}]|${meridiem}|左右|前后|许)*$`, "iu");
+  const leading = new RegExp(`^(?:\\s|[\\p{Ps}\\p{Pe}]|${meridiem}|约|大约|大概|近|about|around)*$`, "iu");
+  const spans: Array<{ start: number; end: number }> = [];
+  for (let i = 1; i < fragments.length; i++) {
+    const left = fragments[i - 1], right = fragments[i];
+    const gap = source.slice(left.index! + left[0].length, right.index);
+    for (const connector of gap.matchAll(rangeConnector)) {
+      const tail = gap.slice(0, connector.index), lead = gap.slice(connector.index! + connector[0].length);
+      if (!leading.test(lead)) continue;
+      // Alphabetic placeholders after a missing minute field (e.g. 10:xx)
+      // remain part of that incomplete fragment, never a valid minute value.
+      const placeholder = /[:：]$/.test(left[0]) ? /^[a-z?？]+/iu.exec(tail)?.[0] ?? "" : "";
+      if (!trailing.test(tail) && (!placeholder || !trailing.test(tail.slice(placeholder.length)))) continue;
+      spans.push({ start: left.index!, end: right.index! + right[0].length });
+      break;
+    }
+  }
+  return spans;
+}
+function requireCompleteClockEvidence(source: string, quote: string) {
+  const ranges = clockRangeSpans(source); let first = 0;
+  // Evidence has no source offset. Repeated text must not disguise another
+  // occurrence which selects only one endpoint of a source range.
+  for (let at = source.indexOf(quote); at !== -1; at = source.indexOf(quote, at + 1)) {
+    const end = at + quote.length;
+    while (first < ranges.length && ranges[first].end <= at) first++;
+    for (let i = first; i < ranges.length && ranges[i].start < end; i++) {
+      if (at > ranges[i].start || end < ranges[i].end) throw bad();
+    }
+    // Wrapping punctuation is transparent to adjacent clock qualifiers. Check
+    // every occurrence because the model supplies a substring, not an offset.
+    const rawBefore = source.slice(0, at), rawAfter = source.slice(end);
+    const before = rawBefore.replace(/[\s\p{Ps}\p{Pe}]+$/u, "");
+    const after = rawAfter.replace(/^[\s\p{Ps}\p{Pe}]+/u, "");
+    if (new RegExp(`(?:${meridiem})[\\s\\p{P}]*$`, "iu").test(before) || new RegExp(`^[\\s\\p{P}]*(?:${meridiem})(?![a-z])`, "iu").test(after)
+      || /[\d:：]$/.test(rawBefore) || /[约近~～]$/.test(before) || /(?:约|大约|大概|近|about|around)\s*$/iu.test(before)
+      || /^[\d:：]/.test(rawAfter) || /^\s*(?:左右|前后|许)/.test(after)) throw bad();
+  }
+}
 function groundedClock(piece: string) {
-  const match = /^(?:(上午|下午|晚上|凌晨|早上|中午|am|pm)\s*)?(\d{1,2}):(\d{2})(?:\s*(a\.?m\.?|p\.?m\.?))?$/i.exec(piece.trim());
+  const match = /^(?:(上午|下午|晚上|凌晨|早上|中午|am|pm)\s*)?(\d{1,2}):(\d{2})(?:\s*(a\.?m\.?|p\.?m\.?))?$/i.exec(unwrapClock(piece));
   if (!match) throw bad();
   const prefix = match[1]?.toLowerCase(), suffix = match[4]?.replace(/\./g, "").toLowerCase();
   const cue = prefix ?? suffix;
@@ -71,24 +132,13 @@ function groundedTime(start: unknown, end: unknown, quote: unknown, source: stri
   if (start === null && end === null && quote === null) return { localTime: null, timeContext: "当地时间（具体时区未确认）" };
   if (typeof start !== "string" || !clock.test(start) || (end !== null && (typeof end !== "string" || !clock.test(end)))
     || typeof quote !== "string" || !source.includes(quote)) throw bad();
-  const normalized = quote.replace(/：/g, ":").trim();
+  const normalized = unwrapClock(quote.replace(/：/g, ":"));
   const pieces = normalized.split(/\s*(?:[-–—~～至到]|to)\s*/i);
   const parsedClocks = pieces.map(groundedClock);
   if (parsedClocks.length === 2 && parsedClocks[0].hasCue !== parsedClocks[1].hasCue) throw bad();
   const clocks = parsedClocks.map(p => p.value);
   if (clocks.length !== (end === null ? 1 : 2) || clocks[0] !== start || (end !== null && clocks[1] !== end)) throw bad();
-  // Reject cropped starts of ranges and clocks embedded in invalid/approximate tokens.
-  const index = source.indexOf(quote), before = source.slice(0, index), after = source.slice(index + quote.length);
-  // A connector alone is not a range: 到达/到酒店 and 'to Amsterdam'
-  // are ordinary destination prose. Require a following clock-shaped token.
-  // Approximate/malformed endpoints still establish an unresolved range;
-  // groundedClock validates the exact endpoints if the whole range is supplied.
-  const clockShape = `(?:(?:${meridiem}|约|大约|大概|近|about|around)\\s*)*\\d+[:：]\\d+(?:\\s*(?:${meridiem}|左右|前后|许))*`;
-  if (new RegExp(`(?:${meridiem})[\\s\\p{P}]*$`, "iu").test(before) || new RegExp(`^[\\s\\p{P}]*(?:${meridiem})(?![a-z])`, "iu").test(after)
-    || /[\d:：约近~～]$/.test(before) || /(?:约|大约|大概|近|about|around)\s*$/iu.test(before)
-    || new RegExp(`${clockShape}\\s*(?:[-–—~～至到]|to)\\s*$`, "iu").test(before)
-    || new RegExp(`^\\s*(?:[-–—~～至到]|to)\\s*${clockShape}`, "iu").test(after)
-    || /^[\d:：]/.test(after) || /^\s*(?:左右|前后|许)/.test(after)) throw bad();
+  requireCompleteClockEvidence(source, quote);
   return { localTime: end === null ? start : null, timeContext: end === null ? "当地时间（具体时区未确认）" : `当地时间区间 ${quote}（跨日日期未确认）` };
 }
 function factualStatus(status: JournalStatus, source: string): JournalStatus {
