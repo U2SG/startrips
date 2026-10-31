@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { pool, db } from '../db/client';
 import { hash, lockedTarget, sealJournalDraft, type Target, type Envelope } from '../admin/journal-import';
 import { journalImportModel, journalProviderInfo } from './journal-import-service';
+import { normalizeJournalReferences } from "../repositories/daily-journal-repository";
 import { prepareJournalImport } from './journal-import-workflow';
 import { importDiagnostic } from '../admin/journal-import-diagnostic';
 export type JobInput = { sentence: string; source: string; fallbackDate: string; provider: {baseUrl:string;model:string} };
@@ -79,7 +80,8 @@ export async function runJournalJob(signal?:AbortSignal) {
     await db.transaction(async tx=>{
       if(hash(await lockedTarget(tx,target))!==hash(before))fail('JOURNAL_CHANGED');
       if(controller.signal.aborted)fail('JOURNAL_JOB_INTERRUPTED');
-      const envelope=sealJournalDraft(target,input.source,before,draft.chapters,draft.importedChapterIds,input.provider);
+      const chapters=await normalizeJournalReferences(target.journeyId,before.chapters,draft.chapters,tx);
+      const envelope=sealJournalDraft(target,input.source,before,chapters,draft.importedChapterIds,input.provider);
       await tx.execute(sql`UPDATE journal_import_jobs SET status='completed',phase='validating',envelope=${JSON.stringify(envelope)},payload=NULL,characters=${progress.characters},chunks=${progress.chunks},updated_at=now() WHERE id=${row.id} AND lease=${token} AND status='running'`);
     });
   } catch(error) {

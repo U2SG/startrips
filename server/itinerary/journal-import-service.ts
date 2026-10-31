@@ -1,7 +1,8 @@
 import { createHmac } from "node:crypto";
 import { db } from "../db/client";
 import { serverConfig } from "../config";
-import { lockedTarget, sealJournalDraft, type Target } from "../admin/journal-import";
+import { hash, lockedTarget, sealJournalDraft, type Target } from "../admin/journal-import";
+import { normalizeJournalReferences } from "../repositories/daily-journal-repository";
 import { prepareJournalImport } from "./journal-import-workflow";
 import type { IntentModelOptions } from "../intents/intent-model-request";
 import { ShareIntentError } from "../intents/create-share-intent";
@@ -25,5 +26,9 @@ export function journalImportModel(consent: unknown): IntentModelOptions {
 export async function prepareAuthorizedJournalImport(target: Target, input: { sentence: string; source: string; fallbackDate: string; provider: unknown }, model = journalImportModel(input.provider)) {
   const before = await db.transaction(tx => lockedTarget(tx, target));
   const draft = await prepareJournalImport(input, before, model);
-  return sealJournalDraft(target, input.source, before, draft.chapters, draft.importedChapterIds, { baseUrl: journalProviderInfo().baseUrl, model: model.model });
+  return db.transaction(async tx => {
+    if (hash(await lockedTarget(tx, target)) !== hash(before)) throw new Error("JOURNAL_CHANGED");
+    const chapters = await normalizeJournalReferences(target.journeyId, before.chapters, draft.chapters, tx);
+    return sealJournalDraft(target, input.source, before, chapters, draft.importedChapterIds, { baseUrl: journalProviderInfo().baseUrl, model: model.model });
+  });
 }
