@@ -22,9 +22,11 @@ export async function readPrivate(path: string, durable = false) {
   } finally { await f.close(); }
 }
 export async function writePrivate(path: string, value: unknown) {
+  const serialized = JSON.stringify(value);
+  if (Buffer.byteLength(serialized) > limit) throw new Error("PRIVATE_FILE_TOO_LARGE");
   await privateDirectory(path);
   const f = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-  try { await f.writeFile(JSON.stringify(value)); await f.sync(); } finally { await f.close(); }
+  try { await f.writeFile(serialized); await f.sync(); } finally { await f.close(); }
   const directory = await open(dirname(path), constants.O_RDONLY);
   try { await directory.sync(); } finally { await directory.close(); }
 }

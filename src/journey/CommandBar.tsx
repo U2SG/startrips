@@ -3,8 +3,6 @@ import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
 import {
   COMMAND_BAR_NOTHING_HERE,
   COMMAND_BAR_STORY_NOTHING_HERE,
-  COMMAND_BAR_TIMEOUT_MS,
-  COMMAND_BAR_TIMEOUT_TEXT,
   commandBarFailure,
   commandBarLatencyStage,
   commandBarManualEntry,
@@ -62,13 +60,16 @@ export function CommandBar({
   const [cardKey, setCardKey] = useState(0);
   const sequenceRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
-  const timedOutRef = useRef(0);
+  const submittedRef = useRef("");
   const cardRef = useRef(card);
   cardRef.current = card;
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => () => {
+    sequenceRef.current += 1;
+    abortRef.current?.abort();
+  }, []);
 
   useEffect(() => {
     if (!pending) return;
@@ -122,7 +123,7 @@ export function CommandBar({
 
   async function submit() {
     const sentence = text.trim();
-    if (!sentence) return;
+    if (!sentence || cardWorkingRef.current || (abortRef.current && submittedRef.current === sentence)) return;
     const bridge = cardProps.composerBridge.current;
     const composerPoints = context.surface === "composer" ? bridge?.points() ?? [] : [];
     const storyBridge = context.surface === "story" ? cardProps.storyBridge.current : null;
@@ -145,11 +146,8 @@ export function CommandBar({
     const sequence = sequenceRef.current;
     const controller = new AbortController();
     abortRef.current = controller;
+    submittedRef.current = sentence;
     setPending({ sequence, startedAt: performance.now() });
-    const timer = window.setTimeout(() => {
-      timedOutRef.current = sequence;
-      controller.abort();
-    }, COMMAND_BAR_TIMEOUT_MS);
     try {
       const answer = await routeCommand(sentence, {
         surface: context.surface,
@@ -169,14 +167,13 @@ export function CommandBar({
     } catch (error) {
       if (sequence !== sequenceRef.current) return;
       if (controller.signal.aborted) {
-        setFailure(timedOutRef.current === sequence ? COMMAND_BAR_TIMEOUT_TEXT : null);
+        setFailure(null);
         return;
       }
       const result = commandBarFailure(error);
       setFailure(result.text);
       if (result.refetchCapabilities) onCapabilitiesStale();
     } finally {
-      window.clearTimeout(timer);
       if (sequence === sequenceRef.current) {
         setPending(null);
         abortRef.current = null;
@@ -222,7 +219,7 @@ export function CommandBar({
           value={text}
           onChange={(event) => setText(event.target.value)}
         />
-        <button type="submit" className="command-bar__submit" disabled={!text.trim()}>理解</button>
+        <button type="submit" className="command-bar__submit" disabled={!text.trim() || (!!pending && submittedRef.current === text.trim())}>理解</button>
       </form>
 
       {pending && stage !== "quiet" ? (

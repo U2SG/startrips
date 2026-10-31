@@ -31,3 +31,8 @@ it.each(["file", "directory"] as const)("retries must resync existing backup aft
   expect(faults.synced).toEqual(["file", "directory"]);
   await expect(persistBackup(path, { changed: true })).rejects.toThrow();
 });
+it("refuses an artifact larger than the readable bound before creating it", async () => {
+  directory = await mkdtemp(join(tmpdir(), "journal-backup-")); const path = join(directory, "too-large.json");
+  await expect(persistBackup(path, { source: "字".repeat(700000) })).rejects.toThrow("PRIVATE_FILE_TOO_LARGE");
+  await expect(readFile(path)).rejects.toMatchObject({ code: "ENOENT" });
+});

@@ -9,9 +9,9 @@ import { hotelSourceHash, sameHotel, sameHotelName, type HotelPlan } from "../it
 import { hasExplicitHotelStayAt, hotelContextMatchesArea } from "../../src/journey/journalHotels";
 
 /** Confirmed, server-signed plan; one transaction for both route and journal. */
-export async function applyJournalHotels(plan: HotelPlan, atlasId: string, journeyId: string) {
+export async function applyJournalHotels(plan: HotelPlan, atlasId: string, journeyId: string, connection: Pick<typeof db, "transaction"> = db) {
   if (plan.atlasId !== atlasId || plan.journeyId !== journeyId) return null;
-  return db.transaction(async tx => {
+  return connection.transaction(async tx => {
     if (!await lockActiveAtlas(tx, atlasId) || !await lockActiveJourney(tx, journeyId, atlasId)) return null;
     const [journal] = await tx.select().from(journeyJournals).where(eq(journeyJournals.journeyId, journeyId));
     const [journey] = await tx.select().from(journeys).where(eq(journeys.id, journeyId));

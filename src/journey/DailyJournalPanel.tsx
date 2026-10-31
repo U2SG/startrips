@@ -8,6 +8,10 @@ import { useReaderReads } from "./journeyReaderMedia";
 import "../styles/daily-journal.css";
 
 import type { HotelPreview } from "./journalHotels";
+import { createJournalRequestSlot } from "./journalRequest";
+import { JournalOperationStatus } from "./JournalOperationStatus";
+import { JournalImportControl } from "./JournalImportControl";
+import type { JournalImportSession } from "./journalImportSession";
 
 const statusLabels: Record<JournalStatus, string> = { actual: "实际", planned: "计划", cancelled: "取消", uncertain: "待确认" };
 
@@ -35,28 +39,40 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
   const [notice, setNotice] = useState("");
   const [hotels, setHotels] = useState<HotelPreview | null>(null);
   const [confirmClose, setConfirmClose] = useState(false);
-  const active = useRef<AbortController | null>(null);
+  const requests = useRef(createJournalRequestSlot());
+  const importControl = useRef<JournalImportSession | null>(null);
   const requestClose = () => { if (busy === "保存") return; if (draft || source) setConfirmClose(true); else onClose(); };
   const root = useModalFocus<HTMLDivElement>(requestClose);
   useEffect(() => {
-    const controller = new AbortController(); active.current = controller;
-    setSaved(null); setDraft(null); setHotels(null); setError(""); setBusy("读取");
-    client.read(journey.id, controller.signal).then((journal) => {
-      if (!controller.signal.aborted) setSaved(journal);
-    }).catch((e: unknown) => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "读取失败"); })
-      .finally(() => { if (!controller.signal.aborted) { active.current = null; setBusy(null); } });
-    return () => { controller.abort(); active.current?.abort(); active.current = null; };
+    const slot = requests.current;
+    const request = slot.begin()!;
+    setSaved(null); setDraft(null); setHotels(null); setSource(""); setDate(journey.startedOn);
+    setError(""); setNotice(""); setConfirmClose(false); setBusy("读取");
+    client.read(journey.id, request.signal).then((journal) => {
+      if (request.current()) setSaved(journal);
+    }).catch((e: unknown) => { if (request.current()) setError(e instanceof Error ? e.message : "读取失败"); })
+      .finally(() => { if (request.finish()) setBusy(null); });
+    return () => slot.cancel();
   }, [client, journey.id, journey.atlasId]);
 
   async function run(label: string, work: (signal: AbortSignal) => Promise<void>) {
-    if (active.current) return;
-    const controller = new AbortController(); active.current = controller; setBusy(label); setError(""); setNotice("");
-    try { await work(controller.signal); }
-    catch (e) { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "操作失败；草稿仍保留。"); }
-    finally { if (active.current === controller) { active.current = null; setBusy(null); } }
+    const request = requests.current.begin();
+    if (!request) return;
+    setBusy(label); setError(""); setNotice("");
+    try { await work(request.signal); }
+    catch (e) { if (request.current()) setError(e instanceof Error ? e.message : "操作失败；草稿仍保留。"); }
+    finally { if (request.finish()) setBusy(null); }
+  }
+  async function discardAndClose() {
+    if (busy === "保存") return;
+    if (importControl.current && !await importControl.current.stop()) return;
+    requests.current.cancel(); onClose();
+  }
+  function stopOperation() {
+    requests.current.cancel(); setBusy(null); setError(""); setNotice("已停止，原文和草稿已保留。");
   }
   function cancelDraft() {
-    active.current?.abort(); active.current = null; setBusy(null); setDraft(null); setSource(""); setError(""); setNotice("已取消，未保存预览。");
+    requests.current.cancel(); setBusy(null); setDraft(null); setSource(""); setError(""); setNotice("已取消，未保存预览。");
   }
   function updateChapter(id: string, transform: (chapter: JournalChapter) => JournalChapter) {
     setDraft((value) => value ? { ...value, chapters: value.chapters.map((c) => c.id === id ? transform(c) : c) } : value);
@@ -69,14 +85,22 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
   const visual = journey.media.filter((m) => /^(image|video)\//.test(m.mimeType));
   return <div className="daily-journal" role="dialog" aria-modal="true" aria-label="每日手记" ref={root} tabIndex={-1}>
     <header><div><span>私有手记 · 不随分享链接公开</span><h1>{journey.title}</h1></div><button disabled={busy === "保存"} onClick={requestClose}>返回 Stream</button></header>
-    {confirmClose ? <div role="alert"><p>当前有未保存内容，离开会丢弃草稿。</p><button onClick={() => setConfirmClose(false)}>继续编辑</button><button disabled={busy === "保存"} onClick={() => { active.current?.abort(); onClose(); }}>丢弃并返回</button></div> : null}
+    {confirmClose ? <div role="alert"><p>当前有未保存内容，离开会丢弃草稿。</p><button onClick={() => setConfirmClose(false)}>继续编辑</button><button disabled={busy === "保存"} onClick={() => { void discardAndClose(); }}>丢弃并返回</button></div> : null}
     {error ? <p role="alert">{error}</p> : null}{notice ? <p role="status">{notice}</p> : null}
-    {busy ? <p role="status">正在{busy}…</p> : null}
+    {busy && busy !== "导入" ? <JournalOperationStatus label={`正在${busy}…`} onStop={busy === "保存" || busy === "读取" ? undefined : stopOperation} /> : null}
     {saved ? <>
       <section className="daily-journal__import" aria-label="导入手记">
         <label>原始流水账<textarea value={source} maxLength={200000} placeholder="粘贴整份记录，以 2027-04-03 或 4月3日 开头分日。" disabled={!!busy} onChange={(e) => setSource(e.target.value)} /></label>
         <label>无完整日期时的归章日期<input type="date" value={date} disabled={!!busy} onChange={(e) => setDate(e.target.value)} /></label>
         <p>日期与钟点按旅行当地记录保留；未注明时区不会换算。事件保持原文顺序。明确的实际/计划/取消标记会保留，其余待确认；不自动创建地图点。</p>
+        {client.importJournal ? <JournalImportControl client={client.importJournal}
+          input={{ journeyId: journey.id, atlasId: journey.atlasId, source, fallbackDate: date }}
+          disabled={!!draft || (!!busy && busy !== "导入")} control={importControl}
+          onBusy={value => setBusy(current => value ? "导入" : current === "导入" ? null : current)}
+          onPreview={preview => {
+            if (preview.revision !== saved.revision) { setError("手记已更新，请保留原文，重新打开后导入。"); return; }
+            setDraft(preview); setHotels(null); setError(""); setNotice("请核对完整预览后确认保存。");
+          }} /> : null}
         <button disabled={!!busy || !source.trim()} onClick={() => {
           try {
             const base = draft ?? saved; const chapters = previewJournalImport(source, date, base.chapters);
@@ -99,7 +123,7 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
             const result = await client.applyHotels!(journey.id, hotels.token, signal);
             if (!signal.aborted) { setSaved(result.journal); setHotels(null); onJourneyChanged?.(result.journey); setNotice("酒店地点及手记关联已保存。"); }
           })}>确认批量添加及关联</button>
-          <button disabled={busy === "保存"} onClick={() => { active.current?.abort(); active.current = null; setBusy(null); setHotels(null); }}>取消酒店预览</button>
+          <button disabled={busy === "保存"} onClick={() => { requests.current.cancel(); setBusy(null); setHotels(null); }}>取消酒店预览</button>
         </> : null}
       </section> : null}
       {draft ? <div className="daily-journal__toolbar">
@@ -138,7 +162,7 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
               {event.mediaIds.length ? <button type="button" onClick={() => updateEvent(c.id, event.id, { mediaIds: [] })}>清除照片或视频关联</button> : null}
               {visual.length ? <label>关联照片或视频（可多选）<select aria-label="关联照片或视频（可多选）" multiple value={event.mediaIds} onChange={(e) => updateEvent(c.id, event.id, { mediaIds: Array.from(e.target.selectedOptions, (option) => option.value) })}>{visual.map((m) => <option key={m.id} value={m.id}>{m.fileName}</option>)}</select></label> : null}
             </fieldset> : <p className="daily-journal__prose">{event.text}</p>}
-            {point && !draft ? <button onClick={() => onPoint(point.id)}>在 Stream 中查看地点：{point.label}</button> : null}
+            {point && !draft ? <button disabled={!!busy} onClick={() => onPoint(point.id)}>在 Stream 中查看地点：{point.label}</button> : null}
             <JournalMedia assets={visual.filter((m) => event.mediaIds.includes(m.id))} />
             {suggestion ? <details><summary>AI 建议与待确认问题</summary><p className="daily-journal__prose">{suggestion.text}</p>{suggestion.questions.map((q, i) => <p key={i}>待确认：{q}</p>)}{suggestion.background ? <p>背景补充（未经检索核实，不属于亲历记录）：{suggestion.background}</p> : null}
               {draft ? <button disabled={!!busy || event.edited} onClick={() => updateEvent(c.id, event.id, { text: suggestion.text })}>{event.edited ? "正文已编辑，请手动合并建议" : "核对后采用这条正文"}</button> : null}

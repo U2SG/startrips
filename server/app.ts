@@ -1,3 +1,4 @@
+import { journalImportIntentRoutes } from "./routes/journal-import-intent";
 import { dailyJournalRoutes } from "./routes/daily-journal";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -121,6 +122,7 @@ app.route("/api/itinerary-import", itineraryImportRoutes);
 // One-sentence share: a model proposes a share selection from what a member
 // wrote. It writes nothing; the link is still created through /api/shares.
 app.route("/api/intents", intentRoutes);
+app.route("/api/intents", journalImportIntentRoutes);
 app.route("/api/journeys", dailyJournalRoutes);
 app.route("/api/journeys", journeyRoutes);
 app.route("/api/journey-route-segments", journeyRouteSegmentRoutes);

@@ -25,8 +25,8 @@ const memberColumns = {
   role: authMembers.role,
 };
 
-async function requireActiveOrganizationSession(request: Request) {
-  const session = await auth.api.getSession({ headers: request.headers });
+async function requireActiveOrganizationSession(request: Request, options?: {disableCookieCache?:boolean}) {
+  const session = await auth.api.getSession({ headers: request.headers, ...(options?.disableCookieCache?{query:{disableCookieCache:true}}:{}) });
   if (!session) {
     throw new AtlasAccessError(401, "AUTH_REQUIRED", "Sign in required");
   }
@@ -94,8 +94,9 @@ export async function requireOrganizationMembership(
 export async function requireAtlasAccess(
   request: Request,
   action: AtlasAction,
+  options?: {disableCookieCache?:boolean},
 ) {
-  const { session, organizationId } = await requireActiveOrganizationSession(request);
+  const { session, organizationId } = await requireActiveOrganizationSession(request,options);
   // One round trip for the membership and the Organization's live Atlas. The
   // checks still run in the original order: membership, then permission, then
   // the Atlas, so a non-member never learns whether an Atlas exists.

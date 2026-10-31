@@ -82,6 +82,7 @@
     "cfaa:impact": "node scripts/cfaa.mjs impact",
     "qa:journey-film-export": "node scripts/qa-journey-film-export.mjs && node scripts/qa-story-film-integration.mjs",
     "qa:journal-hotels": "node scripts/qa-journal-hotels.mjs",
+    "qa:journal-streaming": "node scripts/qa-journal-streaming-ui.mjs",
     "qa:daily-journal": "node scripts/qa-daily-journal.mjs"
   },
   "dependencies": {
