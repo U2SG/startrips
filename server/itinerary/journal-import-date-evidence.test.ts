@@ -145,3 +145,70 @@ it.each(["3日至5日", "（3日）到（5日）"])("adds an explicit range ques
   expect(result.chapters[0].events[0].localDate).toBeNull();
   expect(result.chapters[0].suggestions[0].questions.join()).toContain("日期范围待确认");
 });
+
+// Independent review regressions: unknown date fields must stay in the source
+// span, while a measured number must not become the second calendar endpoint.
+const uncertainDateFields = ["?", "？", "x", "ｘ", "X", "Ｘ"].flatMap(unknown => [
+  `${unknown.repeat(4)}年6月3日`, `2028年${unknown}月3日`, `2028年6月${unknown}日`,
+  `${unknown}月3日`, `6月${unknown}日`, `${unknown}日`,
+  ...["-", "/", "."].flatMap(sep => [
+    `202${unknown}${sep}06${sep}03`, `2028${sep}${unknown}${sep}03`, `2028${sep}06${sep}${unknown}`,
+  ]),
+]);
+const uncertainRangeSources = uncertainDateFields.flatMap(endpoint => [
+  `记录：（${endpoint}）到（2028年6月5日），她旅行。`,
+  `记录：（2028年6月5日）到（${endpoint}），她旅行。`,
+]);
+it.each(uncertainRangeSources)("keeps every incomplete endpoint in its evidence span: %s", source => {
+  expect(hasJournalDateRange(source)).toBe(true);
+  expect(groundedJournalDates("2028年6月5日", source, "2028")).toBeNull();
+  expect(groundedJournalDates(source, source, "2028")).toBeNull();
+  expect(isJournalDateHeading(source, "2028")).toBe(false);
+});
+const measuredDestinations = [
+  "（3.5公里外的酒店）", "（3.5千米外的酒店）", "（3.5 km外的酒店）", "（3.5）公里外的酒店",
+  "（3.5元的报价）", "（3.5万元的报价）", "（3.5 USD的报价）", "（3.5）美元的报价",
+  "（3.5公斤的行李处）", "（3.5 kg的行李处）", "（3.5小时车程的酒店）", "（3.5℃的冰室）",
+  "（3.5%的坡道）", "（3.5 m高的平台）", "（3/5升的水壶旁）", "（3）公里外的酒店",
+  "（３．５公里外的酒店）", "（３．５）元的报价",
+];
+it.each(measuredDestinations)("keeps a real single date next to a quantity: %s", destination => {
+  const source = `她于2028年6月3日到${destination}入住。`;
+  expect(hasJournalDateRange(source)).toBe(false);
+  expect(groundedJournalDates("2028年6月3日", source, "2028")).toEqual(["2028-06-03"]);
+  expect(isJournalDateHeading(source, "2028")).toBe(false);
+});
+it.each(["3.5公里", "（3.5）公里", "3.5元", "3.5 kg", "3.5℃", "3.5%", "3/5升", "３．５公里"])("does not ground a quantity itself as a calendar date: %s", source => {
+  const quote = source.includes("３") ? "３．５" : source.includes("3/5") ? "3/5" : "3.5";
+  expect(groundedJournalDates(quote, source, "2028")).toBeNull();
+});
+it.each([
+  ["2028.06.03", "2028.06.05"], ["2028.06.03", "6.5"],
+  ["２０２８．０６．０３", "２０２８．０６．０５"], ["２０２８年６月３日", "６．５"],
+])("preserves genuine dotted date endpoints %s to %s", (left, right) => {
+  const quote = `（${left}）到（${right}）`, source = `${quote}返程。`;
+  expect(hasJournalDateRange(source)).toBe(true);
+  expect(groundedJournalDates(quote, source, "2028")).toEqual(["2028-06-03", "2028-06-05"]);
+  expect(groundedJournalDates(left, source, "2028")).toBeNull();
+  expect(groundedJournalDates(right, source, "2028")).toBeNull();
+  expect(isJournalDateHeading(quote, "2028")).toBe(true);
+});
+for (const mode of ["chapter", "event"] as const) {
+  it.each(uncertainRangeSources)(`rejects incomplete ${mode} range cropping at the model boundary: %s`, async source => {
+    await expect(prepare(source, "2028年6月5日", "2028-06-05", null, mode)).rejects.toMatchObject({ code: "JOURNAL_IMPORT_MALFORMED" });
+  });
+  it.each(measuredDestinations)(`preserves the ${mode} single date beside a measured destination: %s`, async destination => {
+    const source = `她于2028年6月3日到${destination}入住。`;
+    const result = await prepare(source, "2028年6月3日", "2028-06-03", null, mode);
+    expect(result.chapters[0].source).toBe(source);
+    expect(result.chapters[0].date).toBe(mode === "chapter" ? "2028-06-03" : "2028-06-01");
+    expect(result.chapters[0].events[0].localDate).toBe(mode === "event" ? "2028-06-03" : null);
+    expect(result.chapters[0].suggestions[0].questions.join()).not.toMatch(/日期范围|日期区间/);
+  });
+  it.each(["记录：（2028年6月？日）到（2028年6月5日），她旅行。", "记录：（2028年6月5日）到（2028年？月5日），她旅行。"])(`keeps incomplete ${mode} evidence explicitly unresolved: %s`, async source => {
+    const result = await prepare(source, null, null, null, mode);
+    expect(result.chapters[0].source).toBe(source);
+    expect(result.chapters[0].events[0].localDate).toBeNull();
+    expect(result.chapters[0].suggestions[0].questions.join()).toContain("日期范围");
+  });
+}
