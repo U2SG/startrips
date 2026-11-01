@@ -66,6 +66,9 @@ struct AtlasRootView: View {
                 NavigationStack {
                     PrivateWebView(url: origin, store: session.cookieStore, googleLogin: .init(
                         isCurrent: { session.isOwnerLoginCurrent(generation, at: origin) },
+                        install: { cookie, pending in
+                            await session.publishGoogleSession(cookie, at: origin, generation: generation, pending: pending)
+                        },
                         failed: { googleLoginFailed = true }
                     ))
                     .id(generation)

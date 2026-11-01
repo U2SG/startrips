@@ -89,14 +89,6 @@ struct GoogleLoginAttempt {
         return request
     }
 
-    func replacesSessionCache(_ cookie: HTTPCookie) -> Bool {
-        guard cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased() == origin.host?.lowercased(),
-              cookie.path == "/" else { return false }
-        return ["startrips.session_data", "__Secure-startrips.session_data"].contains {
-            cookie.name == $0 || cookie.name.hasPrefix($0 + ".")
-        }
-    }
-
     func sessionCookie(_ response: HTTPURLResponse) throws -> HTTPCookie {
         guard response.statusCode == 204, Self.sameOrigin(response.url, as: origin),
               response.url?.path == "/api/native-auth/exchange",
@@ -105,7 +97,7 @@ struct GoogleLoginAttempt {
               header.range(of: #"(?:^|;)\s*domain\s*="#, options: [.regularExpression, .caseInsensitive]) == nil
         else { throw GoogleLoginError.invalid }
         let cookies = HTTPCookie.cookies(withResponseHeaderFields: ["Set-Cookie": header], for: origin)
-        guard cookies.count == 1, let cookie = cookies.first, cookie.name == "__Secure-startrips.session_token",
+        guard cookies.count == 1, let cookie = cookies.first, ["__Secure-startrips.session_token", "startrips.session_token"].contains(cookie.name),
               cookie.domain.lowercased() == origin.host?.lowercased(), cookie.path == "/",
               cookie.isSecure, cookie.isHTTPOnly, !cookie.value.isEmpty,
               cookie.expiresDate.map({ $0 > Date() }) ?? true else { throw GoogleLoginError.invalid }
@@ -117,6 +109,7 @@ struct GoogleLoginAttempt {
 final class NativeGoogleLogin: NSObject, ASWebAuthenticationPresentationContextProviding {
     struct Access {
         let isCurrent: () -> Bool
+        let install: (HTTPCookie, @escaping () -> Bool) async -> Bool
         let failed: () -> Void
     }
 
@@ -148,6 +141,7 @@ final class NativeGoogleLogin: NSObject, ASWebAuthenticationPresentationContextP
         do {
             let attempt = try GoogleLoginAttempt(origin: origin)
             pending = attempt
+            setPageInteractive(false)
             task = Task {
                 do {
                     let (data, response) = try await transport.data(for: attempt.start(intent))
@@ -173,20 +167,14 @@ final class NativeGoogleLogin: NSObject, ASWebAuthenticationPresentationContextP
         task = Task {
             do {
                 let (_, response) = try await transport.data(for: attempt.exchange(callback))
-                guard isCurrent(attempt), let view else { return }
+                guard isCurrent(attempt) else { return }
                 guard let response = response as? HTTPURLResponse else { throw GoogleLoginError.invalid }
                 let cookie = try attempt.sessionCookie(response)
-                let store = view.configuration.websiteDataStore.httpCookieStore
-                // Better Auth may have cached the previous account separately for 60 seconds.
-                for cached in await store.allCookies() where attempt.replacesSessionCache(cached) {
-                    guard isCurrent(attempt) else { return }
-                    await store.deleteCookie(cached)
+                // The replacement view starts on the normal first-party Atlas selector after publication.
+                guard await access.install(cookie, { [weak self] in self?.isCurrent(attempt) == true }) else {
+                    finish(attempt, error: GoogleLoginError.cancelled)
+                    return
                 }
-                guard isCurrent(attempt) else { return }
-                await store.setCookie(cookie)
-                guard isCurrent(attempt) else { return }
-                // The normal first-party gate reads /api/auth/get-session and offers Atlas selection.
-                view.load(URLRequest(url: origin, cachePolicy: .reloadIgnoringLocalCacheData))
                 finish(attempt, error: nil)
             } catch { finish(attempt, error: error) }
         }
@@ -199,12 +187,19 @@ final class NativeGoogleLogin: NSObject, ASWebAuthenticationPresentationContextP
     private func finish(_ attempt: GoogleLoginAttempt, error: Error?) {
         guard pending?.state == attempt.state else { return }
         pending = nil
+        if access.isCurrent() { setPageInteractive(true) }
         task = nil
         browser = nil
         guard let error, access.isCurrent() else { return }
         if (error as? GoogleLoginError) == .cancelled ||
             (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin { return }
         access.failed()
+    }
+
+    private func setPageInteractive(_ enabled: Bool) {
+        if !enabled { view?.endEditing(true) }
+        view?.isUserInteractionEnabled = enabled
+        view?.accessibilityElementsHidden = !enabled
     }
 
     func invalidate() {

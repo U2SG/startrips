@@ -29,7 +29,7 @@ final class AtlasSession: ObservableObject {
     private(set) var mediaJourneys: [String: MediaJourney] = [:]
     private(set) var generation = UUID()
     private var refreshID = UUID()
-    private(set) var cookieStore = WKWebsiteDataStore.nonPersistent()
+    @Published private(set) var cookieStore = WKWebsiteDataStore.nonPersistent()
 
     // HTTP cookies do not distinguish ports; a private store isolates each configured HTTPS origin.
     static func ownerStoreID(_ url: URL) -> UUID {
@@ -38,6 +38,73 @@ final class AtlasSession: ObservableObject {
         bytes[6] = (bytes[6] & 0x0f) | 0x80
         bytes[8] = (bytes[8] & 0x3f) | 0x80
         return bytes.withUnsafeBytes { UUID(uuid: $0.loadUnaligned(as: uuid_t.self)) }
+    }
+
+    // Publication is one main-actor operation. An asynchronous WebKit write always targets an
+    // unpublished profile, so cancelling or replacing a login cannot modify the active account.
+    private struct StoreRecord: Codable {
+        var active: UUID
+        var unused: Set<UUID> = []
+    }
+
+    private static var writingStores = Set<UUID>()
+
+    private func storeRecord(for site: UUID) -> StoreRecord {
+        guard let data = UserDefaults.standard.data(forKey: "atlas.stores." + site.uuidString),
+              let record = try? JSONDecoder().decode(StoreRecord.self, from: data) else { return StoreRecord(active: site) }
+        return record
+    }
+
+    private func save(_ record: StoreRecord, for site: UUID) {
+        // StoreRecord contains only profile identifiers, never cookies or credentials.
+        UserDefaults.standard.set(try? JSONEncoder().encode(record), forKey: "atlas.stores." + site.uuidString)
+    }
+
+    private func cleanUnusedStores(for site: UUID) async {
+        for id in storeRecord(for: site).unused {
+            // Another login can finish while WebKit removes a preceding entry.
+            let latest = storeRecord(for: site)
+            guard id != latest.active, latest.unused.contains(id), !Self.writingStores.contains(id) else { continue }
+            do {
+                try await WKWebsiteDataStore.remove(forIdentifier: id)
+                var current = storeRecord(for: site)
+                current.unused.remove(id)
+                save(current, for: site)
+            } catch {
+                // An old sheet may still own its WKWebView. Reopening this origin retries cleanup.
+            }
+        }
+    }
+
+    func publishGoogleSession(_ cookie: HTTPCookie, at url: URL, generation captured: UUID,
+                              pending: () -> Bool,
+                              write: (HTTPCookie, WKWebsiteDataStore) async -> Void = {
+                                  await $1.httpCookieStore.setCookie($0)
+                              }) async -> Bool {
+        guard isOwnerLoginCurrent(captured, at: url), pending() else { return false }
+        let site = Self.ownerStoreID(url)
+        let id = UUID()
+        var record = storeRecord(for: site)
+        record.unused.insert(id)
+        save(record, for: site)
+        Self.writingStores.insert(id)
+        let candidate = WKWebsiteDataStore(forIdentifier: id)
+        await write(cookie, candidate)
+        Self.writingStores.remove(id)
+        guard isOwnerLoginCurrent(captured, at: url), pending() else {
+            await cleanUnusedStores(for: site)
+            return false
+        }
+        // Fresh profile: neither old session_data nor the other Better Auth token name is present.
+        record = storeRecord(for: site)
+        record.unused.insert(record.active)
+        record.unused.remove(id)
+        record.active = id
+        save(record, for: site)
+        generation = UUID()
+        cookieStore = candidate
+        Task { await cleanUnusedStores(for: site) }
+        return true
     }
 
     func isOwnerLoginCurrent(_ captured: UUID, at url: URL) -> Bool {
@@ -69,7 +136,9 @@ final class AtlasSession: ObservableObject {
 
     func configureOwner() throws {
         let selected = try Self.validatedOrigin(originText)
-        let storeID = Self.ownerStoreID(selected)
+        let site = Self.ownerStoreID(selected)
+        let storeID = storeRecord(for: site).active
+        Task { await cleanUnusedStores(for: site) }
         if cookieStore.identifier != storeID { cookieStore = WKWebsiteDataStore(forIdentifier: storeID) }
         origin = selected
         guestToken = nil; generation = UUID()
