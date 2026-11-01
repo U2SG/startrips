@@ -18,7 +18,7 @@ journalImportIntentRoutes.onError((error,c)=>{
   if(error instanceof AtlasAccessError)return c.json({error:error.code},error.status);
   const diagnostic=importDiagnostic(error,"llm-preview");
   const code=diagnostic.error;
-  const status=code==="TARGET_NOT_FOUND"||code==="TARGET_PERMISSION_DENIED"?404:code==="INVALID_IMPORT"||code==="INVALID_TARGET"?400:code==="JOURNAL_JOB_BUSY"||code==="JOURNAL_JOB_CONFLICT"?409:"status" in diagnostic?diagnostic.status:500;
+  const status=code==="TARGET_NOT_FOUND"||code==="TARGET_PERMISSION_DENIED"?404:code==="INVALID_IMPORT"||code==="INVALID_TARGET"?400:["JOURNAL_JOB_BUSY","JOURNAL_JOB_CONFLICT","JOURNAL_CHANGED","JOURNAL_PROVIDER_CHANGED","JOURNAL_STAGE_NOT_CURRENT"].includes(code)?409:"status" in diagnostic?diagnostic.status:500;
   return c.json(diagnostic,status as 400);
 });
 journalImportIntentRoutes.post("/journal-import", async c => {
@@ -30,7 +30,7 @@ journalImportIntentRoutes.post("/journal-import", async c => {
     || typeof body.sentence !== "string" || typeof body.source !== "string" || typeof body.fallbackDate !== "string") return c.json({ error: "INVALID_IMPORT" }, 400);
   try {
   const envelope = await prepareAuthorizedJournalImport({ userId: session.user.id, email: session.user.email, atlasId: atlas.id, journeyId: body.journeyId },
-    { sentence: body.sentence, source: body.source, fallbackDate: body.fallbackDate, provider: body.provider });
+    { sentence: body.sentence, source: body.source, fallbackDate: body.fallbackDate, provider: body.provider }, undefined, c.req.raw.signal);
   return c.json({ intent: "journal-import", stage: "journal-preview", envelope, planDigest: hash(envelope),
     next: { journal: `/api/journeys/${body.journeyId}/journal`, hotels: `/api/journeys/${body.journeyId}/journal/hotels/preview` } });
   } catch (error) {

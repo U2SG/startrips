@@ -23,9 +23,15 @@ export function journalImportModel(consent: unknown): IntentModelOptions {
   return { baseUrl: serverConfig.intentBaseUrl, model: serverConfig.intentModel, apiKey: serverConfig.intentApiKey,
     timeoutMs: serverConfig.intentTimeoutMs, fetcher: journalImportDependencies.fetcher };
 }
-export async function prepareAuthorizedJournalImport(target: Target, input: { sentence: string; source: string; fallbackDate: string; provider: unknown }, model = journalImportModel(input.provider)) {
+export async function prepareAuthorizedJournalImport(target: Target, input: { sentence: string; source: string; fallbackDate: string; provider: unknown }, model = journalImportModel(input.provider), signal?: AbortSignal) {
   const before = await db.transaction(tx => lockedTarget(tx, target));
-  const draft = await prepareJournalImport(input, before, model);
+  const checkCurrent = async () => {
+    await model.checkCurrent?.();
+    const currentModel = journalImportModel(input.provider);
+    if (hash([currentModel.baseUrl, currentModel.model, currentModel.apiKey]) !== hash([model.baseUrl, model.model, model.apiKey])) throw new Error("JOURNAL_PROVIDER_CHANGED");
+    if (hash(await db.transaction(tx => lockedTarget(tx, target))) !== hash(before)) throw new Error("JOURNAL_CHANGED");
+  };
+  const draft = await prepareJournalImport(input, before, { ...model, signal: signal ?? model.signal, checkCurrent });
   return db.transaction(async tx => {
     if (hash(await lockedTarget(tx, target)) !== hash(before)) throw new Error("JOURNAL_CHANGED");
     const chapters = await normalizeJournalReferences(target.journeyId, before.chapters, draft.chapters, tx);

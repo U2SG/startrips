@@ -73,6 +73,13 @@ export async function runJournalJob(signal?:AbortSignal) {
     const model=journalImportModel(input.provider);
     if(hash({baseUrl:model.baseUrl,model:model.model,apiKey:model.apiKey})!==configDigest)fail('JOURNAL_PROVIDER_CHANGED');
     model.stream={signal:controller.signal,onProgress:p=>{progress=p;}};
+    model.checkCurrent=async()=>{
+      const active=await pool.query(`SELECT id FROM journal_import_jobs WHERE id=$1 AND lease=$2 AND status='running'`,[row.id,token]);
+      if(!active.rowCount)fail('JOURNAL_JOB_INTERRUPTED');
+      const configured=journalImportModel(input.provider);
+      if(hash({baseUrl:configured.baseUrl,model:configured.model,apiKey:configured.apiKey})!==configDigest)fail('JOURNAL_PROVIDER_CHANGED');
+      if(hash(await db.transaction(tx=>lockedTarget(tx,target)))!==hash(before))fail('JOURNAL_CHANGED');
+    };
     const draft=await prepareJournalImport(input,before,model);
     progress={...progress,phase:'validating'};
     const finalModel=journalImportModel(input.provider);

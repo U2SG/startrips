@@ -1,3 +1,4 @@
+import { ShareIntentError } from "../intents/create-share-intent";
 import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import { parseJournalChapters } from "../../src/journey/dailyJournal";
@@ -61,7 +62,14 @@ dailyJournalRoutes.post("/:id/journal/hotels/preview", async c => {
   const journey = await getJourneyForAtlas(c.req.param("id"), atlas.id);
   if (!journal || !journey) return c.json({ error: "JOURNEY_NOT_FOUND" }, 404);
   if (serverConfig.intentDriver !== "http-model" || !serverConfig.intentBaseUrl || !serverConfig.intentApiKey || !serverConfig.intentModel) throw new ItineraryRecognitionUnavailableError("酒店工具需要已配置的 INTENT_* 模型通道；可继续手动关联已有地点。");
-  const result = await proposeJournalHotels(journal, journey.routePoints, { baseUrl: serverConfig.intentBaseUrl, apiKey: serverConfig.intentApiKey, model: serverConfig.intentModel, timeoutMs: serverConfig.intentTimeoutMs }, hotelSearch, c.req.raw.signal);
+  const checkCurrent = async () => {
+    const access = await requireAtlasAccess(c.req.raw, "update");
+    const current = await readDailyJournal(journey.id, atlas.id);
+    const currentJourney = await getJourneyForAtlas(journey.id, atlas.id);
+    if (access.atlas.id !== atlas.id || !current || current.revision !== journal.revision || !currentJourney || currentJourney.revision !== journey.revision) throw new ShareIntentError("JOURNAL_CONFLICT", "Journal changed during hotel staging", 409);
+  };
+  const result = await proposeJournalHotels(journal, journey.routePoints, { checkCurrent, baseUrl: serverConfig.intentBaseUrl, apiKey: serverConfig.intentApiKey, model: serverConfig.intentModel, timeoutMs: serverConfig.intentTimeoutMs }, hotelSearch, c.req.raw.signal);
+  await checkCurrent();
   return c.json({ preview: { ...result, token: signHotelPlan({ atlasId: atlas.id, journeyId: journey.id, journalRevision: journal.revision,
     journeyRevision: journey.revision, expires: Date.now() + 15 * 60_000, hotels: result.hotels }, serverConfig.authSecret) } });
 });

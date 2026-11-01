@@ -43,8 +43,9 @@ reconnection resumes observation of an existing live job, not model regeneration
 Whole-source extraction sends only the requested source lines/indexes, sentence
 and fallback year. It excludes existing member prose, photos, credentials and
 account metadata. Hotel processing sends only chapters belonging to this input,
-not other stored journals. Its second model call sees relevant stay evidence and
-candidate labels/addresses; geocoding receives only hotel name and source area.
+not other stored journals. Hotel selection retains that private extraction
+conversation and its matched trusted candidate labels/addresses; geocoding
+receives only hotel name and source area. No member-edited prose is added.
 Never substitute another provider or treat authorization of a different input as
 permission to send this source.
 
@@ -52,11 +53,13 @@ permission to send this source.
 
 The model calls only `stage_journal_import`, returning chapter line boundaries,
 whole-line evidence, statuses, local clocks/ranges, explicit date evidence and
-questions. The server validates coverage/order, source identity, complete calendar
-and clock tokens, paired interval endpoints and existing journal references.
-Mixed actual/plan/cancellation narratives stay uncertain; cancellation of a plan
-stays cancelled. Midnight does not imply a next-day date or UTC conversion. A
-range heading stays one range chapter rather than inventing daily allocation.
+questions. The server validates coverage/order, exact source references, normalized
+calendar/clock format, structured interval ordering and existing journal references.
+The tool instructs the model to keep mixed narratives uncertain, cancellations
+cancelled, and date ranges unallocated. The server does not independently prove
+these semantic interpretations. It never derives another date or UTC conversion
+from clock order. Duplicate chapter text/date within one input is a grouping error:
+correction must preserve every repeated line, not treat it as a saved-record replay.
 
 Original source and event prose stay intact. Model reading proposals are accepted
 only when they retain the full original line (ignoring surrounding whitespace);
@@ -122,24 +125,65 @@ configured provider identity, run only preview stages first, inspect full privat
 output (including ambiguous/mixed cases), and apply solely within the explicitly
 authorized target and data scope. The repository fixtures are fictional.
 
+## Staging tool contract and bounded correction
+
+`stage_journal_import` now requires a chapter/event `dateStatus`: `absent`,
+`unknown`, `single`, or `range`. Unknown dates retain an exact source quote, null
+normalized values and a question. Chapter ranges have two valid, ordered inclusive
+YYYY-MM-DD endpoints. Events cannot be assigned one day from a range; they retain
+null `localDate` and a question. Clock values use local 24-hour HH:mm, with no
+inferred midnight date or timezone conversion. Every nonempty line must be an
+exact event reference except an explicitly quoted whole first-line heading.
+
+Field descriptions assign semantic interpretation to the model. Server code checks
+JSON shape, forbidden extra fields, line coverage, exact references on the associated
+line, calendar/clock validity and cross-field consistency. It does not rescan prose
+with fuzzy date/clock/status regexes. A substring proves provenance, not correct
+interpretation or completeness of the quote: an incorrect `single` classification
+can still pass structural validation. Review the preserved original and preview.
+The `3.5公里` and fullwidth `？` cases in tests are synthetic model claims, not
+real-provider quality measurements.
+
+Each named tool permits at most three provider calls (two corrections), stopping
+earlier when the same field/error repeats. Only `ToolArgumentError` from pure
+pre-execution validation is fed back as a bounded, server-owned error with the
+original call ID and full assistant/tool protocol messages. Tool identity, unknown
+execution outcome, cancellation, lease/permission/version changes, transport and
+server-validator failures are terminal. No search or write is repeated to fix a
+later tool's arguments. Hotel stages share the matched search result and use only
+trusted candidate IDs/coordinates; existing stay/branch and write guards remain.
+A hotel workflow has two stages, hence at most six model calls and 30 searches.
+
+Before each attempt and execution, callers recheck current authority/state. Job
+corrections recheck the lease and configuration digest. A successful preview stops
+without a billable final prose request. Tool messages remain private in memory;
+no raw arguments or provider exceptions enter error feedback or diagnostics.
+Signed plans, explicit save, backups, revision checks and replay receipts remain
+required. This change does not add automatic save, a model fallback, or model
+selection configuration.
+
 ## Failure diagnostics and long-input acceptance
 
 CLI failure stderr is one JSON object with allowlisted `error`, command `stage`,
-`kind` (`transport`, `schema`, `configuration`, `operation`) and, for model errors,
+`kind` (`transport`, `protocol`, `tool_arguments`, `validator`, `business`,
+`permission`, `cancelled`, `configuration`, `operation`) and, for model errors,
 the application's mapped HTTP `status`. It never prints exception messages,
 causes, provider response bodies, private source, keys or URLs. In journal
 extraction, `INTENT_TIMEOUT`, `INTENT_UNREACHABLE` and `INTENT_FAILED` remain
 transport errors; `JOURNAL_IMPORT_MALFORMED` means the response could not satisfy
-the tool/schema/evidence boundary. A schema failure does not imply a timeout.
+the structured argument/reference boundary within its correction budget (HTTP 422).
+`INTENT_TOOL_PROTOCOL_INVALID` identifies a bad call envelope or ID;
+`TOOL_VALIDATOR_ERROR` identifies an unexpected server validation failure. Neither
+is automatically corrected. These diagnoses do not attribute a server defect to the model.
 The status is the application's mapping, not the provider's raw HTTP status.
 
 An earlier real acceptance attempt returned only `IMPORT_FAILED`; that lost
 cause cannot be reconstructed from elapsed time. This diagnostic repair does not
 claim the provider extraction succeeded. Run at most one explicitly authorized
 new preview with the repaired bundle; inspect its stable code and absence/presence
-of a plan before deciding the next step. No automatic retry or timeout increase.
+of a plan before deciding the next step. No automatic transport retry or timeout increase.
 
-Whole-source extraction still uses one response. Hundreds of events, including
+Whole-source extraction uses one complete response per attempt (up to three for argument correction). Hundreds of events, including
 verbatim evidence and reading fields, can exceed a short provider latency/output
 budget even when input bytes are small. Mock tests do not establish real-provider
 throughput. A future bounded extraction checkpoint should bind the full source
@@ -154,8 +198,11 @@ classification with a regular-expression import. This resumable extraction layer
 is not implemented by the diagnostic repair; current checkpoints resume the
 journal/hotel stages, not partial model responses.
 
-Explicit meridiem cues are part of clock evidence: for example, `晚上9:00` or
-`9:00 PM` grounds `21:00`, not `09:00`. Cropped cues are rejected. Ambiguous Chinese
-noon/midnight phrasing, approximate clocks, and ranges missing one endpoint's cue
-must remain unresolved with a question. Explicit ranges retain source context
-without inferring a next-day date.
+The tool instructs the model to include meridiem cues in clock evidence: for
+example, interpret `晚上9:00` or `9:00 PM` as `21:00`. It also instructs the model
+to retain ambiguous/approximate or incomplete clocks as null values with questions.
+The server checks clock format, reference existence and cross-field consistency;
+it does not establish that cues were included or interpreted correctly. A claim
+of `09:00` citing `9:00` in `晚上9:00` can pass these structural checks. Inspect the
+preserved source and preview; mock tests do not prove real-model interpretation.
+A structured clock range retains the supplied quote without deriving another date.

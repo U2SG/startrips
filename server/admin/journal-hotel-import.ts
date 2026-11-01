@@ -33,7 +33,16 @@ export async function previewImportedHotels(value: unknown, provider: unknown, d
     if(bound.baseUrl!==model.baseUrl||bound.model!==model.model)return fail("JOURNAL_PROVIDER_CHANGED");
   } else if(e.plan.provider.baseUrl!==model.baseUrl||e.plan.provider.model!==model.model)return fail("JOURNAL_PROVIDER_CHANGED");
   const scoped = { ...before, chapters: before.chapters.filter(c => e.plan.importedChapterIds.includes(c.id)) };
-  const result = await proposeJournalHotels(scoped, journey.routePoints, model, search);
+  const checkCurrent = async () => {
+    await model.checkCurrent?.();
+    const configured = journalImportModel(provider);
+    if (hash([configured.baseUrl, configured.model, configured.apiKey]) !== hash([model.baseUrl, model.model, model.apiKey])) fail("JOURNAL_PROVIDER_CHANGED");
+    if (hash(await db.transaction(tx => lockedTarget(tx, e.plan.target))) !== hash(before)) fail("JOURNAL_CHANGED");
+    const current = await getJourneyForAtlas(journey.id, e.plan.target.atlasId);
+    if (!current || current.revision !== journey.revision) fail("JOURNAL_CHANGED");
+  };
+  const result = await proposeJournalHotels(scoped, journey.routePoints, { ...model, checkCurrent }, search);
+  await checkCurrent();
   const token = signHotelPlan({ atlasId: e.plan.target.atlasId, journeyId: journey.id, journalRevision: before.revision,
     journeyRevision: journey.revision, expires: Date.now() + 15 * 60_000, hotels: result.hotels }, serverConfig.authSecret);
   const checkpoint: HotelCheckpoint = { version: 2, target: e.plan.target, journalPlanDigest: hash(e), token, before,

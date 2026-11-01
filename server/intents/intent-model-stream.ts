@@ -5,7 +5,7 @@ type Fail = (code: string, message: string, status?: number) => ShareIntentError
 const MAX_OUTPUT_BYTES = 1_000_000;
 const MAX_EVENT_BYTES = 128_000;
 /** Parse actual provider SSE deltas. Partial JSON is never returned as a draft. */
-export async function requestModelStream(url: string, apiKey: string, body: object, toolName: string | undefined, options: ModelStreamOptions, fetcher: typeof fetch, fail: Fail): Promise<unknown> {
+export async function requestModelStream(url: string, apiKey: string, body: object, toolName: string | undefined, options: ModelStreamOptions, fetcher: typeof fetch, fail: Fail, captureToolCall = false): Promise<unknown> {
   const controller = new AbortController();
   let timedOut: "connect" | "first-byte" | "idle" | null = null, timer: ReturnType<typeof setTimeout>;
   const arm = (phase: NonNullable<typeof timedOut>, ms: number) => { clearTimeout(timer); timer = setTimeout(() => { timedOut = phase; controller.abort(); }, ms); };
@@ -54,7 +54,7 @@ export async function requestModelStream(url: string, apiKey: string, body: obje
           if (!Array.isArray(delta.tool_calls) || delta.tool_calls.length !== 1) throw invalid();
           const call = delta.tool_calls[0];
           if (call.index !== 0 || call.type && call.type !== "function" || !call.function || typeof call.function !== "object") throw invalid();
-          if(call.id !== undefined) { if(typeof call.id!=="string" || !call.id || call.id.length>256 || toolId && call.id!==toolId) throw invalid(); toolId=call.id; }
+          if(call.id !== undefined) { if(typeof call.id!=="string" || !call.id.trim() || call.id.length>256 || toolId && call.id!==toolId) throw invalid(); toolId=call.id; }
           if (call.function.name !== undefined) { if (typeof call.function.name !== "string") throw invalid(); tool += call.function.name; if(!toolName.startsWith(tool))throw invalid(); }
           if (call.function.arguments !== undefined) { if (typeof call.function.arguments !== "string") throw invalid(); piece = call.function.arguments; }
           calls = 1;
@@ -85,6 +85,10 @@ export async function requestModelStream(url: string, apiKey: string, body: obje
       if (Buffer.byteLength(buffer) > MAX_EVENT_BYTES) throw invalid();
     }
     if (!done || !finished || (toolName && (calls !== 1 || tool !== toolName))) throw invalid();
+    if (captureToolCall) {
+      if (!toolId || !toolName) throw fail("INTENT_TOOL_PROTOCOL_INVALID", "Missing tool call identity", 502);
+      return { id: toolId, type: "function", function: { name: toolName, arguments: content } };
+    }
     try { return JSON.parse(content); } catch { throw invalid(); }
   } catch (e) {
     if (controller.signal.aborted) {
