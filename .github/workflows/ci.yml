@@ -585,9 +585,8 @@ jobs:
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
           PUSH_BEFORE_SHA: ${{ github.event.before || '' }}
         run: node scripts/ci-ledger-fast-path.mjs
-      - name: Require every validation lane to pass
+      - name: "Validate product lanes / ${{ steps.source-proof.outputs.ledger_only_final == 'true' && 'ledger-final' || steps.source-proof.outputs.soc_client_only == 'true' && 'soc' || steps.source-proof.outputs.scope_mode }} / native-${{ steps.source-proof.outputs.scope_native }}"
         env:
-          LEDGER_RESULT: ${{ needs.ledger.result }}
           QUICK_CHECKS_RESULT: ${{ needs.quick-checks.result }}
           CORE_RESULT: ${{ needs.core.result }}
           BROWSER_QA_RESULT: ${{ needs.browser-qa.result }}
@@ -602,5 +601,9 @@ jobs:
           CLASSIFIED_IOS: ${{ needs.quick-checks.outputs.ios }}
           PROVEN_IOS: ${{ steps.source-proof.outputs.scope_native }}
           IOS_RESULT: ${{ needs.ios-native.result }}
-        run: node scripts/ci-validation-results.mjs
+        run: node scripts/ci-validation-results.mjs --product-only
+      - name: Require current ledger
+        env:
+          LEDGER_RESULT: ${{ needs.ledger.result }}
+        run: test "$LEDGER_RESULT" = success
 
