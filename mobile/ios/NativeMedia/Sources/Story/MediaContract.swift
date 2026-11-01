@@ -35,7 +35,7 @@ public struct MediaAsset: Codable, Equatable, Identifiable, Sendable {
 
 public enum MediaFailure: Error, Equatable, LocalizedError {
     case unavailable, staleIntent, accessChanged, readOnly, invalidManifest, diskFull
-    case invalidUpload, uploadPending, uploadStartUnknown, uploadAborted, missingETag, http(Int), encoding
+    case invalidUpload, uploadPending, uploadStartUnknown, uploadAborted, uploadedAssetRemoved, missingETag, http(Int), encoding
     public var errorDescription: String? {
         switch self {
         case .unavailable: return "素材暂不可用，请重试。"
@@ -48,6 +48,7 @@ public enum MediaFailure: Error, Equatable, LocalizedError {
         case .uploadPending: return "服务器正在确认上传，请稍后恢复。"
         case .uploadStartUnknown: return "未收到上传编号，无法确认创建结果。请取消此项后重新选择素材。"
         case .uploadAborted: return "上传已取消，请重新选择素材。"
+        case .uploadedAssetRemoved: return "素材已在上传完成后删除。"
         case .missingETag: return "存储服务未确认分片，请恢复上传。"
         case .http(let status): return "请求失败（\(status)），请重试。"
         case .encoding: return "无法生成影片，请重试。"

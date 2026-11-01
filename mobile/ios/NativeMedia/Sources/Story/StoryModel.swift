@@ -4,6 +4,7 @@ import ImageIO
 import UIKit
 
 @MainActor public final class StoryModel: ObservableObject {
+    private(set) var pageGeneration = 0
     @Published public private(set) var cursor: StoryCursor
     @Published public private(set) var images: [String: UIImage] = [:]
     @Published public private(set) var failure: String?
@@ -19,7 +20,7 @@ import UIKit
     private let latestJourney: () -> MediaJourney?
     private let onReturn: (MediaReturn) -> Void
     private let onBeat: (PlaybackBeat) -> Void
-    private let soundtrackRead: (() async throws -> URL)?
+    private var soundtrackRead: (() async throws -> URL)?
     private var soundtrackTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
     private var prewarmTask: Task<Void, Never>?
@@ -50,6 +51,7 @@ import UIKit
         }
         commitCurrent()
     }
+    var committedRoutePointID: String? { committed?.routePointId }
     public var activeAsset: MediaAsset? { playback == nil ? cursor.current?.asset : playback?.current?.asset }
     public var activeText: String { playback == nil ? cursor.current?.note ?? journey.note : playback?.current?.text ?? "" }
     public func appear() { guard !closed else { return }; loadCurrent(); loadSoundtrack() }
@@ -76,6 +78,12 @@ import UIKit
     public func playJourney() {
         cursor.cancel(); playback = PlaybackClock(beats: JourneyPlaybackPlan.build(journey, tempo: tempo))
         paused = false; foreground.setPaused(false); activateBeat(); startClock()
+    }
+    func replaceSoundtrack(_ read: (() async throws -> URL)?) {
+        soundtrackTask?.cancel()
+        foreground.setSoundtrack(url: nil, volume: 0.8)
+        soundtrackRead = read
+        loadSoundtrack()
     }
     private func loadSoundtrack() {
         guard let soundtrackRead else { return }
@@ -144,7 +152,11 @@ import UIKit
         let refreshed = StoryIntent(journeyId: value.id, routePointId: position?.routePointId ?? selected?.routePointId,
                                     assetId: playback == nil ? selected?.asset?.id : position?.assetId,
                                     revision: value.revision, requestId: intent.requestId)
-        cursor = try StoryCursor(journey: value, intent: refreshed)
+        let refreshedCursor = try StoryCursor(journey: value, intent: refreshed)
+        // UIKit retains already-created neighbors. An authoritative refresh replaces
+        // their source entries and invalidates any outstanding page-turn callbacks.
+        pageGeneration += 1
+        cursor = refreshedCursor
         intent = refreshed; journey = value
         playback = nil; clockTask?.cancel(); commitCurrent(); loadCurrent()
     }

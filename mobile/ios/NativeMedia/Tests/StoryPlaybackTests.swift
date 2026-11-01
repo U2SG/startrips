@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import StartripsMedia
 
 enum MediaFixtures {
@@ -85,6 +86,37 @@ final class StoryPlaybackTests: XCTestCase {
         model.finish()
         XCTAssertEqual(exits.map(\.revision), [live.revision])
         XCTAssertEqual(exits.first?.assetId, "photo-one")
+    }
+
+    @MainActor func testRefreshAtSamePageIndexReplacesCachedPagesAndRejectsOldSwipeCompletion() throws {
+        var journey = try MediaFixtures.journey()
+        let entry = MediaFixtures.intent(asset: nil, point: nil)
+        let scope = ScopedMediaSession(scopeID: "owner", access: .owner,
+            read: { _ in throw MediaFailure.unavailable }, request: { _, _, _ in Data() }, revalidate: {})
+        let model = try StoryModel(journey: journey, intent: entry, session: scope,
+            currentIntent: { entry }, latestJourney: { journey }, onReturn: { _ in })
+        defer { model.disappear() }
+        let old = StoryPager.Coordinator(model: model)
+        let ui = UIPageViewController(transitionStyle: .scroll, navigationOrientation: .horizontal)
+        let neighbor = try XCTUnwrap(old.page(1))
+        old.pageViewController(ui, willTransitionTo: [neighbor])
+        XCTAssertEqual(model.cursor.index, 0)
+        XCTAssertEqual(model.cursor.current?.asset?.id, "photo-one")
+
+        // Removing the current cover picks a different cover at the same index.
+        journey.media.removeAll { $0.id == "photo-one" }
+        try model.update(journey)
+        XCTAssertEqual(model.cursor.index, 0)
+        XCTAssertEqual(model.cursor.current?.asset?.id, "intro-photo")
+        XCTAssertNil(old.page(0))
+        let fresh = StoryPager.Coordinator(model: model)
+        fresh.pageViewController(ui, willTransitionTo: [try XCTUnwrap(fresh.page(1))])
+        old.pageViewController(ui, didFinishAnimating: true, previousViewControllers: [], transitionCompleted: true)
+        XCTAssertEqual(model.cursor.index, 0)
+        XCTAssertEqual(model.cursor.proposedIndex, 1)
+        fresh.pageViewController(ui, didFinishAnimating: true, previousViewControllers: [], transitionCompleted: false)
+        XCTAssertEqual(model.cursor.index, 0)
+        XCTAssertNil(model.cursor.proposedIndex)
     }
 
     @MainActor func testOnePlaybackOwnerAndStaleRelease() {

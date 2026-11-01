@@ -31,7 +31,7 @@ public struct NativeStoryDestination: View {
                 ScrollView { Text(model.journey.note).font(.title3).padding(24) }
             } else {
                 StoryPager(model: model)
-                    .accessibilityIdentifier("story.pager")
+                    .id(model.pageGeneration)
             }
             if !model.expanded {
                 ScrollView { Text(model.activeText).frame(maxWidth: .infinity, alignment: .leading).padding(24) }
@@ -93,8 +93,8 @@ private struct StoryPage: View {
                     }
                     else { Image(systemName: "play.rectangle").font(.largeTitle).frame(maxWidth: .infinity, maxHeight: .infinity) }
                 } else if let image = model.images[asset.id] {
-                    ZoomPhoto(image: image, onPullDown: { model.leave() })
-                        .accessibilityIdentifier("story.photo.\(asset.id)")
+                    ZoomPhoto(image: image, entryID: entry?.id ?? "media:\(asset.id)",
+                              label: asset.fileName, current: current, onPullDown: { model.leave() })
                 } else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
                 if !text.isEmpty {
                     if noteExpanded {
@@ -138,7 +138,7 @@ private struct PlayerSurface: UIViewRepresentable {
     static func dismantleUIView(_ view: PlayerUIView, coordinator: ()) { (view.layer as! AVPlayerLayer).player = nil }
 }
 
-private struct StoryPager: UIViewControllerRepresentable {
+struct StoryPager: UIViewControllerRepresentable {
     @ObservedObject var model: StoryModel
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
     func makeUIViewController(context: Context) -> UIPageViewController {
@@ -161,9 +161,10 @@ private struct StoryPager: UIViewControllerRepresentable {
     @MainActor final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
         let model: StoryModel
         var pending: Int?
-        init(model: StoryModel) { self.model = model }
+        private let generation: Int
+        init(model: StoryModel) { self.model = model; generation = model.pageGeneration }
         func page(_ index: Int) -> IndexedPage? {
-            guard model.cursor.entries.indices.contains(index) else { return nil }
+            guard generation == model.pageGeneration, model.cursor.entries.indices.contains(index) else { return nil }
             return IndexedPage(index: index, rootView: AnyView(StoryPage(model: model, entry: model.cursor.entries[index])))
         }
         func pageViewController(_ controller: UIPageViewController, viewControllerBefore viewController: UIViewController) -> UIViewController? {
@@ -173,22 +174,27 @@ private struct StoryPager: UIViewControllerRepresentable {
             page((viewController as! IndexedPage).index + 1)
         }
         func pageViewController(_ controller: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
-            if let next = pendingViewControllers.first as? IndexedPage { pending = model.beginPaging(next.index) }
+            guard generation == model.pageGeneration, let next = pendingViewControllers.first as? IndexedPage else { return }
+            pending = model.beginPaging(next.index)
         }
         func pageViewController(_ controller: UIPageViewController, didFinishAnimating finished: Bool,
                                 previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
-            if let pending { model.finishPaging(pending, completed: completed) }
-            pending = nil
+            defer { pending = nil }
+            guard generation == model.pageGeneration, let pending else { return }
+            model.finishPaging(pending, completed: completed)
         }
     }
 }
 
 private struct ZoomPhoto: UIViewRepresentable {
     let image: UIImage
+    let entryID: String
+    let label: String
+    let current: Bool
     let onPullDown: () -> Void
     func makeCoordinator() -> Coordinator { Coordinator(onPullDown: onPullDown) }
     func makeUIView(context: Context) -> UIScrollView {
-        let scroll = UIScrollView()
+        let scroll = PhotoScrollView()
         scroll.minimumZoomScale = 1; scroll.maximumZoomScale = 5
         scroll.delegate = context.coordinator; scroll.alwaysBounceVertical = true
         scroll.addSubview(context.coordinator.imageView)
@@ -198,11 +204,25 @@ private struct ZoomPhoto: UIViewRepresentable {
         return scroll
     }
     func updateUIView(_ view: UIScrollView, context: Context) {
+        view.isAccessibilityElement = current
+        view.accessibilityElementsHidden = !current
+        view.accessibilityIdentifier = current ? "story.photo.\(entryID)" : nil
+        view.accessibilityLabel = label
+        view.accessibilityTraits = .image
         context.coordinator.imageView.image = image
         if view.zoomScale == 1 {
             context.coordinator.imageView.frame = view.bounds
             context.coordinator.imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             view.contentSize = view.bounds.size
+        }
+    }
+    private final class PhotoScrollView: UIScrollView {
+        override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            if gestureRecognizer === panGestureRecognizer && zoomScale <= minimumZoomScale + 0.01 {
+                let velocity = panGestureRecognizer.velocity(in: self)
+                if abs(velocity.x) > abs(velocity.y) { return false }
+            }
+            return super.gestureRecognizerShouldBegin(gestureRecognizer)
         }
     }
     @MainActor final class Coordinator: NSObject, UIScrollViewDelegate {

@@ -14,7 +14,12 @@ import UIKit
     private let directory: URL
     private let readJourney: () async throws -> MediaJourney
     private let refresh: (MediaJourney, MediaJourney) -> Void
-    private let soundtrackRead: (() async throws -> URL)?
+    private var soundtrackRead: (() async throws -> URL)?
+
+    private static func soundtrackID(in journey: MediaJourney) -> String? {
+        journey.media.filter { $0.routePointId == nil && $0.mimeType.hasPrefix("audio/") }
+            .min { $0.sortOrder < $1.sortOrder }?.id
+    }
 
     public init(journey: MediaJourney, intent: StoryIntent, session: ScopedMediaSession,
                 directory: URL, uploader: PartUploading,
@@ -27,9 +32,7 @@ import UIKit
         self.session = session; self.directory = directory; self.readJourney = readJourney; self.refresh = refresh
         // Audio remains an ordinary scoped asset read. A guest's projected Journey cannot
         // acquire an owner-only soundtrack through a separate endpoint.
-        let soundtrack = journey.media.filter { $0.routePointId == nil && $0.mimeType.hasPrefix("audio/") }
-            .sorted { $0.sortOrder < $1.sortOrder }.first
-        let readSoundtrack: (() async throws -> URL)? = soundtrack.map { asset in { try await session.mediaURL(asset.id) } }
+        let readSoundtrack: (() async throws -> URL)? = Self.soundtrackID(in: journey).map { id in { try await session.mediaURL(id) } }
         self.soundtrackRead = readSoundtrack
         story = try StoryModel(journey: journey, intent: intent, session: session, currentIntent: currentIntent,
                                latestJourney: latestJourney, soundtrackRead: readSoundtrack, onBeat: onBeat, onReturn: onReturn)
@@ -37,7 +40,8 @@ import UIKit
             exporter = FilmExportModel(session: session, directory: directory.appendingPathComponent("exports"),
                 expectedJourney: journey, currentJourney: readJourney, soundtrackRead: readSoundtrack)
             let transfer = try MultipartImporter(session: session, directory: directory.appendingPathComponent("imports"), uploader: uploader)
-            importer = PhotosImportModel(importer: transfer, journeyID: journey.id, routePointID: intent.routePointId) { [weak self] _ in
+            importer = PhotosImportModel(importer: transfer, journeyID: journey.id, routePointID: intent.routePointId,
+                currentPointID: { [story] in story.committedRoutePointID }) { [weak self] _ in
                 guard let self else { return }
                 let fresh = try await readJourney()
                 try self.updated(fresh, fresh)
@@ -60,11 +64,27 @@ import UIKit
     }
     public func invalidate() { story.invalidate(); importer?.cancel(); exporter?.invalidate() }
     private func updated(_ source: MediaJourney, _ destination: MediaJourney) throws {
+        try updateJourney(source)
         refresh(source, destination)
-        try story.update(source)
-        exporter?.invalidate()
-        exporter = FilmExportModel(session: session, directory: directory.appendingPathComponent("exports"),
-            expectedJourney: source, currentJourney: readJourney, soundtrackRead: soundtrackRead)
+    }
+
+    public func updateJourney(_ journey: MediaJourney) throws {
+        guard journey != story.journey else { return }
+        let oldSoundtrack = Self.soundtrackID(in: story.journey)
+        try story.update(journey)
+        let newSoundtrack = Self.soundtrackID(in: journey)
+        if newSoundtrack != oldSoundtrack {
+            soundtrackRead = newSoundtrack.map { [session] id in { try await session.mediaURL(id) } }
+            story.replaceSoundtrack(soundtrackRead)
+        }
+        mover?.updateSource(journey)
+        guard let previous = exporter else { return }
+        previous.invalidate()
+        let replacement = FilmExportModel(session: session, directory: directory.appendingPathComponent("exports"),
+            expectedJourney: journey, currentJourney: readJourney, soundtrackRead: soundtrackRead)
+        replacement.includeNotes = previous.includeNotes
+        replacement.includeSoundtrack = previous.includeSoundtrack
+        exporter = replacement
     }
     public static func scopeDirectory(root: URL, scopeID: String) -> URL {
         let digest = SHA256.hash(data: Data(scopeID.utf8)).map { String(format: "%02x", $0) }.joined()

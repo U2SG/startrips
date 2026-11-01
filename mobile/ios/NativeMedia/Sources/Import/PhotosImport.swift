@@ -27,14 +27,16 @@ private struct PickedMediaFile: Transferable {
     private var task: Task<Void, Never>?
     private var current: ImportRecord?
     private let journeyID: String
-    private let pointID: String?
+    let pointForBatch: () -> String?
     private let onImported: ([String]) async throws -> Void
     public init(importer: MultipartImporter, journeyID: String, routePointID: String?,
-                onImported: @escaping ([String]) async throws -> Void) {
-        self.importer = importer; self.journeyID = journeyID; pointID = routePointID; self.onImported = onImported
+                currentPointID: (() -> String?)? = nil, onImported: @escaping ([String]) async throws -> Void) {
+        self.importer = importer; self.journeyID = journeyID; self.onImported = onImported
+        self.pointForBatch = currentPointID ?? { routePointID }
     }
     public func importItems(_ items: [PhotosPickerItem]) {
         guard !busy, !items.isEmpty else { return }
+        let pointID = pointForBatch()
         busy = true; progress = 0; failure = nil
         task = Task {
             defer { busy = false; current = nil }
@@ -68,6 +70,8 @@ private struct PickedMediaFile: Transferable {
                     do {
                         let id = try await importer.resume(record) { progress = $0 }
                         try await onImported([id])
+                    } catch MediaFailure.uploadedAssetRemoved {
+                        try await onImported([])
                     } catch MediaFailure.uploadAborted { continue }
                 }
             } catch is CancellationError {} catch { failure = error.localizedDescription }
@@ -76,7 +80,7 @@ private struct PickedMediaFile: Transferable {
     public func cancel() {
         task?.cancel()
         guard let record = current else { return }
-        Task { do { try await importer.cancel(record) } catch { failure = error.localizedDescription } }
+        Task { do { try await cancelAndRefresh(record) } catch { failure = error.localizedDescription } }
     }
     public func cancelPending() {
         guard !busy else { return }; busy = true; failure = nil
@@ -84,9 +88,14 @@ private struct PickedMediaFile: Transferable {
             defer { busy = false; current = nil }
             do {
                 for record in try importer.pending() where record.journeyId == journeyID {
-                    current = record; try await importer.cancel(record)
+                    current = record; try await cancelAndRefresh(record)
                 }
             } catch { failure = error.localizedDescription }
+        }
+    }
+    private func cancelAndRefresh(_ record: ImportRecord) async throws {
+        if case .alreadyCompleted(let assetID) = try await importer.cancel(record) {
+            try await onImported(assetID.map { [$0] } ?? [])
         }
     }
     static func prepare(_ file: URL, type: UTType) throws -> (url: URL, mime: String) {

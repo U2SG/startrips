@@ -22,6 +22,14 @@ import SwiftUI
     public init(session: ScopedMediaSession, journey: MediaJourney, refresh: @escaping (MediaJourney, MediaJourney) -> Void) {
         self.session = session; self.source = journey; self.targetJourneyID = journey.id; self.refresh = refresh
     }
+    func updateSource(_ journey: MediaJourney) {
+        source = journey
+        selected.formIntersection(journey.media.map(\.id))
+        if let index = journeys.firstIndex(where: { $0.id == journey.id }) { journeys[index] = journey }
+        if targetJourneyID == journey.id, let targetPointID, !journey.routePoints.contains(where: { $0.id == targetPointID }) {
+            self.targetPointID = nil
+        }
+    }
     public func load() async {
         guard session.access == .owner else { failure = MediaFailure.readOnly.localizedDescription; return }
         do {

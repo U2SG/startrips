@@ -39,6 +39,8 @@ public struct ImportRecord: Codable, Equatable, Identifiable, Sendable {
     func cancel(prefix: String) async
 }
 
+public enum ImportCancellation: Equatable { case cancelled, alreadyCompleted(String?) }
+
 /// Journal contains stable IDs and ETags only; never cookies, Bearers or signed URLs.
 @MainActor public final class MultipartImporter {
     private let session: ScopedMediaSession
@@ -84,21 +86,22 @@ public struct ImportRecord: Codable, Equatable, Identifiable, Sendable {
         try await session.revalidate(); try Task.checkCancellation()
         if let assetId = record.assetId { return assetId }
         if let uploadID = record.uploadId {
-            let data = try await session.write("/api/uploads/\(component(uploadID))/status", method: "GET")
-            let status = try JSONDecoder().decode(UploadStatus.self, from: data)
+            let status = try await readStatus(of: record, uploadID: uploadID)
             try Task.checkCancellation()
-            guard status.uploadId == uploadID, status.partSize == record.partSize, status.partCount == record.partCount else { throw MediaFailure.invalidUpload }
             switch status.status {
             case "completed":
-                guard let assetID = status.assetId, !assetID.isEmpty else { throw MediaFailure.invalidUpload }
-                record.assetId = assetID; try save(record); try cleanup(record); return assetID
+                guard let assetID = try finishCompleted(record, assetID: status.assetId) else {
+                    throw MediaFailure.uploadedAssetRemoved
+                }
+                return assetID
             case "initiated": break
             case "finalizing", "completion_unknown":
                 // The server's idempotent complete endpoint owns lease/reconciliation.
                 // Reuse the exact saved ETags; never sign parts or create a new upload.
-                guard !record.cancelled, !cancelled.contains(record.id), record.partCount > 0,
+                guard record.partCount > 0,
                       Set(record.parts.map(\.partNumber)) == Set(1...record.partCount),
                       record.parts.count == record.partCount else { throw MediaFailure.uploadPending }
+                return try await complete(record, uploadID: uploadID)
             case "aborted", "failed": record.aborted = true; try save(record); throw MediaFailure.uploadAborted
             default: throw MediaFailure.uploadPending // another reconciler owns the server lease
             }
@@ -156,6 +159,10 @@ public struct ImportRecord: Codable, Equatable, Identifiable, Sendable {
             progress(Double(record.parts.count) / Double(record.partCount))
         }
         try check(record)
+        return try await complete(record, uploadID: uploadID)
+    }
+    private func complete(_ saved: ImportRecord, uploadID: String) async throws -> String {
+        var record = saved
         struct Completion: Decodable { struct Asset: Decodable { let id: String }; let asset: Asset }
         struct Body: Encodable { let parts: [UploadedPart] }
         let body = try JSONEncoder().encode(Body(parts: record.parts.sorted { $0.partNumber < $1.partNumber }))
@@ -166,13 +173,26 @@ public struct ImportRecord: Codable, Equatable, Identifiable, Sendable {
         record.assetId = completed.asset.id; try save(record); try cleanup(record)
         return completed.asset.id
     }
-    public func cancel(_ record: ImportRecord) async throws {
+    @discardableResult public func cancel(_ record: ImportRecord) async throws -> ImportCancellation {
         guard record.scopeID == session.scopeID else { throw MediaFailure.accessChanged }
+        var current = try read(record.id)
+        guard session.access == .owner, current.scopeID == session.scopeID else { throw MediaFailure.accessChanged }
+        let wasActive = active.contains(record.id)
         cancelled.insert(record.id)
-        var current = try read(record.id); current.cancelled = true; try save(current)
+        current.cancelled = true; try save(current)
         await uploader.cancel(prefix: record.id.uuidString + "-")
         if let uploadID = current.uploadId {
-            _ = try await session.write("/api/uploads/\(component(uploadID))", method: "DELETE")
+            if !wasActive {
+                let status = try await readStatus(of: current, uploadID: uploadID)
+                switch status.status {
+                case "completed": return .alreadyCompleted(try finishCompleted(current, assetID: status.assetId))
+                case "aborted", "failed": break
+                case "initiated": _ = try await session.write("/api/uploads/\(component(uploadID))", method: "DELETE")
+                default: throw MediaFailure.uploadPending
+                }
+            } else {
+                _ = try await session.write("/api/uploads/\(component(uploadID))", method: "DELETE")
+            }
         }
         // An in-flight start must record its eventual uploadId before aborting it.
         if current.uploadId != nil || !active.contains(record.id) {
@@ -181,6 +201,26 @@ public struct ImportRecord: Codable, Equatable, Identifiable, Sendable {
         // Retain the source/journal until the abort is acknowledged; an ambiguous completion
         // is reconciled by status, never reported as a deleted durable asset.
         if !active.contains(record.id) { try cleanup(current) }
+        return .cancelled
+    }
+    private func readStatus(of record: ImportRecord, uploadID: String) async throws -> UploadStatus {
+        let data = try await session.write("/api/uploads/\(component(uploadID))/status", method: "GET")
+        let status = try JSONDecoder().decode(UploadStatus.self, from: data)
+        guard status.uploadId == uploadID, status.partSize == record.partSize, status.partCount == record.partCount else { throw MediaFailure.invalidUpload }
+        return status
+    }
+    private func finishCompleted(_ record: ImportRecord, assetID: String?) throws -> String? {
+        guard let assetID else {
+            // ON DELETE SET NULL: the remote upload completed, but its asset was subsequently removed.
+            // Remove the journal last so an interrupted local cleanup is safe to retry.
+            try cleanup(record)
+            try FileManager.default.removeItem(at: directory.appendingPathComponent(record.id.uuidString + ".json"))
+            return nil
+        }
+        guard !assetID.isEmpty else { throw MediaFailure.invalidUpload }
+        var finished = record
+        finished.assetId = assetID; try save(finished); try cleanup(finished)
+        return assetID
     }
     private func check(_ record: ImportRecord) throws {
         try Task.checkCancellation()

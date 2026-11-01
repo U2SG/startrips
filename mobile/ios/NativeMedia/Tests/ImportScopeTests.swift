@@ -53,6 +53,38 @@ final class ImportScopeTests: XCTestCase {
         let importer = try MultipartImporter(session: session, directory: root.appendingPathComponent("journal"), uploader: RecordingUploader())
         XCTAssertThrowsError(try importer.stage(file: source, fileName: "one.jpg", mimeType: "image/jpeg", journeyId: "j", routePointId: nil))
     }
+    @MainActor func testImportUsesCommittedPointAndExportFollowsExternalJourneyRefresh() throws {
+        var current = try MediaFixtures.journey()
+        let intent = MediaFixtures.intent()
+        let owner = ScopedMediaSession(scopeID: "owner", access: .owner,
+            read: { _ in throw MediaFailure.unavailable }, request: { _, _, _ in throw MediaFailure.unavailable }, revalidate: {})
+        let feature = try NativeMediaFeatureModel(journey: current, intent: intent, session: owner,
+            directory: directory(), uploader: RecordingUploader(), currentIntent: { intent }, latestJourney: { current },
+            readJourney: { current }, refresh: { _, _ in XCTFail("External refresh was echoed") }, onReturn: { _ in })
+        defer { feature.invalidate() }
+        let importer = try XCTUnwrap(feature.importer)
+        let second = try XCTUnwrap(feature.story.cursor.entries.firstIndex { $0.routePointId == "point-two" })
+        let proposal = feature.story.beginPaging(second)
+        XCTAssertEqual(importer.pointForBatch(), "point-one")
+        feature.story.finishPaging(proposal, completed: true)
+        let batchPoint = importer.pointForBatch()
+        XCTAssertEqual(batchPoint, "point-two")
+        feature.story.select(0)
+        XCTAssertNil(importer.pointForBatch())
+        XCTAssertEqual(batchPoint, "point-two")
+
+        let old = try XCTUnwrap(feature.exporter)
+        old.includeNotes = false
+        current.title = "旅程的新标题"; current.revision += 1
+        try feature.updateJourney(current)
+        let refreshed = try XCTUnwrap(feature.exporter)
+        XCTAssertFalse(old === refreshed)
+        XCTAssertFalse(refreshed.includeNotes)
+        XCTAssertEqual(feature.mover?.source, current)
+        XCTAssertEqual(try refreshed.prepareForExport().manifest.journeyRevision, current.revision)
+        XCTAssertTrue(try refreshed.prepareForExport().manifest.narrativeSnapshot.matches(current))
+    }
+
     @MainActor func testLongCaptionNeverBlocksOpeningStoryAndCanBeRemovedFromExport() throws {
         var journey = try MediaFixtures.journey()
         journey.routePoints[0].note = String(repeating: "🌍", count: 4001)
@@ -149,6 +181,81 @@ final class ImportScopeTests: XCTestCase {
         let recovered = try await restored.resume(record)
         XCTAssertEqual(recovered, "durable-id"); XCTAssertEqual(starts, 1); XCTAssertEqual(statusReads, 1); XCTAssertEqual(sender.parts.count, 1)
     }
+    @MainActor func testPendingCancelDuringFinalizationCanStillReconcileWithoutResendingParts() async throws {
+        var operations: [String] = [], uncertain = true
+        let session = ScopedMediaSession(scopeID: "owner", access: .owner, read: { _ in throw MediaFailure.unavailable },
+            request: { path, method, _ in
+                operations.append("\(method) \(path)")
+                if path.hasSuffix("/start") { return Data(#"{"uploadId":"u","partSize":4,"partCount":1}"#.utf8) }
+                if path.hasSuffix("/complete") {
+                    if uncertain { throw URLError(.timedOut) }
+                    return Data(#"{"asset":{"id":"durable-id"}}"#.utf8)
+                }
+                if path.hasSuffix("/status") {
+                    return Data(#"{"uploadId":"u","status":"completion_unknown","partSize":4,"partCount":1,"assetId":null}"#.utf8)
+                }
+                return Data(#"{"url":"https://storage.invalid/part","headers":{}}"#.utf8)
+            }, revalidate: {})
+        let root = try directory(), source = root.appendingPathComponent("original")
+        try Data([1, 2]).write(to: source)
+        let sender = RecordingUploader()
+        let importer = try MultipartImporter(session: session, directory: root.appendingPathComponent("journal"), uploader: sender)
+        let record = try importer.stage(file: source, fileName: "sample.jpg", mimeType: "image/jpeg", journeyId: "j", routePointId: nil)
+        do { _ = try await importer.resume(record); XCTFail("Expected lost response") }
+        catch let error as URLError { XCTAssertEqual(error.code, .timedOut) }
+        operations.removeAll()
+        do { _ = try await importer.cancel(record); XCTFail("Server is resolving completion") }
+        catch { XCTAssertEqual(error as? MediaFailure, .uploadPending) }
+        uncertain = false
+        let id = try await importer.resume(record)
+        XCTAssertEqual(id, "durable-id")
+        XCTAssertEqual(operations, ["GET /api/uploads/u/status", "GET /api/uploads/u/status", "POST /api/uploads/u/complete"])
+        XCTAssertEqual(sender.parts.count, 1)
+        XCTAssertTrue(try importer.pending().isEmpty)
+    }
+
+    @MainActor func testCompletedUploadWithDeletedAssetIsRetiredOnRecoveryOrPendingCancellation() async throws {
+        for cancelInstead in [false, true] {
+            var operations: [String] = []
+            let session = ScopedMediaSession(scopeID: "owner", access: .owner, read: { _ in throw MediaFailure.unavailable },
+                request: { path, method, _ in
+                    operations.append("\(method) \(path)")
+                    if path.hasSuffix("/start") { return Data(#"{"uploadId":"u","partSize":4,"partCount":1}"#.utf8) }
+                    if path.hasSuffix("/complete") { throw URLError(.timedOut) }
+                    if path.hasSuffix("/status") {
+                        return Data(#"{"uploadId":"u","status":"completed","partSize":4,"partCount":1,"assetId":null}"#.utf8)
+                    }
+                    return Data(#"{"url":"https://storage.invalid/part","headers":{}}"#.utf8)
+                }, revalidate: {})
+            let root = try directory(), source = root.appendingPathComponent("original")
+            try Data([1, 2, 3]).write(to: source)
+            let sender = RecordingUploader(), journal = root.appendingPathComponent("journal")
+            let first = try MultipartImporter(session: session, directory: journal, uploader: sender)
+            let record = try first.stage(file: source, fileName: "sample.jpg", mimeType: "image/jpeg", journeyId: "j", routePointId: nil)
+            do { _ = try await first.resume(record); XCTFail("Expected lost completion response") }
+            catch let error as URLError { XCTAssertEqual(error.code, .timedOut) }
+            let leftover = journal.appendingPathComponent(record.id.uuidString + "-1.part")
+            try Data([1, 2, 3]).write(to: leftover)
+            let restored = try MultipartImporter(session: session, directory: journal, uploader: sender)
+            let other = try restored.stage(file: source, fileName: "other.jpg", mimeType: "image/jpeg", journeyId: "j", routePointId: nil)
+            operations.removeAll()
+            if cancelInstead {
+                let outcome = try await restored.cancel(record)
+                XCTAssertEqual(outcome, .alreadyCompleted(nil))
+            } else {
+                do { _ = try await restored.resume(record); XCTFail("Deleted asset should not be returned") }
+                catch { XCTAssertEqual(error as? MediaFailure, .uploadedAssetRemoved) }
+            }
+            XCTAssertEqual(operations, ["GET /api/uploads/u/status"])
+            XCTAssertEqual(sender.parts.count, 1)
+            XCTAssertEqual(try restored.pending().map(\.id), [other.id])
+            for url in [record.file, leftover, journal.appendingPathComponent(record.id.uuidString + ".json")] {
+                XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+            }
+            XCTAssertTrue(FileManager.default.fileExists(atPath: other.file.path))
+        }
+    }
+
     @MainActor func testChangedAccountCannotResumePreviousJournal() async throws {
         let root = try directory(), source = root.appendingPathComponent("original")
         try Data([1]).write(to: source)

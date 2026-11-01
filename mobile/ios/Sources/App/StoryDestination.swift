@@ -26,7 +26,7 @@ struct StoryDestination: View {
         .task(id: target.requestId) { build() }
         .onChange(of: session.mediaJourneys[target.journeyId]) { _, fresh in
             guard let fresh, let feature, fresh != feature.story.journey else { return }
-            do { try feature.story.update(fresh) } catch { feature.invalidate(); router.returnToAtlas() }
+            do { try feature.updateJourney(fresh) } catch { feature.invalidate(); router.returnToAtlas() }
         }
     }
 
@@ -64,7 +64,7 @@ struct StoryDestination: View {
                           session.activeIdentity == scope else { return }
                     if let id = result.journeyId {
                         router.commitStoryPosition(StoryHandoff(journeyId: id, routePointId: result.routePointId,
-                            assetId: result.assetId, revision: journey.revision, requestId: target.requestId))
+                            assetId: result.assetId, revision: result.revision, requestId: target.requestId))
                     }
                     router.returnToAtlas()
                 })
