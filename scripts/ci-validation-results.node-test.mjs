@@ -3,6 +3,7 @@ import test from "node:test";
 import { validateResults } from "./ci-validation-results.mjs";
 
 const ordinary = {
+  CLASSIFIED_SCOPE: "full", PROVEN_SCOPE: "full", CLASSIFIED_IOS: "false", PROVEN_IOS: "false", IOS_RESULT: "skipped",
   LEDGER_RESULT: "success", QUICK_CHECKS_RESULT: "success", SOURCE_PROOF_OUTCOME: "success",
   CLASSIFIED_LEDGER_ONLY: "false", PROVEN_LEDGER_ONLY: "false",
   CLASSIFIED_SOC_ONLY: "false", PROVEN_SOC_ONLY: "false",

@@ -17,8 +17,20 @@ export function validateResults(env) {
   }
   const final = env.PROVEN_LEDGER_ONLY === "true";
   const socOnly = env.PROVEN_SOC_ONLY === "true";
+  if (!["full", "ios", "mixed", "docs"].includes(env.CLASSIFIED_SCOPE)
+      || env.CLASSIFIED_SCOPE !== env.PROVEN_SCOPE
+      || !["true", "false"].includes(env.CLASSIFIED_IOS)
+      || env.CLASSIFIED_IOS !== env.PROVEN_IOS) {
+    throw new Error("Scope classification and independent re-classification must agree");
+  }
+  if ((["ios", "mixed"].includes(env.PROVEN_SCOPE) && env.PROVEN_IOS !== "true")
+      || (env.PROVEN_SCOPE === "docs" && env.PROVEN_IOS !== "false")) {
+    throw new Error("Scope and native selection contradict each other");
+  }
+  const nativeExpected = !final && !socOnly && env.PROVEN_IOS === "true" ? "success" : "skipped";
+  if (env.IOS_RESULT !== nativeExpected) throw new Error(`IOS_RESULT must be ${nativeExpected}: ${env.IOS_RESULT || "missing"}`);
   if (final && socOnly) throw new Error("A change cannot be both ledger-only final and soc-client-only");
-  const expected = final || socOnly ? "skipped" : "success";
+  const expected = final || socOnly || ["ios", "docs"].includes(env.PROVEN_SCOPE) ? "skipped" : "success";
   for (const key of ["CORE_RESULT", "BROWSER_QA_RESULT", "KEEPSAKE_RENDER_RESULT"]) {
     if (env[key] !== expected) throw new Error(`${key} must be ${expected}: ${env[key] || "missing"}`);
   }
