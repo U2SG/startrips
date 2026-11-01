@@ -28,6 +28,16 @@ test("routing edits and unknown/shared runtime paths cannot waive existing Web p
   for (const files of [null, []]) assert.deepEqual(classifyPaths(files).shards, WEB_SHARDS);
 });
 
+test("Web-only auth, previews and server tools do not allocate a native runner", () => {
+  for (const file of ["src/auth/AuthGateway.tsx", "src/preview/index.ts", "server/admin/journal-import-cli.ts"]) {
+    const scope = classifyPaths([file]);
+    assert.equal(scope.native, false);
+    assert.deepEqual(scope.shards, WEB_SHARDS);
+  }
+  const workflow = fs.readFileSync(".github/workflows/perf-bundle.yml", "utf8");
+  assert.equal(workflow.split("\n").filter((line) => line.includes("paths-ignore:") && line.includes("'mobile/ios/**'")).length, 2);
+});
+
 test("narrow mapped mixed change runs affected actual matrix commands only", () => {
   const scope = classifyPaths(["mobile/ios/Scene/scene.css", "src/journey/JourneyTimeline.tsx", "docs/ios.md"]);
   assert.equal(scope.mode, "mixed"); assert.equal(scope.native, true);

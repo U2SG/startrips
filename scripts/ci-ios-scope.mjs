@@ -28,7 +28,7 @@ export function classifyPaths(files, { iosExists = true } = {}) {
   if (ios && shared.every((file) => /^src\/journey\/JourneyTimeline\.(tsx|test\.tsx?)$/.test(file))) {
     return { mode: "mixed", native: true, web: true, shards: ["shell-composer"] };
   }
-  const affectsNative = ios || shared.some((file) => /^(src\/|public\/|\.github\/|scripts\/ci-|package\.json$|pnpm-lock\.yaml$|tsconfig\.json$)/.test(file));
+  const affectsNative = ios || shared.some((file) => /^(src\/(?!auth\/|preview\/)|public\/|\.github\/|scripts\/ci-|package\.json$|pnpm-lock\.yaml$|tsconfig\.json$)/.test(file));
   return { mode: "full", native: iosExists && affectsNative, web: true, shards: WEB_SHARDS };
 }
 
