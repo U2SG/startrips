@@ -1,4 +1,4 @@
-import type { Journey } from "../../../src/journey/types";
+import type { Journey, JourneyRoute } from "../../../src/journey/types";
 import { isLightEffectId } from "../../../src/journey/lightEffects";
 
 export type Selection = { journeyId: string; routePointId?: string | null; assetId?: string | null; revision: number; requestId: string };
@@ -63,6 +63,14 @@ export function renderJourneys(snapshot: Snapshot): Journey[] {
     routePoints: journey.routePoints.map((point, index) => ({ ...point, journeyId: journey.id, sortOrder: index, createdAt: "" })),
     media: journey.media.map((asset, index) => ({ ...asset, journeyId: journey.id, sortOrder: index, createdAt: "" })),
   }));
+}
+
+// ParticleEarthScene gives a non-empty route precedence over a point.
+// An explicit or scrubbed Route Point must suppress that route-fit command.
+export function atlasSceneFocus(point: { latitude: number; longitude: number } | undefined, route: JourneyRoute | undefined) {
+  return point
+    ? { focusPoint: { lat: point.latitude, lon: point.longitude }, focusRoute: null }
+    : { focusPoint: null, focusRoute: route ?? null };
 }
 
 export function acceptsSnapshot(current: Snapshot | null, next: Snapshot) {

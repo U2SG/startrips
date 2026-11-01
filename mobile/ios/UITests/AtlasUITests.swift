@@ -10,7 +10,9 @@ final class AtlasUITests: XCTestCase {
         let timeline = app.webViews.buttons["打开旅程：海岸旅程"]
         XCTAssertTrue(timeline.waitForExistence(timeout: 30))
         timeline.tap()
-        XCTAssertTrue(app.otherElements["story-handoff"].waitForExistence(timeout: 10))
+        let storyTitle = app.staticTexts["story-handoff-title"]
+        XCTAssertTrue(storyTitle.waitForExistence(timeout: 10))
+        XCTAssertEqual(storyTitle.label, "海岸旅程")
         app.buttons["return-to-atlas"].tap()
         let start = app.webViews.buttons["起点"]
         XCTAssertTrue(start.waitForExistence(timeout: 10)); start.tap()
@@ -37,7 +39,8 @@ final class AtlasUITests: XCTestCase {
         let coastStory = app.webViews.buttons["打开故事：海岸"]
         XCTAssertTrue(coastStory.waitForExistence(timeout: 10))
         coastStory.tap()
-        XCTAssertTrue(app.otherElements["story-handoff"].waitForExistence(timeout: 10))
+        XCTAssertTrue(storyTitle.waitForExistence(timeout: 10))
+        XCTAssertEqual(storyTitle.label, "海岸旅程")
         app.buttons["return-to-atlas"].tap()
         XCTAssertTrue(app.webViews.buttons["海岸"].waitForExistence(timeout: 10))
         XCUIDevice.shared.press(.home)

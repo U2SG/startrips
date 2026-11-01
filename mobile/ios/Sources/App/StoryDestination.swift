@@ -19,11 +19,12 @@ struct StoryDestination: View {
                     // Truthful shell handoff while B's independent module is absent.
                     // This is not presented as completed media/playback acceptance.
                     VStack(alignment: .leading, spacing: 16) {
-                        Text(journey.title).font(.title)
+                        Text(journey.title).font(.title).accessibilityAddTraits(.isHeader)
+                                .accessibilityIdentifier("story-handoff-title")
                         Text(journey.startedOn).font(.subheadline)
                         Text("故事模块尚未接入此版本。")
                         Button("返回图谱") { router.returnToAtlas() }.accessibilityIdentifier("return-to-atlas")
-                    }.padding().accessibilityIdentifier("story-handoff")
+                    }.padding()
                 }
             } else {
                 ContentUnavailableView("旅程已不可用", systemImage: "map")
