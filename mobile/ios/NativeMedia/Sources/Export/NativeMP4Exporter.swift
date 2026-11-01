@@ -2,6 +2,27 @@ import AVFoundation
 import CoreVideo
 import Foundation
 
+/// AVFoundation may backpressure every input at once. Only a readiness or writer
+/// state transition (or task cancellation) needs to wake the producer.
+private final class WriterReadiness {
+    let stream: AsyncStream<Void>
+    private let continuation: AsyncStream<Void>.Continuation
+    private let observations: [NSKeyValueObservation]
+
+    init(_ writer: AVAssetWriter, inputs: [AVAssetWriterInput]) {
+        let (events, sink) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        stream = events
+        continuation = sink
+        observations = inputs.map { input in
+            input.observe(\.isReadyForMoreMediaData, options: [.initial, .new]) { _, _ in sink.yield(()) }
+        } + [writer.observe(\.status, options: [.new]) { _, _ in sink.yield(()) }]
+    }
+    func finish() {
+        observations.forEach { $0.invalidate() }
+        continuation.finish()
+    }
+}
+
 @MainActor public final class NativeMP4Exporter {
     public init() {}
     public func export(manifest: FilmManifest, renderer: FilmFrameRendering, destination: URL,
@@ -38,6 +59,9 @@ import Foundation
         writer.add(input)
         guard writer.startWriting() else { throw writer.error ?? MediaFailure.encoding }
         writer.startSession(atSourceTime: .zero)
+        let demand = WriterReadiness(writer, inputs: [input])
+        defer { demand.finish() }
+        var readiness = demand.stream.makeAsyncIterator()
         do {
             var lastScene = -1
             for number in 0..<manifest.totalFrames {
@@ -48,12 +72,10 @@ import Foundation
                     guard try availableBytes() > 8 * 1024 * 1024 else { throw MediaFailure.diskFull }
                 }
                 let image = try await renderer.render(frame)
-                let started = ProcessInfo.processInfo.systemUptime
                 while !input.isReadyForMoreMediaData {
                     try Task.checkCancellation()
                     guard writer.status == .writing else { throw writer.error ?? MediaFailure.encoding }
-                    guard ProcessInfo.processInfo.systemUptime - started < 30 else { throw MediaFailure.encoding }
-                    try await Task.sleep(nanoseconds: 2_000_000)
+                    guard await readiness.next() != nil else { throw CancellationError() }
                 }
                 guard let pool = adaptor.pixelBufferPool else { throw MediaFailure.encoding }
                 var buffer: CVPixelBuffer?
@@ -148,7 +170,9 @@ import Foundation
         var tracks: [(AVAssetReader, AVAssetReaderOutput, AVAssetWriterInput)] = [
             (videoReader, picture, videoInput), (musicReader, music, audioInput)
         ]
-        var lastProgress = ProcessInfo.processInfo.systemUptime
+        let demand = WriterReadiness(writer, inputs: [videoInput, audioInput])
+        defer { demand.finish() }
+        var readiness = demand.stream.makeAsyncIterator()
         while !tracks.isEmpty {
             try Task.checkCancellation()
             guard writer.status == .writing else { throw writer.error ?? MediaFailure.encoding }
@@ -164,10 +188,8 @@ import Foundation
                 }
                 progressed = true
             }
-            if progressed { lastProgress = ProcessInfo.processInfo.systemUptime }
-            else {
-                guard ProcessInfo.processInfo.systemUptime - lastProgress < 30 else { throw MediaFailure.encoding }
-                try await Task.sleep(nanoseconds: 2_000_000)
+            if !progressed {
+                guard await readiness.next() != nil else { throw CancellationError() }
             }
         }
         writer.endSession(atSourceTime: duration)

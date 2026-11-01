@@ -24,6 +24,7 @@ PY
 trap report_failure EXIT
 # One available iPhone, no device matrix or hidden parallel simulator clones.
 device=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for k,v in d["devices"].items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
+xcrun simctl bootstatus "$device" -b
 root=$(pwd)
 (
   cd mobile/ios/NativeMedia
