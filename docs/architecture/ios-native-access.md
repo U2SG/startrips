@@ -8,6 +8,12 @@ Sign in in the first-party session and read the active identity through `GET /ap
 
 A guest link has the shape `/share#<token>`. Construct a separate guest client with cookies disabled. Send the bearer only to the first-party `/api/shared/` routes. A missing fragment, expired grant or revocation ends that guest context. Re-sign assets through `/api/shared/assets/{assetId}/read-url`; members use `/api/uploads/assets/{assetId}/read-url`. Do not fall back to a cached member client. Object-storage PUTs and reads use their own expiring URL and specified headers, without the app session. Redact the share fragment, Authorization, cookies and signed URLs in telemetry.
 
+## Native Google sign-in
+
+Enable the existing web Google client at the deployment origin. The native client generates independent 32-byte state and verifier values, sends the S256 challenge and retains the verifier in memory. POST `/api/native-auth/start` accepts `state`, `codeChallenge` and `intent` (`sign-in` or `sign-up`). All native POSTs send the chosen HTTPS Origin. An unavailable Google provider returns 404. Open the same-origin `authorizeUrl` in a system authentication session. The normal Google OAuth callback returns to a first-party account confirmation page. The browser must explicitly authorize transfer to the iPhone.
+
+The only app callback is `startrips://auth` with `code` and `state`, or `error=access_denied` and `state`. Verify the exact scheme, host, parameters and original state. POST `/api/native-auth/exchange` to the original HTTPS origin with `code`, `state` and `codeVerifier`. A 204 carries a single host-only Secure/HttpOnly session cookie; install it in the private first-party WK store and re-read the session and active Atlas. Clear any old cached session-data cookie first. Transfers are valid for 60 seconds and can be redeemed once. An expired, revoked, replayed or mismatched flow returns a generic 400. No custom return origin, session credential in a URL, or fallback to the local globe's cookie store is supported.
+
 ## Recover a multipart task
 
 1. Save the `uploadId`, `partSize`, `partCount` returned by `POST /api/uploads/start` along with the originating account, Atlas and destination. Save each completed part's number and provider ETag before acknowledging it locally.

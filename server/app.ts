@@ -21,6 +21,7 @@ import { HomeBasePeriodConflictError } from "./repositories/home-base-repository
 import { requestLog } from "./request-log";
 import { accountEmailChangeRoutes } from "./routes/account-email-change";
 import { accountIdentityRoutes } from "./routes/account-identities";
+import { nativeAuthRoutes } from "./routes/native-auth";
 import { accountPasswordRoutes } from "./routes/account-password";
 import { accountPreferenceRoutes } from "./routes/account-preferences";
 import { atlasRoutes } from "./routes/atlases";
@@ -95,6 +96,7 @@ app.route("/api/account-identities/email-change", accountEmailChangeRoutes);
 // email-change is: the more specific prefix has to win.
 app.route("/api/account-identities/password", accountPasswordRoutes);
 app.route("/api/account-identities", accountIdentityRoutes);
+app.route("/api/native-auth", nativeAuthRoutes);
 // #387: the account-scoped Earth experience preference. The only route
 // module here that derives nothing from an Atlas: the stable user behind the
 // session owns the value, so there is no atlasId in the path and none is read

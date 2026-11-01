@@ -88,6 +88,7 @@ jobs:
             server/tests/upload-evidence.integration.test.ts \
             server/tests/share-grants.integration.test.ts \
             server/tests/session-cookie-cache-revocation.integration.test.ts \
+            server/tests/account-identity-google.integration.test.ts \
             server/tests/tenant-isolation.integration.test.ts \
             server/tests/daily-journal.integration.test.ts
       - name: Run API latency harness

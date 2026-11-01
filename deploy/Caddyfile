@@ -84,8 +84,10 @@
 			fields {
 				# The native sign-in header is a credential too.
 				resp_headers>Set-Auth-Token delete
-				request>uri regexp "((?:reset-password|/share|/api/shared)/|[?&](?:token|callbackURL)=)[^/?&#]*" "${1}REDACTED"
-				request>headers>Referer regexp "((?:reset-password|/share|/api/shared)/|[?&](?:token|callbackURL)=)[^/?&#]*" "${1}REDACTED"
+				# Provider callbacks and the native app redirect can contain a single-use code.
+				resp_headers>Location delete
+				request>uri regexp "((?:reset-password|/share|/api/shared)/|[?&](?:token|callbackURL|code|state|request|proof)=)[^/?&#]*" "${1}REDACTED"
+				request>headers>Referer regexp "((?:reset-password|/share|/api/shared)/|[?&](?:token|callbackURL|code|state|request|proof)=)[^/?&#]*" "${1}REDACTED"
 			}
 		}
 	}

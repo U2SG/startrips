@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { createSign, generateKeyPairSync, randomUUID } from "node:crypto";
+import { createHash, createSign, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -53,6 +53,7 @@ const {
   member: authMember,
   organization: authOrganization,
   rateLimit,
+  verification: authVerification,
   session: authSession,
   user: authUser,
 } = await import("../db/auth-schema");
@@ -409,6 +410,111 @@ afterAll(async () => {
     await db.delete(authUser).where(inArray(authUser.id, createdUserIds));
   }
   await pool.end();
+});
+
+describe("native Google browser handoff", () => {
+  const native = "/api/native-auth";
+  const random = () => randomBytes(32).toString("base64url");
+  const sha = (s: string) => createHash("sha256").update(s).digest("base64url");
+  async function startNative() {
+    const verifier = random(), state = random();
+    const start = await postJson(native + "/start", {state, codeChallenge:sha(verifier), intent:"sign-up"}, "");
+    expect(start.status).toBe(200);
+    const link = new URL((await start.json() as {authorizeUrl:string}).authorizeUrl);
+    expect(link.origin).toBe(ORIGIN);
+    const authorize = await app.request(link.href);
+    expect(authorize.status).toBe(200);
+    expect(authorize.headers.get("cache-control")).toContain("no-store");
+    const browser = jarFrom(authorize);
+    return {verifier,state,browser};
+  }
+  async function reviewed(withAtlas = false) {
+    const flow = await startNative();
+    const begin = await postJson(native + "/begin", {}, flow.browser);
+    expect(begin.status).toBe(303);
+    const provider = new URL(begin.headers.get("location")!);
+    expect(provider.origin).toBe("https://accounts.google.com");
+    const email = "st132-" + randomUUID() + "@example.test";
+    tokenAnswer = {kind:"tokens",subject:"st132-" + randomUUID(),email,emailVerified:true};
+    const callback = await finishSignIn(provider.searchParams.get("state")!,cookieHeader(flow.browser,jarFrom(begin)));
+    expect(callback.status).toBe(302);
+    const owner = await trackGoogleUser(email);
+    expect(owner).toBeTruthy();
+    let browser = cookieHeader(flow.browser,jarFrom(callback));
+    let orgId: string | null = null;
+    if (withAtlas) {
+      const org = await postJson("/api/auth/organization/create",{name:"Native Atlas",slug:"native-"+randomUUID()},browser);
+      expect(org.status).toBe(200);
+      orgId = (await org.json() as {id:string}).id; createdOrganizationIds.push(orgId);
+      const active = await postJson("/api/auth/organization/set-active",{organizationId:orgId},browser);
+      expect(active.status).toBe(200);
+      browser = cookieHeader(browser,jarFrom(active));
+    }
+    const reviewURL = new URL(callback.headers.get("location")!,ORIGIN);
+    expect(reviewURL.origin).toBe(ORIGIN); expect(reviewURL.pathname).toBe(native+"/review");
+    const review = await app.request(reviewURL.href,{headers:{cookie:browser}});
+    expect(review.status).toBe(200);
+    expect(await review.text()).toContain(email);
+    return {...flow, browser, email, orgId};
+  }
+  async function granted(withAtlas = false) {
+    const f = await reviewed(withAtlas);
+    const yes = await postJson(native+"/consent",{},f.browser);
+    expect(yes.status).toBe(303);
+    const destination = new URL(yes.headers.get("location")!);
+    expect(destination.protocol).toBe("startrips:"); expect(destination.host).toBe("auth");
+    expect([...destination.searchParams.keys()].sort()).toEqual(["code","state"]);
+    expect(destination.searchParams.get("state")).toBe(f.state);
+    return {...f,code:destination.searchParams.get("code")!};
+  }
+  const redeem = (f:{code:string;verifier:string;state:string}) =>
+    postJson(native+"/exchange",{code:f.code,codeVerifier:f.verifier,state:f.state},"");
+
+  it("requires explicit consent and transfers exactly the authorized account and Atlas once", async () => {
+    const f = await granted(true);
+    expect((await redeem({...f,verifier:random()})).status).toBe(400);
+    expect((await redeem({...f,state:random()})).status).toBe(400);
+    const attempts = await Promise.all([redeem(f),redeem(f)]);
+    expect(attempts.map(a=>a.status).sort()).toEqual([204,400]);
+    const ok = attempts.find(a=>a.status===204)!;
+    expect(await ok.text()).toBe(""); expect(ok.headers.get("set-auth-token")).toBeNull();
+    const cookies = ok.headers.getSetCookie();
+    expect(cookies).toHaveLength(1);expect(cookies[0]).toMatch(/HttpOnly/i);expect(cookies[0]).toMatch(/Secure/i);
+    expect(cookies[0]).not.toMatch(/Domain=/i);
+    const read = await app.request(ORIGIN+"/api/auth/get-session",{headers:{cookie:jarFrom(ok)}});
+    expect(await read.json()).toMatchObject({user:{email:f.email},session:{activeOrganizationId:f.orgId}});
+    expect((await redeem(f)).status).toBe(400);
+  });
+  it("rejects a switched browser identity and closes a cancelled flow", async () => {
+    const f = await reviewed();
+    const other = await seedPasswordAccount();
+    const switched = cookieHeader(f.browser,other.cookie);
+    expect((await postJson(native+"/consent",{},switched)).status).toBe(400);
+    const denied = await postJson(native+"/cancel",{},f.browser);
+    expect(denied.status).toBe(303);
+    expect(denied.headers.get("location")).toBe("startrips://auth?error=access_denied&state="+f.state);
+    expect((await postJson(native+"/consent",{},f.browser)).status).toBe(400);
+  });
+  it("refuses an expired code and a revoked source session", async () => {
+    const expired = await granted();
+    await db.update(authVerification).set({expiresAt:new Date(Date.now()-1000)})
+      .where(eq(authVerification.id,"startrips.native-google.grant:"+sha(expired.code)));
+    expect((await redeem(expired)).status).toBe(400);
+    const revoked = await granted();
+    expect((await postJson("/api/auth/sign-out",{},revoked.browser)).status).toBe(200);
+    const refused = await redeem(revoked);
+    expect(refused.status).toBe(400);expect(refused.headers.getSetCookie()).toEqual([]);
+  });
+  it("refuses a foreign Origin, caller-chosen callback and consent before provider verification", async () => {
+    const input = {state:random(),codeChallenge:random(),intent:"sign-in"};
+    const hostile = await app.request(ORIGIN+native+"/start",{method:"POST",headers:{origin:"https://evil.invalid","content-type":"application/json"},body:JSON.stringify(input)});
+    expect(hostile.status).toBe(403);
+    expect((await postJson(native+"/start",{...input,callbackURL:"https://evil.invalid"},"")).status).toBe(400);
+    const f = await startNative();
+    expect((await postJson(native+"/consent",{},f.browser)).status).toBe(400);
+    const bogus = await app.request(ORIGIN+native+"/review?proof="+random(),{headers:{cookie:f.browser}});
+    expect(bogus.status).toBe(400);
+  });
 });
 
 describe("google sign-in", () => {
