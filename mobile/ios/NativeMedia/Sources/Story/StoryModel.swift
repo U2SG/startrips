@@ -27,7 +27,6 @@ import UIKit
     private var epoch = 0
     private var closed = false
     private var committed: PlaybackPosition?
-    private let bytes = URLSession(configuration: .ephemeral)
 
     public init(journey: MediaJourney, intent: StoryIntent, session: ScopedMediaSession,
                 ownership: PlaybackOwnership? = nil,
@@ -193,7 +192,7 @@ import UIKit
     }
     private func loadImage(_ asset: MediaAsset) async throws -> UIImage {
         let url = try await session.mediaURL(asset.id)
-        let (file, response) = try await bytes.download(from: url)
+        let (file, response) = try await session.imageTransport.download(from: url)
         defer { try? FileManager.default.removeItem(at: file) }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw MediaFailure.unavailable }
         try Task.checkCancellation(); try await session.revalidate()
@@ -205,6 +204,22 @@ import UIKit
               ] as CFDictionary) else { throw MediaFailure.unavailable }
         return UIImage(cgImage: image)
     }
+    public func leave() {
+        guard playback != nil else { finish(); return }
+        let live = currentIntent()
+        guard let result = resolveMediaReturn(entry: intent, committed: committed, reason: .exited,
+            currentRequestID: live.requestId, currentIntentRevision: live.revision, journey: latestJourney(), expanded: expanded),
+              result.surface == .story, let journey = latestJourney() else { finish(); return }
+        let restored = StoryIntent(journeyId: journey.id, routePointId: result.routePointId, assetId: result.assetId,
+                                   revision: journey.revision, requestId: intent.requestId)
+        do {
+            let restoredCursor = try StoryCursor(journey: journey, intent: restored)
+            disappear()
+            playback = nil; self.journey = journey; cursor = restoredCursor
+            paused = false; expanded = result.expanded; commitCurrent(); appear()
+        } catch { finish() }
+    }
+
     public func finish(_ reason: MediaReturn.Reason = .exited) {
         guard !closed else { return }
         closed = true; cursor.cancel(); disappear()

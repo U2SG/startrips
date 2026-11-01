@@ -9,7 +9,7 @@ import UIKit
     public let story: StoryModel
     public private(set) var importer: PhotosImportModel?
     public private(set) var mover: MediaMoveModel?
-    @Published public private(set) var exporter: FilmExportModel
+    @Published public private(set) var exporter: FilmExportModel?
     private let session: ScopedMediaSession
     private let directory: URL
     private let readJourney: () async throws -> MediaJourney
@@ -33,11 +33,9 @@ import UIKit
         self.soundtrackRead = readSoundtrack
         story = try StoryModel(journey: journey, intent: intent, session: session, currentIntent: currentIntent,
                                latestJourney: latestJourney, soundtrackRead: readSoundtrack, onBeat: onBeat, onReturn: onReturn)
-        let film = try FilmPreparation.prepare(journey: journey, reducedMotion: UIAccessibility.isReduceMotionEnabled)
-        exporter = FilmExportModel(session: session, manifest: film.manifest, plan: film.plan, captions: film.captions,
-            directory: directory.appendingPathComponent("exports"), expectedJourney: journey, currentJourney: readJourney,
-            derivativeRead: { _ in throw MediaFailure.unavailable }, soundtrackRead: readSoundtrack)
         if session.access == .owner {
+            exporter = FilmExportModel(session: session, directory: directory.appendingPathComponent("exports"),
+                expectedJourney: journey, currentJourney: readJourney, soundtrackRead: readSoundtrack)
             let transfer = try MultipartImporter(session: session, directory: directory.appendingPathComponent("imports"), uploader: uploader)
             importer = PhotosImportModel(importer: transfer, journeyID: journey.id, routePointID: intent.routePointId) { [weak self] _ in
                 guard let self else { return }
@@ -53,18 +51,20 @@ import UIKit
     /// Existing prepared v2 manifests (including authorized cover derivatives) can replace
     /// the default 60-second preset without changing the renderer or navigation contract.
     public func usePreparedFilm(_ film: PreparedNativeFilm, derivativeRead: @escaping (FilmCover) async throws -> URL) throws {
+        guard session.access == .owner else { throw MediaFailure.readOnly }
         try film.manifest.validate(plan: film.plan, captions: film.captions)
-        exporter.cancel()
+        exporter?.invalidate()
         exporter = FilmExportModel(session: session, manifest: film.manifest, plan: film.plan, captions: film.captions,
             directory: directory.appendingPathComponent("exports"), expectedJourney: story.journey, currentJourney: readJourney,
             derivativeRead: derivativeRead, soundtrackRead: soundtrackRead)
     }
-    public func invalidate() { story.invalidate(); importer?.cancel(); exporter.cancel() }
+    public func invalidate() { story.invalidate(); importer?.cancel(); exporter?.invalidate() }
     private func updated(_ source: MediaJourney, _ destination: MediaJourney) throws {
         refresh(source, destination)
         try story.update(source)
-        let film = try FilmPreparation.prepare(journey: source, reducedMotion: UIAccessibility.isReduceMotionEnabled)
-        try usePreparedFilm(film, derivativeRead: { _ in throw MediaFailure.unavailable })
+        exporter?.invalidate()
+        exporter = FilmExportModel(session: session, directory: directory.appendingPathComponent("exports"),
+            expectedJourney: source, currentJourney: readJourney, soundtrackRead: soundtrackRead)
     }
     public static func scopeDirectory(root: URL, scopeID: String) -> URL {
         let digest = SHA256.hash(data: Data(scopeID.utf8)).map { String(format: "%02x", $0) }.joined()

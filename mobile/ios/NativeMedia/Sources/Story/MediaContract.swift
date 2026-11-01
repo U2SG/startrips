@@ -75,12 +75,14 @@ public struct StoryIntent: Codable, Equatable, Sendable {
     public let access: Access
     public let read: (String) async throws -> URL
     public let request: (String, String, Data?) async throws -> Data
+    public let imageTransport: URLSession
     public let revalidate: () async throws -> Void
     public init(scopeID: String, access: Access,
+                imageTransport: URLSession = URLSession(configuration: .ephemeral),
                 read: @escaping (String) async throws -> URL,
                 request: @escaping (String, String, Data?) async throws -> Data,
                 revalidate: @escaping () async throws -> Void) {
-        self.scopeID = scopeID; self.access = access; self.read = read
+        self.scopeID = scopeID; self.access = access; self.read = read; self.imageTransport = imageTransport
         self.request = request; self.revalidate = revalidate
     }
     public func write(_ path: String, method: String = "POST", body: Data? = nil) async throws -> Data {

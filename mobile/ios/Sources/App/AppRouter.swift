@@ -80,6 +80,15 @@ final class AppRouter: ObservableObject {
         }
     }
 
+    func commitStoryPosition(_ target: StoryHandoff) {
+        guard path.last?.requestId == target.requestId, let resolved = current(target) else { return }
+        selection = resolved
+        if access == .owner, let identity {
+            defaults.set(identity, forKey: "atlas.navigation.identity")
+            defaults.set(try? JSONEncoder().encode(resolved), forKey: "atlas.navigation.selection")
+        }
+    }
+
     func returnToAtlas() { path = []; revision += 1; onInvalidation?() }
     func sceneRestarted() { rendered = false; revision += 1; seen.removeAll() }
 }

@@ -45,26 +45,9 @@ Navigation reconstruction re-resolves saved IDs against freshly authorized data;
 guest navigation and credentials are never saved. WK content process recovery
 rebuilds the scene from the native snapshot, with two bounded automatic retries.
 
-## B integration boundary
+## Native Story and playback
 
-This owner changes `Sources/App`, `Sources/Atlas`, `Sources/Bridge`, `Scene`, the
-Xcode project and CI. B owns Story/Playback/Import/Export. No #768/#769 files are
-modified or copied from another worktree.
-
-`FeatureDestinations.story` is the App-owned integration point. B's view receives
-the current `StoryHandoff`, projected Journey, owner/guest access and return
-callback. On integration, install B's factory during normal app startup, capturing
-the current `AtlasSession` for authorized media reads. Use `session.read` only
-with the matching owner/guest endpoint; never pass credentials to the scene.
-Call `router.onInvalidation` after content changes, and the supplied callback on
-return. Router re-resolves IDs/revisions after every refresh. B must not own a
-second navigation stack or populate the local scene with signed media URLs.
-
-**Current integration blocker:** B's implementation is not in this worktree and
-its delivery ref is not provided. The normal Story destination truthfully reports
-that the module is unavailable and offers return to Atlas. It is not completed
-Story/Playback/Import/Export functionality. The simulator test covers this shell
-handoff, not B's missing media behavior.
+The application links the local StartripsMedia package. StoryDestination constructs the viewer using the current AtlasSession and AppRouter selection. See [Native media integration](NativeMedia/INTEGRATION.md) for the owner/guest contract, background transfers and native test targets.
 
 ## CI selection
 

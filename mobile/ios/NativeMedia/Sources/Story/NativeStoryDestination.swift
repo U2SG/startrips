@@ -16,13 +16,13 @@ public struct NativeStoryDestination: View {
     public var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Button("返回") { model.finish() }.accessibilityIdentifier("story.close")
+                Button { model.leave() } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }.accessibilityLabel("返回").accessibilityIdentifier("story.close")
                 Spacer()
                 Text(model.journey.title).font(.headline).lineLimit(1)
                 Spacer()
-                Button(model.expanded ? "收起" : "全屏") {
-                    if model.expanded { model.collapse() } else { model.expanded = true }
-                }.accessibilityIdentifier("story.expand")
+                Button { if model.expanded { model.collapse() } else { model.expanded = true } } label: {
+                    Image(systemName: model.expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right").frame(width: 44, height: 44)
+                }.accessibilityLabel(model.expanded ? "收起" : "全屏").accessibilityIdentifier("story.expand")
             }.frame(minHeight: 44).padding(.horizontal, 16)
             if model.playback != nil {
                 StoryPage(model: model, entry: nil).id(model.playback?.current?.id)
@@ -40,7 +40,7 @@ public struct NativeStoryDestination: View {
                 Button("上一项") { model.skip(-1) }.accessibilityIdentifier("story.previous")
                 Spacer()
                 if model.playback == nil {
-                    Button("播放旅程") { model.playJourney() }.accessibilityIdentifier("story.play")
+                    Button { model.playJourney() } label: { Image(systemName: "play.fill").frame(width: 44, height: 44) }.accessibilityLabel("播放旅程").accessibilityIdentifier("story.play")
                 } else {
                     Button(model.paused ? "继续" : "暂停") { model.setPaused(!model.paused) }.accessibilityIdentifier("story.pause")
                     Menu("节奏") {
@@ -52,7 +52,7 @@ public struct NativeStoryDestination: View {
                 Spacer()
                 Button("下一项") { model.skip(1) }.accessibilityIdentifier("story.next")
             }.frame(minHeight: 44).padding(16)
-            if importer != nil || exporter != nil || moveModel != nil {
+            if model.session.access == .owner && (importer != nil || exporter != nil || moveModel != nil) {
                 Button("素材与影片") { model.setPaused(true); toolsPresented = true }.frame(minHeight: 44)
             }
         }
@@ -66,7 +66,7 @@ public struct NativeStoryDestination: View {
                     VStack(spacing: 24) {
                         if model.session.access == .owner, let importer { PhotosImportButton(model: importer) }
                         if model.session.access == .owner, let moveModel { MediaMoveView(model: moveModel) }
-                        if let exporter { FilmExportButton(model: exporter) }
+                        if model.session.access == .owner, let exporter { FilmExportButton(model: exporter) }
                     }.padding(24)
                 }.navigationTitle("素材与影片")
                     .toolbar { Button("完成") { toolsPresented = false } }
@@ -92,7 +92,7 @@ private struct StoryPage: View {
                     }
                     else { Image(systemName: "play.rectangle").font(.largeTitle).frame(maxWidth: .infinity, maxHeight: .infinity) }
                 } else if let image = model.images[asset.id] {
-                    ZoomPhoto(image: image, onPullDown: { model.collapse() })
+                    ZoomPhoto(image: image, onPullDown: { model.leave() })
                         .accessibilityIdentifier("story.photo.\(asset.id)")
                 } else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
                 if !text.isEmpty {

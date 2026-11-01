@@ -53,6 +53,48 @@ final class ImportScopeTests: XCTestCase {
         let importer = try MultipartImporter(session: session, directory: root.appendingPathComponent("journal"), uploader: RecordingUploader())
         XCTAssertThrowsError(try importer.stage(file: source, fileName: "one.jpg", mimeType: "image/jpeg", journeyId: "j", routePointId: nil))
     }
+    @MainActor func testLongCaptionNeverBlocksOpeningStoryAndCanBeRemovedFromExport() throws {
+        var journey = try MediaFixtures.journey()
+        journey.routePoints[0].note = String(repeating: "🌍", count: 4001)
+        let intent = MediaFixtures.intent()
+        let owner = ScopedMediaSession(scopeID: "owner", access: .owner,
+            read: { _ in throw MediaFailure.unavailable }, request: { _, _, _ in throw MediaFailure.unavailable }, revalidate: {})
+        let feature = try NativeMediaFeatureModel(journey: journey, intent: intent, session: owner,
+            directory: directory(), uploader: RecordingUploader(), currentIntent: { intent }, latestJourney: { journey },
+            readJourney: { journey }, refresh: { _, _ in }, onReturn: { _ in })
+        XCTAssertEqual(feature.story.cursor.current?.asset?.id, "photo-one")
+        let exporter = try XCTUnwrap(feature.exporter)
+        XCTAssertThrowsError(try exporter.prepareForExport()) {
+            XCTAssertTrue($0 is FilmPreparation.CaptionError)
+        }
+        exporter.includeNotes = false
+        let film = try exporter.prepareForExport()
+        XCTAssertTrue(film.captions.isEmpty)
+        XCTAssertFalse(film.plan.scenes.isEmpty)
+    }
+
+    @MainActor func testGuestCanOpenStoryButCannotPrepareExportOrShareAnExistingArtifact() async throws {
+        let journey = try MediaFixtures.journey(), intent = MediaFixtures.intent(), root = try directory()
+        var calls = 0
+        let guest = ScopedMediaSession(scopeID: "guest", access: .guest,
+            read: { _ in calls += 1; throw MediaFailure.unavailable },
+            request: { _, _, _ in calls += 1; throw MediaFailure.unavailable }, revalidate: { calls += 1 })
+        let feature = try NativeMediaFeatureModel(journey: journey, intent: intent, session: guest,
+            directory: root, uploader: RecordingUploader(), currentIntent: { intent }, latestJourney: { journey },
+            readJourney: { calls += 1; return journey }, refresh: { _, _ in }, onReturn: { _ in })
+        XCTAssertNil(feature.exporter)
+        let film = try FilmPreparation.prepare(journey: journey)
+        XCTAssertThrowsError(try feature.usePreparedFilm(film, derivativeRead: { _ in throw MediaFailure.unavailable })) {
+            XCTAssertEqual($0 as? MediaFailure, .readOnly)
+        }
+        let direct = FilmExportModel(session: guest, directory: root, expectedJourney: journey,
+            currentJourney: { calls += 1; return journey })
+        direct.start()
+        XCTAssertFalse(direct.busy); XCTAssertNotNil(direct.failure)
+        do { _ = try await direct.authorizeShare(); XCTFail("Guest opened export") }
+        catch { XCTAssertEqual(error as? MediaFailure, .readOnly) }
+        XCTAssertEqual(calls, 0)
+    }
     @MainActor func testRevokedScopeDoesNotCallSigner() async {
         var reads = 0
         let session = ScopedMediaSession(scopeID: "revoked", access: .guest,

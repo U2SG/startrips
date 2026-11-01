@@ -50,7 +50,7 @@ struct AtlasRootView: View {
                 }
             }
             .navigationDestination(for: StoryHandoff.self) { target in
-                StoryDestination(target: target, router: router)
+                StoryDestination(target: target, router: router, session: session).id(target.requestId)
             }
             .overlay(alignment: .top) {
                 if session.busy { ProgressView("正在读取图谱…").padding().background(.regularMaterial) }
@@ -78,7 +78,9 @@ struct AtlasRootView: View {
                 fixtureMode = true
                 do {
                     let url = Bundle.main.url(forResource: "bridge", withExtension: "json")!
-                    let fixture = try JSONDecoder().decode(BridgeFixture.self, from: Data(contentsOf: url))
+                    let data = try Data(contentsOf: url)
+                    let fixture = try JSONDecoder().decode(BridgeFixture.self, from: data)
+                    try session.installFixture(data, scope: "synthetic-ci")
                     router.install(fixture.snapshot.journeys, identity: "synthetic-ci", access: .owner, earthExperience: "default")
                     connected = true
                 } catch { router.error = "测试图谱无法读取。" }

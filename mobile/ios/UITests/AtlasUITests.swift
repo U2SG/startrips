@@ -10,8 +10,8 @@ final class AtlasUITests: XCTestCase {
         let timeline = app.webViews.buttons["打开旅程：海岸旅程"]
         XCTAssertTrue(timeline.waitForExistence(timeout: 30))
         timeline.tap()
-        XCTAssertTrue(app.otherElements["story-handoff"].waitForExistence(timeout: 10))
-        app.buttons["return-to-atlas"].tap()
+        XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10))
+        app.buttons["story.close"].tap()
         let start = app.webViews.buttons["起点"]
         XCTAssertTrue(start.waitForExistence(timeout: 10)); start.tap()
         let coast = app.webViews.buttons["海岸"]
@@ -27,8 +27,8 @@ final class AtlasUITests: XCTestCase {
         screenshot.name = "production-globe-after-consecutive-selection"; screenshot.lifetime = .keepAlways
         add(screenshot)
         app.webViews.buttons["打开故事"].firstMatch.tap()
-        XCTAssertTrue(app.otherElements["story-handoff"].waitForExistence(timeout: 10))
-        app.buttons["return-to-atlas"].tap()
+        XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10))
+        app.buttons["story.close"].tap()
         XCTAssertTrue(app.webViews.buttons["海岸"].waitForExistence(timeout: 10))
         XCUIDevice.shared.press(.home)
         app.activate()

@@ -9,32 +9,53 @@ import UIKit
     @Published public private(set) var failure: String?
     @Published public private(set) var file: URL?
     private let session: ScopedMediaSession
-    private let manifest: FilmManifest
-    private let plan: FilmSourcePlan
-    private let captions: [String: String]
+    @Published public var includeNotes = true { didSet { if includeNotes != oldValue { discardResult() } } }
+    @Published public var includeSoundtrack = true { didSet { if includeSoundtrack != oldValue { discardResult() } } }
+    public var canConfigureNotes: Bool { preparedFilm == nil }
+    public var hasSoundtrack: Bool { soundtrackRead != nil }
+    private let preparedFilm: PreparedNativeFilm?
     private let directory: URL
     private let currentJourney: () async throws -> MediaJourney
     private let expectedJourney: MediaJourney
     private let derivativeRead: (FilmCover) async throws -> URL
     private let soundtrackRead: (() async throws -> URL)?
     private var task: Task<Void, Never>?
-    public init(session: ScopedMediaSession, manifest: FilmManifest, plan: FilmSourcePlan, captions: [String: String],
-                directory: URL, expectedJourney: MediaJourney, currentJourney: @escaping () async throws -> MediaJourney,
-                derivativeRead: @escaping (FilmCover) async throws -> URL,
+    public init(session: ScopedMediaSession, directory: URL, expectedJourney: MediaJourney,
+                currentJourney: @escaping () async throws -> MediaJourney,
+                preparedFilm: PreparedNativeFilm? = nil,
+                derivativeRead: @escaping (FilmCover) async throws -> URL = { _ in throw MediaFailure.unavailable },
                 soundtrackRead: (() async throws -> URL)? = nil) {
-        self.session = session; self.manifest = manifest; self.plan = plan; self.captions = captions
+        self.session = session; self.preparedFilm = preparedFilm
         self.directory = directory; self.currentJourney = currentJourney
         self.expectedJourney = expectedJourney
         self.derivativeRead = derivativeRead; self.soundtrackRead = soundtrackRead
     }
+    public convenience init(session: ScopedMediaSession, manifest: FilmManifest, plan: FilmSourcePlan,
+                            captions: [String: String], directory: URL, expectedJourney: MediaJourney,
+                            currentJourney: @escaping () async throws -> MediaJourney,
+                            derivativeRead: @escaping (FilmCover) async throws -> URL,
+                            soundtrackRead: (() async throws -> URL)? = nil) {
+        self.init(session: session, directory: directory, expectedJourney: expectedJourney, currentJourney: currentJourney,
+                  preparedFilm: PreparedNativeFilm(manifest: manifest, plan: plan, captions: captions),
+                  derivativeRead: derivativeRead, soundtrackRead: soundtrackRead)
+    }
+    func prepareForExport() throws -> PreparedNativeFilm {
+        guard session.access == .owner else { throw MediaFailure.readOnly }
+        if let preparedFilm { return preparedFilm }
+        return try FilmPreparation.prepare(journey: expectedJourney, includeNotes: includeNotes,
+                                            reducedMotion: UIAccessibility.isReduceMotionEnabled)
+    }
     public func start() {
         guard !busy else { return }
-        busy = true; failure = nil; progress = 0
-        if let file { try? FileManager.default.removeItem(at: file); self.file = nil }
+        guard session.access == .owner else { failure = MediaFailure.readOnly.localizedDescription; return }
+        discardResult()
+        busy = true; progress = 0
         task = Task {
             defer { busy = false }
             let scratch = directory.appendingPathComponent(UUID().uuidString, isDirectory: true)
             do {
+                let film = try prepareForExport()
+                let manifest = film.manifest, plan = film.plan, captions = film.captions
                 try manifest.validate(plan: plan, captions: captions)
                 let journey = try await authorizedJourney()
                 try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true,
@@ -51,19 +72,12 @@ import UIKit
                     derivatives[cover.derivativeId] = try await download(try await derivativeRead(cover), to: scratch)
                 }
                 var soundtrack: URL?
-                if let soundtrackRead { soundtrack = try await download(try await soundtrackRead(), to: scratch) }
+                if includeSoundtrack, let soundtrackRead { soundtrack = try await download(try await soundtrackRead(), to: scratch) }
                 let renderer = try NativeFilmRenderer(manifest: manifest, plan: plan, journey: journey,
                                                        files: files, captions: captions, derivatives: derivatives)
-                let audio = manifest.shots.compactMap { shot -> FilmAudioSource? in
-                    let scene = plan.scenes[shot.sourceSceneIndex].scene
-                    guard scene.mediaType == "video", let id = scene.mediaAssetId, let file = files[id] else { return nil }
-                    return FilmAudioSource(file: file, startSeconds: Double(shot.startFrame) / Double(manifest.fps),
-                                           sourceSeconds: scene.durationMs / 1000,
-                                           outputSeconds: Double(shot.endFrame - shot.startFrame) / Double(manifest.fps))
-                }
                 let output = directory.appendingPathComponent(UUID().uuidString + ".mp4")
                 let result = try await NativeMP4Exporter().export(manifest: manifest, renderer: renderer, destination: output,
-                    foregroundAudio: audio, soundtrack: soundtrack,
+                    soundtrack: soundtrack,
                     authorize: { _ = try await self.authorizedJourney() },
                     availableBytes: {
                         let values = try self.directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
@@ -74,6 +88,11 @@ import UIKit
         }
     }
     public func cancel() { task?.cancel() }
+    public func invalidate() { cancel(); discardResult() }
+    private func discardResult() {
+        if let file { try? FileManager.default.removeItem(at: file) }
+        file = nil; failure = nil
+    }
     public func authorizeShare() async throws -> URL {
         do {
             _ = try await authorizedJourney()
@@ -85,11 +104,14 @@ import UIKit
         }
     }
     private func authorizedJourney() async throws -> MediaJourney {
+        guard session.access == .owner else { throw MediaFailure.readOnly }
         try await session.revalidate()
         let journey = try await currentJourney()
-        guard journey.id == manifest.journeyId, journey.revision == manifest.journeyRevision,
-              manifest.narrativeSnapshot.matches(journey), journey.routePoints == expectedJourney.routePoints,
-              journey.title == expectedJourney.title, journey.note == expectedJourney.note else { throw MediaFailure.staleIntent }
+        guard journey == expectedJourney else { throw MediaFailure.staleIntent }
+        if let manifest = preparedFilm?.manifest {
+            guard journey.id == manifest.journeyId, journey.revision == manifest.journeyRevision,
+                  manifest.narrativeSnapshot.matches(journey) else { throw MediaFailure.staleIntent }
+        }
         try Task.checkCancellation(); return journey
     }
     private func download(_ url: URL, to directory: URL) async throws -> URL {
@@ -118,6 +140,12 @@ public struct FilmExportButton: View {
                 ProgressView("正在生成影片", value: model.progress)
                 Button("取消导出") { model.cancel() }.frame(minHeight: 44)
             } else {
+                if model.canConfigureNotes {
+                    Toggle("包含感想字幕", isOn: $model.includeNotes).accessibilityIdentifier("story.export.captions")
+                }
+                if model.hasSoundtrack {
+                    Toggle("包含旅程配乐", isOn: $model.includeSoundtrack).accessibilityIdentifier("story.export.soundtrack")
+                }
                 Button("生成 MP4") { model.start() }.frame(minHeight: 44).accessibilityIdentifier("story.export")
                 if model.file != nil {
                     Button("保存或分享影片") {

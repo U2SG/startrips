@@ -109,6 +109,8 @@ final class FilmExportTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(authorizations, 6)
         let asset = AVURLAsset(url: output)
         let duration = try await asset.load(.duration)
+        let audio = try await asset.loadTracks(withMediaType: .audio)
+        XCTAssertTrue(audio.isEmpty)
         XCTAssertEqual(duration.seconds, 121, accuracy: 1.0 / 24)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.requestedTimeToleranceBefore = .zero; generator.requestedTimeToleranceAfter = .zero

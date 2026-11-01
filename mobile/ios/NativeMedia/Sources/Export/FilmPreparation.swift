@@ -9,6 +9,10 @@ public struct PreparedNativeFilm: Codable, Sendable {
 /// Native port of journeyKeepsake.ts + keepsakeMemoryFilm.ts. It emits the same
 /// v1 source plan and v2 ID-only manifest; no web renderer or second export API.
 public enum FilmPreparation {
+    enum CaptionError: LocalizedError {
+        case tooLong
+        var errorDescription: String? { "单条感想超过 8,000 个 UTF-16 代码单元。请缩短感想或关闭感想字幕后重新导出。" }
+    }
     public static func prepare(journey: MediaJourney, presetSeconds: Int = 60, portrait: Bool = true,
                                fps: Int = 30, includeNotes: Bool = true, reducedMotion: Bool = false,
                                cover: FilmCover? = nil) throws -> PreparedNativeFilm {
@@ -88,7 +92,7 @@ public enum FilmPreparation {
         if includeNotes {
             for point in journey.routePoints {
                 let text = (point.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                guard text.utf16.count <= 8000 else { throw MediaFailure.invalidManifest }
+                guard text.utf16.count <= 8000 else { throw CaptionError.tooLong }
                 guard !text.isEmpty, let target = noteTargets[point.id] ?? overview else { continue }
                 var page = "", count = 0, breaks = 0
                 for character in text {
