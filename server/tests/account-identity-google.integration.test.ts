@@ -416,6 +416,17 @@ describe("native Google browser handoff", () => {
   const native = "/api/native-auth";
   const random = () => randomBytes(32).toString("base64url");
   const sha = (s: string) => createHash("sha256").update(s).digest("base64url");
+  function proofIn(html: string) {
+    const proof = html.match(/name="proof" value="([A-Za-z0-9_-]{43})"/)?.[1];
+    if (!proof) throw new Error("HTML form is missing its flow-bound proof");
+    return proof;
+  }
+  function submit(path: string, proof: string, cookie: string) {
+    return app.request(ORIGIN + native + path, {
+      method: "POST", headers: { origin: ORIGIN, cookie, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({proof}).toString(),
+    });
+  }
   async function startNative() {
     const verifier = random(), state = random();
     const start = await postJson(native + "/start", {state, codeChallenge:sha(verifier), intent:"sign-up"}, "");
@@ -427,14 +438,17 @@ describe("native Google browser handoff", () => {
     expect(authorize.headers.get("cache-control")).toContain("no-store");
     expect(authorize.headers.get("referrer-policy")).toBe("origin");
     const browser = jarFrom(authorize);
-    return {verifier,state,browser};
+    return {verifier,state,browser,proof:proofIn(await authorize.text())};
   }
-  async function reviewed(withAtlas = false) {
-    const flow = await startNative();
-    const begin = await postJson(native + "/begin", {}, flow.browser);
+  async function started(flow: Awaited<ReturnType<typeof startNative>>) {
+    const begin = await submit("/begin",flow.proof,flow.browser);
     expect(begin.status).toBe(303);
     const provider = new URL(begin.headers.get("location")!);
     expect(provider.origin).toBe("https://accounts.google.com");
+    return {flow,begin,provider};
+  }
+  async function reviewed(withAtlas = false, previous?: Awaited<ReturnType<typeof started>>) {
+    const {flow,begin,provider} = previous ?? await started(await startNative());
     const email = "st132-" + randomUUID() + "@example.test";
     tokenAnswer = {kind:"tokens",subject:"st132-" + randomUUID(),email,emailVerified:true};
     const callback = await finishSignIn(provider.searchParams.get("state")!,cookieHeader(flow.browser,jarFrom(begin)));
@@ -456,12 +470,13 @@ describe("native Google browser handoff", () => {
     const review = await app.request(reviewURL.href,{headers:{cookie:browser}});
     expect(review.status).toBe(200);
     expect(review.headers.get("referrer-policy")).toBe("origin");
-    expect(await review.text()).toContain(email);
-    return {...flow, browser, email, orgId};
+    const html = await review.text();
+    expect(html).toContain(email);
+    return {...flow, browser, email, orgId, proof:proofIn(html)};
   }
   async function granted(withAtlas = false) {
     const f = await reviewed(withAtlas);
-    const yes = await postJson(native+"/consent",{},f.browser);
+    const yes = await submit("/consent",f.proof,f.browser);
     expect(yes.status).toBe(303);
     const destination = new URL(yes.headers.get("location")!);
     expect(destination.protocol).toBe("startrips:"); expect(destination.host).toBe("auth");
@@ -491,11 +506,11 @@ describe("native Google browser handoff", () => {
     const f = await reviewed();
     const other = await seedPasswordAccount();
     const switched = cookieHeader(f.browser,other.cookie);
-    expect((await postJson(native+"/consent",{},switched)).status).toBe(400);
-    const denied = await postJson(native+"/cancel",{},f.browser);
+    expect((await submit("/consent",f.proof,switched)).status).toBe(400);
+    const denied = await submit("/cancel",f.proof,f.browser);
     expect(denied.status).toBe(303);
     expect(denied.headers.get("location")).toBe("startrips://auth?error=access_denied&state="+f.state);
-    expect((await postJson(native+"/consent",{},f.browser)).status).toBe(400);
+    expect((await submit("/consent",f.proof,f.browser)).status).toBe(400);
   });
   it("refuses an expired code and a revoked source session", async () => {
     const expired = await granted();
@@ -507,13 +522,54 @@ describe("native Google browser handoff", () => {
     const refused = await redeem(revoked);
     expect(refused.status).toBe(400);expect(refused.headers.getSetCookie()).toEqual([]);
   });
+  it("binds old forms and Google error callbacks to the exact browser flow and phase", async () => {
+    const a = await reviewed();
+    const failedFlow = await started(await startNative());
+    const refused = await finishSignIn(failedFlow.provider.searchParams.get("state")!,
+      cookieHeader(failedFlow.flow.browser,jarFrom(failedFlow.begin)),{error:"access_denied"});
+    const failureURL = new URL(refused.headers.get("location")!,ORIGIN);
+    expect(failureURL.pathname).toBe(native+"/cancelled");
+    expect(failureURL.searchParams.get("proof")).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+    const b = await startNative();
+    expect((await submit("/begin",a.proof,b.browser)).status).toBe(400);
+    expect((await submit("/cancel",a.proof,b.browser)).status).toBe(400);
+    const beganB = await started(b);
+    expect((await app.request(failureURL.href,{headers:{cookie:b.browser}})).status).toBe(400);
+    // The original error can still cancel its own flow, once.
+    const correctError = await app.request(failureURL.href,{headers:{cookie:failedFlow.flow.browser}});
+    expect(correctError.status).toBe(303);
+    expect(correctError.headers.get("location")).toBe("startrips://auth?error=access_denied&state="+failedFlow.flow.state);
+    const current = await reviewed(false,beganB);
+    expect((await submit("/consent",a.proof,current.browser)).status).toBe(400);
+    expect((await submit("/cancel",a.proof,current.browser)).status).toBe(400);
+    expect((await submit("/consent",b.proof,current.browser)).status).toBe(400);
+    expect((await app.request(failureURL.href,{headers:{cookie:current.browser}})).status).toBe(400);
+    const ok = await submit("/consent",current.proof,current.browser);
+    expect(ok.status).toBe(303);
+    const target = new URL(ok.headers.get("location")!);
+    expect(target.searchParams.get("state")).toBe(current.state);
+    const exchanged = await redeem({...current,code:target.searchParams.get("code")!});
+    expect(exchanged.status).toBe(204);
+    const session = await app.request(ORIGIN+"/api/auth/get-session",{headers:{cookie:jarFrom(exchanged)}});
+    expect(await session.json()).toMatchObject({user:{email:current.email}});
+  });
+
+  it("canonicalizes the configured origin without dropping nondefault ports or scheme", async () => {
+    const {nativeAuthOrigin} = await import("../routes/native-auth");
+    expect(nativeAuthOrigin("https://EXAMPLE.test:443")).toBe("https://example.test");
+    expect(nativeAuthOrigin("https://EXAMPLE.test:8443")).toBe("https://example.test:8443");
+    expect(nativeAuthOrigin("http://EXAMPLE.test:80")).toBe("http://example.test");
+    expect(()=>nativeAuthOrigin("malformed")).toThrow();
+  });
+
   it("refuses a foreign Origin, caller-chosen callback and consent before provider verification", async () => {
     const input = {state:random(),codeChallenge:random(),intent:"sign-in"};
     const hostile = await app.request(ORIGIN+native+"/start",{method:"POST",headers:{origin:"https://evil.invalid","content-type":"application/json"},body:JSON.stringify(input)});
     expect(hostile.status).toBe(403);
     expect((await postJson(native+"/start",{...input,callbackURL:"https://evil.invalid"},"")).status).toBe(400);
     const f = await startNative();
-    expect((await postJson(native+"/consent",{},f.browser)).status).toBe(400);
+    expect((await submit("/consent",f.proof,f.browser)).status).toBe(400);
     const bogus = await app.request(ORIGIN+native+"/review?proof="+random(),{headers:{cookie:f.browser}});
     expect(bogus.status).toBe(400);
   });

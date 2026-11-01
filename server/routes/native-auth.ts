@@ -12,7 +12,8 @@ import { clientAddress, FixedWindowCounter } from "../share-rate-limit";
 import { readJsonObject } from "./json-body";
 
 const base = "/api/native-auth";
-const origin = serverConfig.appOrigin;
+export const nativeAuthOrigin = (configured: string) => new URL(configured).origin;
+const origin = nativeAuthOrigin(serverConfig.appOrigin);
 const flowKind = "startrips.native-google.flow";
 const grantKind = "startrips.native-google.grant";
 const browserCookie = (serverConfig.production ? "__Host-" : "") + "startrips.native_google";
@@ -26,15 +27,20 @@ const limiter = new FixedWindowCounter(60_000);
 type Principal = { sessionId: string; userId: string; org: string | null };
 type Flow = {
   state: string; codeChallenge: string; intent: "sign-in" | "sign-up"; origin: string;
-  phase: "new" | "browser" | "oauth" | "review"; browser?: string; proof?: string; principal?: Principal;
+  phase: "new" | "browser" | "oauth" | "review"; browser?: string; proof?: string; errorProof?: string; formProof?: string; principal?: Principal;
 };
 type Row = typeof verification.$inferSelect;
 const rejected = (c: Context) => c.json({ error: "NATIVE_AUTH_UNAVAILABLE" }, 400);
 const cookieOptions = { httpOnly: true, secure: true, sameSite: "Lax" as const, path: "/" };
 const escape = (text: string) => text.replace(/[&<>"']/g, (x) =>
   ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[x] ?? ""));
-const form = (path: string, label: string) =>
-  '<form method="post" action="' + base + path + '"><button type="submit">' + label + '</button></form>';
+const form = (path: string, label: string, proof: string) =>
+  '<form method="post" action="' + base + path + '"><input type="hidden" name="proof" value="' +
+    proof + '"><button type="submit">' + label + '</button></form>';
+async function matchesForm(c: Context, flow: Flow) {
+  const body = await c.req.parseBody();
+  return opaque(body.proof) && digest(body.proof) === flow.formProof;
+}
 function page(c: Context, title: string, body: string) {
   // A navigation form POST with no-referrer sends Origin: null. Keep the origin but omit the proof query.
   c.header("Referrer-Policy", "origin");
@@ -97,22 +103,24 @@ nativeAuthRoutes.post("/start", async (c) => {
 nativeAuthRoutes.get("/authorize", async (c) => {
   const id = c.req.query("request");
   if (!opaque(id)) return rejected(c);
-  const flow = await readFlow(id), nonce = token();
-  if (!flow || flow.data.phase !== "new" || !await advance(flow.row, {...flow.data, phase:"browser",browser:digest(nonce)})) return rejected(c);
+  const flow = await readFlow(id), nonce = token(), proof = token();
+  if (!flow || flow.data.phase !== "new" || !await advance(flow.row,
+    {...flow.data, phase:"browser", browser:digest(nonce), formProof:digest(proof)})) return rejected(c);
   setCookie(c, browserCookie, id + "." + nonce, {...cookieOptions, maxAge:600});
-  return page(c, "连接 Startrips iPhone", form("/begin", flow.data.intent === "sign-up" ? "用 Google 注册" : "用 Google 登录") + form("/cancel","取消"));
+  return page(c, "连接 Startrips iPhone", form("/begin", flow.data.intent === "sign-up" ? "用 Google 注册" : "用 Google 登录", proof) + form("/cancel","取消",proof));
 });
 nativeAuthRoutes.post("/begin", async (c) => {
   const f = await browserFlow(c);
-  if (!f || f.data.phase !== "browser") return rejected(c);
-  const proof = token();
-  if (!await advance(f.row, {...f.data, phase:"oauth", proof:digest(proof)})) return rejected(c);
+  if (!f || f.data.phase !== "browser" || !await matchesForm(c,f.data)) return rejected(c);
+  const proof = token(), errorProof = token();
+  if (!await advance(f.row, {...f.data, phase:"oauth", formProof:undefined,
+    proof:digest(proof), errorProof:digest(errorProof)})) return rejected(c);
   // Use the normal HTTP endpoint so its state cookie, PKCE, rate limit and explicit sign-up rules all apply.
   const headers = new Headers(c.req.raw.headers);
   headers.delete("authorization"); headers.delete("content-length"); headers.set("content-type","application/json");
   const result = await auth.handler(new Request(origin + "/api/auth/sign-in/social", {
     method:"POST", headers, body:JSON.stringify({provider:"google", disableRedirect:true, requestSignUp:f.data.intent === "sign-up",
-      callbackURL:origin + base + "/review?proof=" + proof, errorCallbackURL:origin + base + "/cancelled"}),
+      callbackURL:origin + base + "/review?proof=" + proof, errorCallbackURL:origin + base + "/cancelled?proof=" + errorProof}),
   }));
   if (!result.ok) return rejected(c);
   const answer = await result.json() as {url?: string};
@@ -124,13 +132,21 @@ nativeAuthRoutes.get("/review", async (c) => {
   const f = await browserFlow(c), proof = c.req.query("proof");
   if (!f || !opaque(proof) || f.data.phase !== "oauth" || f.data.proof !== digest(proof)) return rejected(c);
   const current = await getAuthoritativeSession(c.req.raw.headers);
-  if (!current || !await advance(f.row, {...f.data, phase:"review", principal:identify(current)})) return rejected(c);
+  const formNonce = token();
+  if (!current || !await advance(f.row, {...f.data, phase:"review", proof:undefined, errorProof:undefined,
+    formProof:digest(formNonce), principal:identify(current)})) return rejected(c);
   return page(c, "允许此 iPhone 登录", '<p>当前账户：' + escape(current.user.email) + '</p>' +
-    form("/consent","使用这个账户继续") + form("/cancel","取消"));
+    form("/consent","使用这个账户继续",formNonce) + form("/cancel","取消",formNonce));
 });
 async function cancel(c: Context) {
   const f = await browserFlow(c);
   if (!f) return rejected(c);
+  if (c.req.method === "GET") {
+    const proof = c.req.query("proof");
+    if (f.data.phase !== "oauth" || !opaque(proof) || digest(proof) !== f.data.errorProof) return rejected(c);
+  } else if ((f.data.phase !== "browser" && f.data.phase !== "review") || !await matchesForm(c,f.data)) {
+    return rejected(c);
+  }
   const deleted = await db.delete(verification).where(and(live(f.row.id),eq(verification.value,f.row.value))).returning({id: verification.id});
   if (!deleted.length) return rejected(c);
   setCookie(c, browserCookie, "", {...cookieOptions,maxAge:0});
@@ -140,7 +156,7 @@ nativeAuthRoutes.post("/cancel", cancel);
 nativeAuthRoutes.get("/cancelled", cancel);
 nativeAuthRoutes.post("/consent", async (c) => {
   const f = await browserFlow(c);
-  if (!f || f.data.phase !== "review") return rejected(c);
+  if (!f || f.data.phase !== "review" || !await matchesForm(c,f.data)) return rejected(c);
   const current = await getAuthoritativeSession(c.req.raw.headers);
   if (!current || !samePrincipal(f.data.principal, identify(current))) return rejected(c);
   const code = token();
