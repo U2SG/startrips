@@ -124,7 +124,7 @@ public enum FilmPreparation {
                 openingDerivativeId: isCover ? cover?.derivativeId : nil, captionCues: cues))
         }
         let manifest = FilmManifest(version: 2, exportKind: "journey_memory_film", journeyId: journey.id, journeyRevision: journey.revision,
-            narrativeSnapshot: snapshot, privacy: FilmPrivacy(artifactVisibility: "private", mediaResolution: "authorized-server-fetch"),
+            narrativeSnapshot: snapshot, privacy: FilmPrivacy(artifactVisibility: "private", mediaResolution: "authorized-owner-fetch"),
             fps: fps, output: output, reducedMotion: reducedMotion, totalFrames: nextFrame,
             actualDurationMs: Double(nextFrame) * 1000 / Double(fps), sourceDurationMs: sourceCursor, cover: usedCover ? cover : nil, shots: shots)
         try manifest.validate(plan: plan, captions: captions)

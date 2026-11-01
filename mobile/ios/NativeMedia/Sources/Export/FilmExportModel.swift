@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 import SwiftUI
 import UIKit
@@ -89,7 +90,10 @@ import UIKit
                 for id in ids {
                     try Task.checkCancellation()
                     _ = try await authorizedJourney()
-                    files[id] = try await download(try await session.mediaURL(id), to: scratch)
+                    guard let asset = journey.media.first(where: { $0.id == id }) else { throw MediaFailure.staleIntent }
+                    let file = try await download(try await session.mediaURL(id), to: scratch)
+                    try await Self.verifyAssetFile(file, expected: asset)
+                    files[id] = file
                 }
                 if let cover = manifest.cover, manifest.shots.contains(where: { $0.openingDerivativeId != nil }) {
                     guard let opening else { throw MediaFailure.staleIntent }
@@ -102,7 +106,11 @@ import UIKit
                     derivatives[cover.derivativeId] = file
                 }
                 var soundtrack: URL?
-                if includeSoundtrack, let soundtrackRead { soundtrack = try await download(try await soundtrackRead(), to: scratch) }
+                if includeSoundtrack, let soundtrackRead {
+                    let file = try await download(try await soundtrackRead(), to: scratch)
+                    if let asset = journey.soundtrack { try await Self.verifyAssetFile(file, expected: asset) }
+                    soundtrack = file
+                }
                 let renderer = try NativeFilmRenderer(manifest: manifest, plan: plan, journey: journey,
                                                        files: files, captions: captions, derivatives: derivatives)
                 let output = directory.appendingPathComponent(UUID().uuidString + ".mp4")
@@ -158,10 +166,28 @@ import UIKit
         }
         try Task.checkCancellation(); return journey
     }
+    nonisolated static func verifyAssetFile(_ file: URL, expected: MediaAsset) async throws {
+        let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        guard let size, Int64(size) == expected.bytes else { throw MediaFailure.staleIntent }
+        guard expected.contentHashVerified == true else { return }
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+        var hash = SHA256()
+        while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            try Task.checkCancellation()
+            hash.update(data: chunk)
+        }
+        let actual = hash.finalize().map { String(format: "%02x", $0) }.joined()
+        guard actual == expected.contentHash else { throw MediaFailure.staleIntent }
+    }
+
     private func download(_ url: URL, to directory: URL) async throws -> URL {
         guard url.scheme == "https" else { throw MediaFailure.accessChanged }
         try await session.revalidate()
-        let transport = URLSession(configuration: .ephemeral)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        let transport = URLSession(configuration: configuration)
         defer { transport.finishTasksAndInvalidate() }
         let (temporary, response) = try await transport.download(from: url)
         defer { try? FileManager.default.removeItem(at: temporary) }

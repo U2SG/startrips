@@ -16,11 +16,6 @@ import UIKit
     private let refresh: (MediaJourney, MediaJourney) -> Void
     private var soundtrackRead: (() async throws -> URL)?
 
-    private static func soundtrackID(in journey: MediaJourney) -> String? {
-        journey.media.filter { $0.routePointId == nil && $0.mimeType.hasPrefix("audio/") }
-            .min { $0.sortOrder < $1.sortOrder }?.id
-    }
-
     public init(journey: MediaJourney, intent: StoryIntent, session: ScopedMediaSession,
                 directory: URL, uploader: PartUploading,
                 currentIntent: @escaping () -> StoryIntent,
@@ -32,7 +27,7 @@ import UIKit
         self.session = session; self.directory = directory; self.readJourney = readJourney; self.refresh = refresh
         // Audio remains an ordinary scoped asset read. A guest's projected Journey cannot
         // acquire an owner-only soundtrack through a separate endpoint.
-        let readSoundtrack: (() async throws -> URL)? = Self.soundtrackID(in: journey).map { id in { try await session.mediaURL(id) } }
+        let readSoundtrack: (() async throws -> URL)? = journey.soundtrack.map { asset in { try await session.mediaURL(asset.id) } }
         self.soundtrackRead = readSoundtrack
         story = try StoryModel(journey: journey, intent: intent, session: session, currentIntent: currentIntent,
                                latestJourney: latestJourney, soundtrackRead: readSoundtrack, onBeat: onBeat, onReturn: onReturn)
@@ -70,9 +65,9 @@ import UIKit
 
     public func updateJourney(_ journey: MediaJourney) throws {
         guard journey != story.journey else { return }
-        let oldSoundtrack = Self.soundtrackID(in: story.journey)
+        let oldSoundtrack = story.journey.soundtrack?.id
         try story.update(journey)
-        let newSoundtrack = Self.soundtrackID(in: journey)
+        let newSoundtrack = journey.soundtrack?.id
         if newSoundtrack != oldSoundtrack {
             soundtrackRead = newSoundtrack.map { [session] id in { try await session.mediaURL(id) } }
             story.replaceSoundtrack(soundtrackRead)

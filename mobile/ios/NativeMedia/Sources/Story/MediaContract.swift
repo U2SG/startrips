@@ -9,6 +9,9 @@ public struct MediaJourney: Codable, Equatable, Sendable {
     public var coverMediaAssetId: String?
     public var routePoints: [MediaRoutePoint]
     public var media: [MediaAsset]
+    var soundtrack: MediaAsset? {
+        media.filter { $0.routePointId == nil && $0.mimeType.hasPrefix("audio/") }.min { $0.sortOrder < $1.sortOrder }
+    }
 }
 
 public struct MediaRoutePoint: Codable, Equatable, Sendable {

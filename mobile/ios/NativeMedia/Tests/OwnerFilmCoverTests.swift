@@ -34,6 +34,24 @@ final class OwnerFilmCoverTests: XCTestCase {
         return value
     }
 
+    func testFilmRejectsReplacedBytesEvenWhenTheFileSizeIsUnchanged() async throws {
+        var asset = try XCTUnwrap(makeJourney().media.first { $0.id == "photo-one" })
+        asset.bytes = 3
+        asset.contentHash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data("abc".utf8).write(to: file)
+        try await FilmExportModel.verifyAssetFile(file, expected: asset)
+        try Data("abd".utf8).write(to: file)
+        do { try await FilmExportModel.verifyAssetFile(file, expected: asset); XCTFail("Replaced bytes accepted") }
+        catch { XCTAssertEqual(error as? MediaFailure, .staleIntent) }
+        asset.contentHashVerified = false
+        try await FilmExportModel.verifyAssetFile(file, expected: asset)
+        asset.bytes = 4
+        do { try await FilmExportModel.verifyAssetFile(file, expected: asset); XCTFail("Truncated file accepted") }
+        catch { XCTAssertEqual(error as? MediaFailure, .staleIntent) }
+    }
+
     @MainActor func testNormalExportPinsReadyCoverAndRenewsCapabilityBeforeReading() async throws {
         let journey = try makeJourney(), server = Server(journey)
         let session = server.session(.owner, journey: journey)
@@ -41,6 +59,7 @@ final class OwnerFilmCoverTests: XCTestCase {
             expectedJourney: journey, currentJourney: { journey })
         let (film, opening) = try await exporter.prepareForRendering(reducedMotion: false)
         let pin = try XCTUnwrap(opening)
+        XCTAssertEqual(film.manifest.privacy.mediaResolution, "authorized-owner-fetch")
         XCTAssertEqual(film.manifest.cover?.recipeId, "poetic-line-memory")
         XCTAssertEqual(film.manifest.shots.compactMap(\.openingDerivativeId), ["derived"])
         server.display?["url"] = "https://cover.invalid/auth-2"
