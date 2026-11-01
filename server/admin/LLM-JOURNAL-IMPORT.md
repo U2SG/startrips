@@ -164,6 +164,23 @@ selection configuration.
 
 ## Failure diagnostics and long-input acceptance
 
+Ali Qwen3.8 Max streaming tool requests set `tool_stream: true` as well as
+`stream: true`. The provider's [Chat API contract](https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions)
+documents that array/object tool parameters are buffered by default unless this
+additional switch is enabled. The journal's nested chapter/event arrays need
+incremental arguments to make progress within the existing 30-second semantic
+idle budget. The extension is restricted to this model family on Ali endpoints;
+synchronous requests, non-tool requests and other models are unchanged.
+
+This does not increase connection, first-byte or idle timeouts. Keepalives and
+reasoning-only frames are not tool-argument progress, and incomplete responses
+never become previews. The provider notes a complex-format accuracy tradeoff for
+incremental output: schema/semantic-parameter validation, bounded correction and
+operator preview review remain required. Mock buffered/incremental streams verify
+the request contract and failure boundaries; they do not establish that a real
+failed request was buffered or that another paid call will succeed. A terminal
+transport failure must not be retried automatically.
+
 CLI failure stderr is one JSON object with allowlisted `error`, command `stage`,
 `kind` (`transport`, `protocol`, `tool_arguments`, `validator`, `business`,
 `permission`, `cancelled`, `configuration`, `operation`) and, for model errors,
