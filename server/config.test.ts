@@ -465,6 +465,20 @@ describe("share intent configuration", () => {
     }).intentVisionModel).toBe("vision-1");
   });
 
+  it("requires an explicit journal model without changing simple or vision selection", () => {
+    const unset = loadServerConfig({ ...productionEnvironment, ...httpModel });
+    expect(unset.journalModel).toBeNull();
+    expect(unset.journalTimeoutMs).toBe(120_000);
+    const configured = loadServerConfig({ ...productionEnvironment, ...httpModel,
+      JOURNAL_MODEL: " qwen3.8-max-0902 ", JOURNAL_TIMEOUT_MS: "180000", INTENT_VISION_MODEL: "vision-1" });
+    expect(configured).toMatchObject({ journalModel: "qwen3.8-max-0902", journalTimeoutMs: 180_000,
+      intentModel: "intent-1", intentVisionModel: "vision-1", intentTimeoutMs: 30_000 });
+  });
+
+  it.each(["999", "300001", "abc"])("refuses JOURNAL_TIMEOUT_MS=%s", value => {
+    expect(() => loadServerConfig({ ...productionEnvironment, JOURNAL_TIMEOUT_MS: value })).toThrow("JOURNAL_TIMEOUT_MS");
+  });
+
   it("refuses an unknown driver at boot", () => {
     expect(() => loadServerConfig({ ...productionEnvironment, INTENT_DRIVER: "magic" }))
       .toThrow("INTENT_DRIVER");

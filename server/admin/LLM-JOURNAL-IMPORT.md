@@ -22,7 +22,7 @@ The original text travels via stdin, never command-line arguments or logs.
 `llm-job-submit /private/job.json` stdin (retain the requestId for uncertain-submit replay):
 
 ```json
-{"requestId":"client-generated-uuid","target":{"userId":"confirmed-id","email":"confirmed@example.test","atlasId":"confirmed-atlas","journeyId":"confirmed-journey"},"sentence":"导入这份流水账并关联已入住酒店","source":"private original text","fallbackDate":"2028-06-01","provider":{"baseUrl":"https://configured.example/v1","model":"configured-model"}}
+{"requestId":"client-generated-uuid","target":{"userId":"confirmed-id","email":"confirmed@example.test","atlasId":"confirmed-atlas","journeyId":"confirmed-journey"},"sentence":"导入这份流水账并关联已入住酒店","source":"private original text","fallbackDate":"2028-06-01","provider":{"baseUrl":"provider:current-discovered-identity","model":"configured-journal-model"}}
 ```
 
 The jobs API accepts the same sentence/source/fallbackDate/provider and journeyId;

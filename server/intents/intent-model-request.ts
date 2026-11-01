@@ -54,6 +54,10 @@ export async function requestIntentModelAnswer(
   },
 ): Promise<unknown> {
   const { baseUrl, apiKey, model, timeoutMs } = options;
+  // Qwen3.8 Max on Ali's compatible endpoint reports completed forced tool
+  // calls as "stop" (verified for sync and SSE). All call/ID/size checks still
+  // apply; never accept length/content_filter or broaden other providers.
+  const allowToolStop = isDashScope(baseUrl) && /^qwen3\.8-max(?:-|$)/.test(model);
   const fetcher = options.fetcher ?? fetch;
   const body = {
           model,
@@ -77,7 +81,7 @@ export async function requestIntentModelAnswer(
             },
           } }),
         };
-  if (options.stream) return requestModelStream(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, apiKey, body, request.toolName, { ...options.stream, signal: options.signal ?? options.stream.signal }, fetcher, request.fail, request.captureToolCall);
+  if (options.stream) return requestModelStream(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, apiKey, body, request.toolName, { ...options.stream, signal: options.signal ?? options.stream.signal }, fetcher, request.fail, request.captureToolCall, allowToolStop);
   const controller = new AbortController();
   const cancel = () => controller.abort();
   options.signal?.addEventListener("abort", cancel, { once: true });
@@ -128,7 +132,8 @@ export async function requestIntentModelAnswer(
     const message = payload?.choices?.[0]?.message;
     if (request.captureToolCall) {
       const call = message?.tool_calls?.[0] as ModelToolCall | undefined;
-      if (!Array.isArray(payload?.choices) || payload.choices.length !== 1 || payload.choices[0]?.finish_reason !== "tool_calls" || !Array.isArray(message?.tool_calls) || message.tool_calls.length !== 1 || call?.type !== "function" || call.function?.name !== request.toolName
+      const finish = payload?.choices?.[0]?.finish_reason;
+      if (!Array.isArray(payload?.choices) || payload.choices.length !== 1 || !(finish === "tool_calls" || allowToolStop && finish === "stop") || !Array.isArray(message?.tool_calls) || message.tool_calls.length !== 1 || call?.type !== "function" || call.function?.name !== request.toolName
         || typeof call.id !== "string" || !call.id.trim() || call.id.length > 256 || typeof call.function.arguments !== "string"
         || Buffer.byteLength(call.function.arguments) > 1_000_000)
         throw request.fail("INTENT_TOOL_PROTOCOL_INVALID", "Invalid tool call identity or envelope", 502);

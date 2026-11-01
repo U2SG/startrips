@@ -5,7 +5,7 @@ type Fail = (code: string, message: string, status?: number) => ShareIntentError
 const MAX_OUTPUT_BYTES = 1_000_000;
 const MAX_EVENT_BYTES = 128_000;
 /** Parse actual provider SSE deltas. Partial JSON is never returned as a draft. */
-export async function requestModelStream(url: string, apiKey: string, body: object, toolName: string | undefined, options: ModelStreamOptions, fetcher: typeof fetch, fail: Fail, captureToolCall = false): Promise<unknown> {
+export async function requestModelStream(url: string, apiKey: string, body: object, toolName: string | undefined, options: ModelStreamOptions, fetcher: typeof fetch, fail: Fail, captureToolCall = false, allowToolStop = false): Promise<unknown> {
   const controller = new AbortController();
   let timedOut: "connect" | "first-byte" | "idle" | null = null, timer: ReturnType<typeof setTimeout>;
   const arm = (phase: NonNullable<typeof timedOut>, ms: number) => { clearTimeout(timer); timer = setTimeout(() => { timedOut = phase; controller.abort(); }, ms); };
@@ -67,7 +67,7 @@ export async function requestModelStream(url: string, apiKey: string, body: obje
         if (piece.trim()) arm("idle", options.idleTimeoutMs ?? 30_000);
       }
       if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
-        if (choice.finish_reason !== (toolName ? "tool_calls" : "stop") || finished) throw invalid();
+        if (!(choice.finish_reason === (toolName ? "tool_calls" : "stop") || toolName && allowToolStop && choice.finish_reason === "stop") || finished) throw invalid();
         finished = true;
       }
     }

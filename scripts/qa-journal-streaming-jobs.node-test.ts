@@ -27,7 +27,7 @@ const actors: Actor[] = [];
 let owner: Actor, other: Actor;
 const target = (actor: Actor) => ({ userId: actor.userId, email: actor.email, atlasId: actor.atlasId, journeyId: actor.journeyId });
 const input = () => ({ ...qaInput, provider: { baseUrl: qaModel.baseUrl, model: qaModel.model } });
-const original = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel };
+const original = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel, journalModel: serverConfig.journalModel, journalTimeoutMs: serverConfig.journalTimeoutMs };
 async function createActor() {
   await pool.query('DELETE FROM rate_limit');
   const id = randomUUID(), email = `qa-stream-${id}@example.test`, password = 'qa-synthetic-password-123';
@@ -47,7 +47,7 @@ async function createActor() {
 }
 before(async () => {
   owner = await createActor(); other = await createActor();
-  Object.assign(serverConfig, { intentDriver: 'http-model', intentBaseUrl: qaModel.baseUrl, intentModel: qaModel.model, intentApiKey: 'synthetic-key-only' });
+  Object.assign(serverConfig, { intentDriver: 'http-model', intentBaseUrl: qaModel.baseUrl, intentModel: "simple-mock", journalModel: qaModel.model, intentApiKey: 'synthetic-key-only' });
 });
 after(async () => {
   journalImportDependencies.fetcher = undefined; Object.assign(serverConfig, original);

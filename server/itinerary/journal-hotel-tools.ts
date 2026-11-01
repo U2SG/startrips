@@ -115,7 +115,7 @@ export async function proposeJournalHotels(journal: DailyJournal, points: Pick<R
   return { hotels, questions };
 }
 
-type HotelPlanInput = { atlasId: string; journeyId: string; journalRevision: number; journeyRevision: number; expires: number; hotels: HotelSelection[] };
+type HotelPlanInput = { atlasId: string; journeyId: string; journalRevision: number; journeyRevision: number; expires: number; hotels: HotelSelection[]; provider?: { baseUrl: string; model: string } };
 export type HotelPlan = Omit<HotelPlanInput, "hotels"> & { hotels: (Omit<HotelSelection, "evidence"> & { sourceHash: string })[] };
 export const hotelSourceHash = (source: string) => createHash("sha256").update(source).digest("hex");
 const MAX_HOTEL_TOKEN_LENGTH = 100000;
