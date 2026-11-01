@@ -2,8 +2,10 @@ name: perf-bundle
 
 on:
   pull_request:
+    paths-ignore: ['mobile/ios/**', 'docs/**/*.md', 'README.md', 'README.zh-CN.md', 'CONTRIBUTING.md', 'CONTEXT.md']
   push:
     branches: [main]
+    paths-ignore: ['mobile/ios/**', 'docs/**/*.md', 'README.md', 'README.zh-CN.md', 'CONTRIBUTING.md', 'CONTEXT.md']
   workflow_dispatch:
 
 concurrency:

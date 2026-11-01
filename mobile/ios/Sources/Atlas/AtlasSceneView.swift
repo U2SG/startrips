@@ -61,7 +61,7 @@ struct AtlasSceneView: UIViewRepresentable {
             guard loaded, let data = try? encoder.encode(router.snapshot), let json = String(data: data, encoding: .utf8) else { return }
             guard json != lastJSON else { return }
             lastJSON = json
-            view?.callAsyncJavaScript("window.atlasNative.receive(snapshot)", arguments: ["snapshot": json], in: nil, contentWorld: .page) { [weak self] result in
+            view?.callAsyncJavaScript("window.atlasNative.receive(snapshot)", arguments: ["snapshot": json], in: nil, in: .page) { [weak self] result in
                 if case .failure = result { Task { @MainActor in self?.router.error = "地球通信中断，请刷新。" } }
             }
         }
