@@ -83,10 +83,11 @@ async function createAuthenticatedAtlas(label: string) {
 let owner: Awaited<ReturnType<typeof createAuthenticatedAtlas>>, other: typeof owner;
 let journeyId: string, mediaId: string;
 const source = "2028年6月3日\n- 23:30 实际：她在虚构城入住星桥酒店。\n- 07:30 取消：原计划入住山谷酒店。";
-const prior = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel };
+const prior = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel, journalModel: serverConfig.journalModel, journalTimeoutMs: serverConfig.journalTimeoutMs };
 const provider = { baseUrl: "https://model.example.test/v1", model: "mock" };
 const model = { ...provider, apiKey: "mock-only", timeoutMs: 1000, fetcher: vi.fn(async (_url: unknown, init?: RequestInit) => {
   const body = JSON.parse(init!.body as string), name = body.tool_choice.function.name, data = JSON.parse(body.messages.filter((m: any) => m.role === "user").at(-1).content);
+  expect(body.model).toBe("mock");
   let args;
   if (name === "stage_journal_import") args = { chapters: [{ firstLine: 0, lastLine: 2, headingEvidence: "2028年6月3日", dateStatus: "single", questions: [], date: "2028-06-03", dateEnd: null, dateEvidence: "2028年6月3日",
     events: source.split("\n").slice(1).map((evidence, i) => ({ line: i + 1, evidence, status: i ? "cancelled" : "actual", dateStatus: "absent", localDate: null, dateEvidence: null,
@@ -105,7 +106,7 @@ beforeAll(async () => {
   const [media] = await db.insert(mediaAssets).values({ journeyId, storageDriver: "disabled", storageKey: randomUUID(), fileName: "fiction.jpg", mimeType: "image/jpeg", bytes: 1, uploadedByUserId: owner.userId }).returning(); mediaId = media.id;
   const chapters = previewJournalImport("2028-05-01\n实际：旧记事", "2028-05-01"); chapters[0].events[0].text = "private edited reading"; chapters[0].events[0].edited = true; chapters[0].events[0].mediaIds = [mediaId];
   await writeDailyJournal(journeyId, owner.atlasId, 0, chapters);
-  Object.assign(serverConfig, { intentDriver: "http-model", intentBaseUrl: provider.baseUrl, intentModel: provider.model, intentApiKey: "mock-only" });
+  Object.assign(serverConfig, { intentDriver: "http-model", intentBaseUrl: provider.baseUrl, intentModel: "simple-mock", journalModel: provider.model, intentApiKey: "mock-only" });
   journalImportDependencies.fetcher = model.fetcher;
 });
 afterAll(async () => {
@@ -119,10 +120,21 @@ afterAll(async () => {
 });
 let envelope: Envelope;
 const request = (cookie = owner.cookie, consent: unknown = provider) => app.request(`${TEST_ORIGIN}/api/intents/journal-import`, { method: "POST", headers: authHeaders(cookie), body: JSON.stringify({ journeyId, source, sentence: "导入原稿并关联已入住酒店", fallbackDate: "2028-06-01", provider: consent }) });
+it("refuses missing journal configuration and simple-model consent before any provider call", async () => {
+  const calls = model.fetcher.mock.calls.length;
+  try {
+    Object.assign(serverConfig, { journalModel: null });
+    expect((await request()).status).toBe(503);
+    Object.assign(serverConfig, { journalModel: provider.model });
+    expect((await request(owner.cookie, { ...provider, model: serverConfig.intentModel })).status).toBe(400);
+    expect(model.fetcher.mock.calls.length).toBe(calls);
+  } finally { Object.assign(serverConfig, { journalModel: provider.model }); }
+});
 it("one-sentence API authenticates target/provider before sending source and shares the admin plan", async () => {
   expect((await request("")).status).toBe(401); expect((await request(other.cookie)).status).toBe(404);
   expect((await request(owner.cookie, { ...provider, model: "different" })).status).toBe(400); expect(model.fetcher).not.toHaveBeenCalled();
   const response = await request(); expect(response.status).toBe(200); envelope = (await response.json()).envelope;
+  expect(envelope.plan.provider).toEqual({ baseUrl: expect.stringMatching(/^provider:[a-f0-9]{64}$/), model: "mock" });
   const legacy = { ...envelope.plan, version: 1 };
   expect(() => validateEnvelope({ plan: legacy, signature: createHmac("sha256", serverConfig.authSecret).update(JSON.stringify(legacy)).digest("hex") })).toThrow("INVALID_PLAN");
   expect((await readDailyJournal(journeyId, owner.atlasId))!.revision).toBe(1);
@@ -158,7 +170,7 @@ it.each([
   try {
     const result = await new Promise<{ code: number | null; out: string; err: string }>((done, reject) => {
       const child = spawn(process.execPath, ["--import", "tsx", process.env.JOURNAL_ADMIN_TEST_ENTRY ?? resolve("server/admin/journal-import-cli.ts"), "llm-preview", path],
-        { env: { ...process.env, INTENT_DRIVER: "http-model", INTENT_BASE_URL: baseUrl, INTENT_MODEL: "mock", INTENT_API_KEY: "mock-only", INTENT_TIMEOUT_MS: "1000" } });
+        { env: { ...process.env, INTENT_DRIVER: "http-model", INTENT_BASE_URL: baseUrl, INTENT_MODEL: "simple-mock", JOURNAL_MODEL: "mock", INTENT_API_KEY: "mock-only", INTENT_TIMEOUT_MS: "1000", JOURNAL_TIMEOUT_MS: "1000" } });
       let out = "", err = ""; child.stdout.on("data", d => out += d); child.stderr.on("data", d => err += d);
       child.on("error", reject); child.on("close", code => done({ code, out, err }));
       child.stdin.end(JSON.stringify({ target: { userId: owner.userId, email: authUserEmails[0], atlasId: owner.atlasId, journeyId }, sentence: "导入并关联酒店", source, fallbackDate: "2028-06-01", provider: { baseUrl, model: "mock" } }));
@@ -181,7 +193,7 @@ it("actual admin CLI uses the same model use-case through a local mock provider"
   try {
     const result = await new Promise<{ code: number | null; out: string; err: string }>((done, reject) => {
       const child = spawn(process.execPath, ["--import", "tsx", process.env.JOURNAL_ADMIN_TEST_ENTRY ?? resolve("server/admin/journal-import-cli.ts"), "llm-preview", path],
-        { env: { ...process.env, INTENT_DRIVER: "http-model", INTENT_BASE_URL: baseUrl, INTENT_MODEL: "mock", INTENT_API_KEY: "mock-only" } });
+        { env: { ...process.env, INTENT_DRIVER: "http-model", INTENT_BASE_URL: baseUrl, INTENT_MODEL: "simple-mock", JOURNAL_MODEL: "mock", INTENT_API_KEY: "mock-only" } });
       let out = "", err = ""; child.stdout.on("data", d => out += d); child.stderr.on("data", d => err += d);
       child.on("error", reject); child.on("close", code => done({ code, out, err }));
       child.stdin.end(JSON.stringify({ target: { userId: owner.userId, email: authUserEmails[0], atlasId: owner.atlasId, journeyId },
@@ -291,6 +303,37 @@ it('provider discovery returns only an opaque identity and safe hostname, never 
     const synchronous=await request(owner.cookie,{baseUrl:data.baseUrl,model:data.model});expect(synchronous.status).toBe(200);
     const output=JSON.stringify({data,result:await synchronous.json()});for(const secret of ['private-password','private-path-secret','private-query','mock-only'])expect(output).not.toContain(secret);
   }finally{Object.assign(serverConfig,{intentBaseUrl:previous});}
+});
+
+it.each(["queued", "running"])("stops a %s job after a journal-model change without fallback or replay", async phase => {
+  await db.update(member).set({ role: "owner" }).where(eq(member.userId, owner.userId));
+  const target = { ...owner, email: authUserEmails[0], journeyId };
+  const before = await readDailyJournal(journeyId, owner.atlasId), id = randomUUID();
+  const calls = vi.fn(async () => {
+    Object.assign(serverConfig, { journalModel: "different-journal-model" });
+    // A malformed argument answer would normally be correctable. Configuration
+    // changes must stop the next call, not send that source to either model again.
+    const call = { index: 0, id: "changed-model-call", type: "function", function: { name: "stage_journal_import", arguments: "{}" } };
+    return new Response(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [call] }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+  });
+  journalImportDependencies.fetcher = calls;
+  try {
+    await submitJournalJob(target, id, { source, sentence: "导入合成记录", fallbackDate: "2028-06-01", provider });
+    if (phase === "queued") Object.assign(serverConfig, { journalModel: "different-journal-model" });
+    await runJournalJob();
+    const row = await readJournalJob(target, id);
+    expect(row.status).toBe("failed");
+    expect(row.error.error).toBe("JOURNAL_PROVIDER_CONFIRMATION_REQUIRED");
+    expect(row.envelope).toBeNull();
+    expect(calls).toHaveBeenCalledTimes(phase === "queued" ? 0 : 1);
+    Object.assign(serverConfig, { journalModel: provider.model });
+    await runJournalJob();
+    expect(calls).toHaveBeenCalledTimes(phase === "queued" ? 0 : 1);
+    expect(await readDailyJournal(journeyId, owner.atlasId)).toEqual(before);
+  } finally {
+    Object.assign(serverConfig, { journalModel: provider.model });
+    journalImportDependencies.fetcher = model.fetcher;
+  }
 });
 
 for (const path of ["sync", "job"] as const) {

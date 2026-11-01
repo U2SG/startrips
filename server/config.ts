@@ -321,6 +321,10 @@ export function loadServerConfig(
     environment.INTENT_BASE_URL?.trim().replace(/\/+$/, "") || null;
   const intentApiKey = environment.INTENT_API_KEY?.trim() || null;
   const intentModel = environment.INTENT_MODEL?.trim() || null;
+  // Explicit opt-in for complex journal/hotel work on the same endpoint/key.
+  // Never silently substitute the simple-intent model when this is unset.
+  const journalModel = environment.JOURNAL_MODEL?.trim() || null;
+  const journalTimeoutMs = Number(environment.JOURNAL_TIMEOUT_MS ?? 120_000);
   // Optional: the vision model that judges whether a photo shows a person,
   // for "只分享风景图". Unset, the media filter is reported unavailable and the
   // share dialog never offers it. Same endpoint and key as INTENT_MODEL.
@@ -594,6 +598,7 @@ export function loadServerConfig(
       ["ITINERARY_RECOGNITION_TIMEOUT_MS", itineraryRecognitionTimeoutMs],
       ["ITINERARY_SOURCE_FETCH_TIMEOUT_MS", itinerarySourceFetchTimeoutMs],
       ["INTENT_TIMEOUT_MS", intentTimeoutMs],
+      ["JOURNAL_TIMEOUT_MS", journalTimeoutMs],
     ] as const
   ) {
     if (!Number.isInteger(value) || value < 1_000 || value > 300_000) {
@@ -716,6 +721,8 @@ export function loadServerConfig(
     intentBaseUrl,
     intentApiKey,
     intentModel,
+    journalModel,
+    journalTimeoutMs,
     intentVisionModel,
     intentTimeoutMs,
   } as const;
