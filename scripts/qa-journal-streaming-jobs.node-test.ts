@@ -189,7 +189,7 @@ test('CLI: submit exits while queued; later status/export resume that same job w
   journalImportDependencies.fetcher = async () => { calls++; return qaResponse(qaSse(qaDraft())); };
   const cli = (args: string[], input?: unknown) => new Promise<{ code: number | null; out: string; err: string }>((resolveResult, reject) => {
     const child = spawn(process.execPath, ['--import', 'tsx', resolve('server/admin/journal-import-cli.ts'), ...args], {
-      env: { ...process.env, INTENT_DRIVER: 'http-model', INTENT_BASE_URL: qaModel.baseUrl, INTENT_MODEL: qaModel.model, INTENT_API_KEY: 'synthetic-key-only' },
+      env: { ...process.env, INTENT_DRIVER: 'http-model', INTENT_BASE_URL: qaModel.baseUrl, INTENT_MODEL: 'simple-mock', JOURNAL_MODEL: qaModel.model, INTENT_API_KEY: 'synthetic-key-only' },
     });
     let out = '', err = ''; child.stdout.on('data', data => out += data); child.stderr.on('data', data => err += data);
     child.on('error', reject); child.on('close', code => resolveResult({ code, out, err })); child.stdin.end(input === undefined ? '' : JSON.stringify(input));
