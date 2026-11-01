@@ -5,7 +5,7 @@ import { useGlobeTimeCursor } from "../../../src/journey/useGlobeTimeCursor";
 import { JourneyTimeline } from "../../../src/journey/JourneyTimeline";
 import { toJourneyRoutes } from "../../../src/journey/journeyModel";
 import { LivingAtlasGlobe, PersistentEarthProvider, usePersistentEarth } from "../../../src/scene/LivingAtlasGlobe";
-import { acceptsSnapshot, decodeSnapshot, renderJourneys, send, type Snapshot } from "./bridge";
+import { acceptsSnapshot, atlasSceneFocus, decodeSnapshot, renderJourneys, send, type Snapshot } from "./bridge";
 import "../../../src/styles/tokens.css";
 import "../../../src/styles/controls.css";
 import "../../../src/styles/living-atlas.css";
@@ -111,8 +111,7 @@ function AtlasScene() {
         selectedJourneyRoutePoint={selected ? { journeyId: selected.id, routePointId: point?.id } : null}
         temporalReveal={cursorActive ? { journeys: time.reveal.journeyProgress, points: time.reveal.pointProgress,
           timestamp: time.timeDomain ? time.timeDomain.minTime + time.cursor * (time.timeDomain.maxTime - time.timeDomain.minTime) : undefined } : undefined}
-        focusPoint={point ? { lat: point.latitude, lon: point.longitude } : null}
-        focusRoute={routes.find((route) => route.id === selected?.id) ?? null}
+        {...atlasSceneFocus(point, routes.find((route) => route.id === selected?.id))}
         focusRevision={focusRevision} focusEnabled={!interrupted && snapshot.active}
         earthExperiencePolicy={snapshot.earthExperience} routeEditingEnabled={false}
         cinematicActive={!snapshot.active} mediaCoverHint={{ opaqueMediaCover: !snapshot.active, coverTransitionActive: false }}

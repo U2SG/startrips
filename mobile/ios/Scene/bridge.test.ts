@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../Fixtures/bridge.json";
 import { buildJourneyTimeline, resolveJourneyTimelineSelection } from "../../../src/journey/globeTimeline";
-import { GLOBE_IDLE_RESUME_DELAY_MS, getGlobeIdleRotationDelta } from "../../../src/scene/ParticleEarthScene";
-import { acceptsSnapshot, decodeSnapshot, renderJourneys } from "./bridge";
+import { toJourneyRoutes } from "../../../src/journey/journeyModel";
+import { GLOBE_IDLE_RESUME_DELAY_MS, getGlobeIdleRotationDelta, resolveGlobeFocusIntent } from "../../../src/scene/ParticleEarthScene";
+import { acceptsSnapshot, atlasSceneFocus, decodeSnapshot, renderJourneys } from "./bridge";
 
 describe("the same redacted fixture as Swift", () => {
   it("decodes stable IDs and preserves server point order", () => {
@@ -16,6 +17,14 @@ describe("the same redacted fixture as Swift", () => {
     const { entries } = buildJourneyTimeline(journeys);
     expect(resolveJourneyTimelineSelection(entries, 0)?.pointIndex).toBe(0);
     expect(resolveJourneyTimelineSelection(entries, 1)?.pointIndex).toBe(1);
+    const route = toJourneyRoutes(journeys)[0];
+    const point = journeys[0].routePoints[1];
+    const focused = atlasSceneFocus(point, route);
+    const overview = atlasSceneFocus(undefined, route);
+    expect(resolveGlobeFocusIntent(focused.focusPoint, focused.focusRoute, 2)).toMatchObject({
+      kind: "point", point: { lat: point.latitude, lon: point.longitude },
+    });
+    expect(resolveGlobeFocusIntent(overview.focusPoint, overview.focusRoute, 3)?.kind).toBe("route");
     expect(GLOBE_IDLE_RESUME_DELAY_MS).toBe(20_000);
     expect(getGlobeIdleRotationDelta(1 / 60, 19_999, false, false)).toBe(0);
     expect(getGlobeIdleRotationDelta(1 / 60, 20_001, false, false)).toBeGreaterThan(0);

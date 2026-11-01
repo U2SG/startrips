@@ -19,6 +19,7 @@ public struct NativeStoryDestination: View {
                 Button { model.leave() } label: { Image(systemName: "chevron.down").frame(width: 44, height: 44) }.accessibilityLabel("返回").accessibilityIdentifier("story.close")
                 Spacer()
                 Text(model.journey.title).font(.headline).lineLimit(1)
+                    .accessibilityAddTraits(.isHeader).accessibilityIdentifier("story.title")
                 Spacer()
                 Button { if model.expanded { model.collapse() } else { model.expanded = true } } label: {
                     Image(systemName: model.expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right").frame(width: 44, height: 44)
