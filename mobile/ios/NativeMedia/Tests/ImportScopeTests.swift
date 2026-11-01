@@ -1,0 +1,159 @@
+import XCTest
+@testable import StartripsMedia
+
+@MainActor private final class RecordingUploader: PartUploading {
+    var parts: [Data] = []
+    var keys: [String] = []
+    var cancelled: [String] = []
+    var expireOnce = false
+    func upload(_ signed: SignedUploadPart, file: URL, key: String) async throws -> String {
+        if expireOnce { expireOnce = false; throw MediaFailure.http(403) }
+        parts.append(try Data(contentsOf: file)); keys.append(key)
+        return "\"etag-\(parts.count)\""
+    }
+    func cancel(prefix: String) async { cancelled.append(prefix) }
+}
+
+@MainActor private final class SuspendedUploader: PartUploading {
+    let started: XCTestExpectation
+    var continuation: CheckedContinuation<String, Error>?
+    init(started: XCTestExpectation) { self.started = started }
+    func upload(_ signed: SignedUploadPart, file: URL, key: String) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in self.continuation = continuation; started.fulfill() }
+    }
+    func cancel(prefix: String) async {
+        continuation?.resume(throwing: CancellationError()); continuation = nil
+    }
+}
+
+final class ImportScopeTests: XCTestCase {
+    private func directory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return url
+    }
+    func testStatusFixtureMatchesPrivateServerContract() throws {
+        let status: UploadStatus = try MediaFixtures.decode("upload-status")
+        XCTAssertEqual(status.uploadId, "c9a5cfb0-9bed-41d9-bdea-945283d63bb6")
+        XCTAssertEqual(status.partSize, 8388608); XCTAssertEqual(status.partCount, 1); XCTAssertNil(status.assetId)
+    }
+    @MainActor func testGuestReadsThroughGuestClosureAndCannotWriteOrRecoverAsOwner() async throws {
+        var reads: [String] = [], apiCalls = 0
+        let session = ScopedMediaSession(scopeID: "guest-share-generation-2", access: .guest,
+            read: { id in reads.append(id); return URL(string: "https://media.invalid/fixture")! },
+            request: { _, _, _ in apiCalls += 1; return Data() }, revalidate: {})
+        _ = try await session.mediaURL("photo-one")
+        XCTAssertEqual(reads, ["photo-one"])
+        do { _ = try await session.write("/api/uploads/u/status", method: "GET"); XCTFail("Guest entered owner API") }
+        catch { XCTAssertEqual(error as? MediaFailure, .readOnly) }
+        XCTAssertEqual(apiCalls, 0)
+        let root = try directory(), source = root.appendingPathComponent("source")
+        try Data([1]).write(to: source)
+        let importer = try MultipartImporter(session: session, directory: root.appendingPathComponent("journal"), uploader: RecordingUploader())
+        XCTAssertThrowsError(try importer.stage(file: source, fileName: "one.jpg", mimeType: "image/jpeg", journeyId: "j", routePointId: nil))
+    }
+    @MainActor func testRevokedScopeDoesNotCallSigner() async {
+        var reads = 0
+        let session = ScopedMediaSession(scopeID: "revoked", access: .guest,
+            read: { _ in reads += 1; throw MediaFailure.unavailable }, request: { _, _, _ in Data() },
+            revalidate: { throw MediaFailure.accessChanged })
+        do { _ = try await session.mediaURL("a"); XCTFail("Revoked read succeeded") } catch { XCTAssertEqual(error as? MediaFailure, .accessChanged) }
+        XCTAssertEqual(reads, 0)
+    }
+    @MainActor func testFilePartsUseServerSizeETagsAndExactCompletedAssetID() async throws {
+        var requests: [String] = []
+        var completeBody: Data?
+        let session = ScopedMediaSession(scopeID: "owner-1", access: .owner, read: { _ in throw MediaFailure.unavailable }, request: { path, _, body in
+            requests.append(path)
+            if path == "/api/uploads/start" { return Data(#"{"uploadId":"upload-one","partSize":4,"partCount":2}"#.utf8) }
+            if path.hasSuffix("/complete") { completeBody = body; return Data(#"{"asset":{"id":"server-deduplicated-asset"}}"#.utf8) }
+            return Data(#"{"url":"https://storage.invalid/part","headers":{}}"#.utf8)
+        }, revalidate: {})
+        let root = try directory(), source = root.appendingPathComponent("original")
+        try Data([0, 1, 2, 3, 4, 5, 6]).write(to: source)
+        let sender = RecordingUploader(); sender.expireOnce = true
+        let importer = try MultipartImporter(session: session, directory: root.appendingPathComponent("journal"), uploader: sender)
+        let record = try importer.stage(file: source, fileName: "sample.jpg", mimeType: "image/jpeg", journeyId: "journey-one", routePointId: "point-one")
+        let assetID = try await importer.resume(record)
+        XCTAssertEqual(assetID, "server-deduplicated-asset")
+        XCTAssertEqual(sender.parts, [Data([0, 1, 2, 3]), Data([4, 5, 6])])
+        XCTAssertEqual(requests.filter { $0.hasSuffix("/parts/1") }.count, 2)
+        struct Completion: Decodable { let parts: [UploadedPart] }
+        let completion = try JSONDecoder().decode(Completion.self, from: XCTUnwrap(completeBody))
+        XCTAssertEqual(completion.parts.map(\.etag), ["\"etag-1\"", "\"etag-2\""])
+        XCTAssertEqual(completion.parts.map(\.partNumber), [1, 2])
+        XCTAssertTrue(try importer.pending().isEmpty)
+    }
+    @MainActor func testAmbiguousCompletionRecoversByStatusWithoutReuploadOrNewStart() async throws {
+        var starts = 0, completed = false, statusReads = 0
+        let session = ScopedMediaSession(scopeID: "owner-1", access: .owner, read: { _ in throw MediaFailure.unavailable }, request: { path, _, _ in
+            if path.hasSuffix("/start") { starts += 1; return Data(#"{"uploadId":"u","partSize":4,"partCount":1}"#.utf8) }
+            if path.hasSuffix("/complete") { completed = true; throw URLError(.timedOut) }
+            if path.hasSuffix("/status") {
+                statusReads += 1
+                return Data(#"{"uploadId":"u","status":"completed","partSize":4,"partCount":1,"assetId":"durable-id"}"#.utf8)
+            }
+            return Data(#"{"url":"https://storage.invalid/part","headers":{}}"#.utf8)
+        }, revalidate: {})
+        let root = try directory(), source = root.appendingPathComponent("original")
+        try Data([1, 2, 3]).write(to: source)
+        let sender = RecordingUploader(), journal = root.appendingPathComponent("journal")
+        let importer = try MultipartImporter(session: session, directory: journal, uploader: sender)
+        let record = try importer.stage(file: source, fileName: "sample.jpg", mimeType: "image/jpeg", journeyId: "j", routePointId: nil)
+        do { _ = try await importer.resume(record); XCTFail("Timeout should remain recoverable") } catch {}
+        XCTAssertTrue(completed)
+        let restored = try MultipartImporter(session: session, directory: journal, uploader: sender)
+        let recovered = try await restored.resume(record)
+        XCTAssertEqual(recovered, "durable-id"); XCTAssertEqual(starts, 1); XCTAssertEqual(statusReads, 1); XCTAssertEqual(sender.parts.count, 1)
+    }
+    @MainActor func testChangedAccountCannotResumePreviousJournal() async throws {
+        let root = try directory(), source = root.appendingPathComponent("original")
+        try Data([1]).write(to: source)
+        func session(_ scope: String) -> ScopedMediaSession {
+            ScopedMediaSession(scopeID: scope, access: .owner, read: { _ in throw MediaFailure.unavailable },
+                               request: { _, _, _ in XCTFail("Foreign scope reached API"); return Data() }, revalidate: {})
+        }
+        let journal = root.appendingPathComponent("journal"), sender = RecordingUploader()
+        let first = try MultipartImporter(session: session("owner-1"), directory: journal, uploader: sender)
+        let record = try first.stage(file: source, fileName: "one.jpg", mimeType: "image/jpeg", journeyId: "j", routePointId: nil)
+        let second = try MultipartImporter(session: session("owner-2"), directory: journal, uploader: sender)
+        XCTAssertTrue(try second.pending().isEmpty)
+        do { _ = try await second.resume(record); XCTFail("Foreign scope resumed") } catch { XCTAssertEqual(error as? MediaFailure, .accessChanged) }
+    }
+    @MainActor func testCancelAbortsExactUploadAndDoesNotCompleteOrAttachAsset() async throws {
+        var requests: [(String, String)] = []
+        let session = ScopedMediaSession(scopeID: "owner", access: .owner, read: { _ in throw MediaFailure.unavailable }, request: { path, method, _ in
+            requests.append((path, method))
+            if path.hasSuffix("/start") { return Data(#"{"uploadId":"owned-upload","partSize":4,"partCount":1}"#.utf8) }
+            if method == "DELETE" { return Data() }
+            return Data(#"{"url":"https://storage.invalid/part","headers":{}}"#.utf8)
+        }, revalidate: {})
+        let root = try directory(), source = root.appendingPathComponent("original")
+        try Data([1, 2]).write(to: source)
+        let started = expectation(description: "file part entered background transport")
+        let sender = SuspendedUploader(started: started)
+        let importer = try MultipartImporter(session: session, directory: root.appendingPathComponent("journal"), uploader: sender)
+        let record = try importer.stage(file: source, fileName: "one.jpg", mimeType: "image/jpeg", journeyId: "j", routePointId: nil)
+        let operation = Task { try await importer.resume(record) }
+        await fulfillment(of: [started], timeout: 2)
+        try await importer.cancel(record)
+        do { _ = try await operation.value; XCTFail("Cancelled upload completed") } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(requests.contains { $0.0.removingPercentEncoding == "/api/uploads/owned-upload" && $0.1 == "DELETE" })
+        XCTAssertFalse(requests.contains { $0.0.hasSuffix("/complete") })
+        XCTAssertTrue(try importer.pending().isEmpty)
+    }
+    @MainActor func testUnknownStartIsNotBlindlyReplayed() async throws {
+        var starts = 0
+        let session = ScopedMediaSession(scopeID: "owner", access: .owner, read: { _ in throw MediaFailure.unavailable }, request: { _, _, _ in
+            starts += 1; throw URLError(.timedOut)
+        }, revalidate: {})
+        let root = try directory(), source = root.appendingPathComponent("original")
+        try Data([1]).write(to: source)
+        let importer = try MultipartImporter(session: session, directory: root.appendingPathComponent("journal"), uploader: RecordingUploader())
+        let record = try importer.stage(file: source, fileName: "one.jpg", mimeType: "image/jpeg", journeyId: "j", routePointId: nil)
+        do { _ = try await importer.resume(record); XCTFail("Expected timeout") } catch {}
+        do { _ = try await importer.resume(record); XCTFail("Replayed ambiguous start") } catch { XCTAssertEqual(error as? MediaFailure, .uploadStartUnknown) }
+        XCTAssertEqual(starts, 1)
+    }
+}

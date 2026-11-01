@@ -1,0 +1,34 @@
+{
+  "manifest": {
+    "version": 2, "exportKind": "journey_memory_film", "journeyId": "journey-one", "journeyRevision": 7,
+    "narrativeSnapshot": { "routePointIds": ["point-one", "point-via", "point-two"], "visualMedia": [
+      { "mediaAssetId": "intro-photo", "routePointId": null },
+      { "mediaAssetId": "photo-one", "routePointId": "point-one" },
+      { "mediaAssetId": "video-two", "routePointId": "point-two" }
+    ] },
+    "privacy": { "artifactVisibility": "private", "mediaResolution": "authorized-owner-fetch" },
+    "fps": 24, "output": { "width": 64, "height": 96 }, "reducedMotion": false,
+    "totalFrames": 120, "actualDurationMs": 5000, "sourceDurationMs": 5000,
+    "cover": { "derivativeId": "cover-one", "sourceMediaAssetId": "photo-one", "recipeId": "paper-collage-memory", "recipeVersion": 1 },
+    "shots": [
+      { "sourceSceneIndex": 0, "startFrame": 0, "endFrame": 24, "openingDerivativeId": null, "captionCues": [] },
+      { "sourceSceneIndex": 1, "startFrame": 24, "endFrame": 96, "openingDerivativeId": "cover-one", "captionCues": [{ "id": "caption:1:0", "startFrame": 24, "endFrame": 96 }] },
+      { "sourceSceneIndex": 2, "startFrame": 96, "endFrame": 120, "openingDerivativeId": null, "captionCues": [] }
+    ]
+  },
+  "plan": {
+    "version": 1, "journeyId": "journey-one", "journeyRevision": 7,
+    "narrativeSnapshot": { "routePointIds": ["point-one", "point-via", "point-two"], "visualMedia": [
+      { "mediaAssetId": "intro-photo", "routePointId": null },
+      { "mediaAssetId": "photo-one", "routePointId": "point-one" },
+      { "mediaAssetId": "video-two", "routePointId": "point-two" }
+    ] },
+    "output": { "width": 64, "height": 96 }, "actualDurationMs": 5000,
+    "scenes": [
+      { "index": 0, "startMs": 0, "endMs": 1000, "scene": { "kind": "map", "role": "intro", "durationMs": 1000 } },
+      { "index": 1, "startMs": 1000, "endMs": 4000, "scene": { "kind": "media", "mediaAssetId": "photo-one", "mediaType": "image", "routePointId": "point-one", "durationMs": 3000 } },
+      { "index": 2, "startMs": 4000, "endMs": 5000, "scene": { "kind": "map", "role": "outro", "durationMs": 1000 } }
+    ]
+  },
+  "captions": { "caption:1:0": "海边的风，记得那一天。" }
+}

@@ -1,0 +1,81 @@
+import Combine
+import CryptoKit
+import SwiftUI
+import UIKit
+
+/// The production composition boundary. #767 supplies its captured AtlasSession
+/// capabilities and StoryHandoff fields; AppRouter remains the navigation owner.
+@MainActor public final class NativeMediaFeatureModel: ObservableObject {
+    public let story: StoryModel
+    public private(set) var importer: PhotosImportModel?
+    public private(set) var mover: MediaMoveModel?
+    @Published public private(set) var exporter: FilmExportModel
+    private let session: ScopedMediaSession
+    private let directory: URL
+    private let readJourney: () async throws -> MediaJourney
+    private let refresh: (MediaJourney, MediaJourney) -> Void
+    private let soundtrackRead: (() async throws -> URL)?
+
+    public init(journey: MediaJourney, intent: StoryIntent, session: ScopedMediaSession,
+                directory: URL, uploader: PartUploading,
+                currentIntent: @escaping () -> StoryIntent,
+                latestJourney: @escaping () -> MediaJourney?,
+                readJourney: @escaping () async throws -> MediaJourney,
+                refresh: @escaping (MediaJourney, MediaJourney) -> Void,
+                onBeat: @escaping (PlaybackBeat) -> Void = { _ in },
+                onReturn: @escaping (MediaReturn) -> Void) throws {
+        self.session = session; self.directory = directory; self.readJourney = readJourney; self.refresh = refresh
+        // Audio remains an ordinary scoped asset read. A guest's projected Journey cannot
+        // acquire an owner-only soundtrack through a separate endpoint.
+        let soundtrack = journey.media.filter { $0.routePointId == nil && $0.mimeType.hasPrefix("audio/") }
+            .sorted { $0.sortOrder < $1.sortOrder }.first
+        let readSoundtrack: (() async throws -> URL)? = soundtrack.map { asset in { try await session.mediaURL(asset.id) } }
+        self.soundtrackRead = readSoundtrack
+        story = try StoryModel(journey: journey, intent: intent, session: session, currentIntent: currentIntent,
+                               latestJourney: latestJourney, soundtrackRead: readSoundtrack, onBeat: onBeat, onReturn: onReturn)
+        let film = try FilmPreparation.prepare(journey: journey, reducedMotion: UIAccessibility.isReduceMotionEnabled)
+        exporter = FilmExportModel(session: session, manifest: film.manifest, plan: film.plan, captions: film.captions,
+            directory: directory.appendingPathComponent("exports"), expectedJourney: journey, currentJourney: readJourney,
+            derivativeRead: { _ in throw MediaFailure.unavailable }, soundtrackRead: readSoundtrack)
+        if session.access == .owner {
+            let transfer = try MultipartImporter(session: session, directory: directory.appendingPathComponent("imports"), uploader: uploader)
+            importer = PhotosImportModel(importer: transfer, journeyID: journey.id, routePointID: intent.routePointId) { [weak self] _ in
+                guard let self else { return }
+                let fresh = try await readJourney()
+                try self.updated(fresh, fresh)
+            }
+            mover = MediaMoveModel(session: session, journey: journey) { [weak self] source, destination in
+                guard let self else { return }
+                do { try self.updated(source, destination) } catch { self.story.invalidate() }
+            }
+        }
+    }
+    /// Existing prepared v2 manifests (including authorized cover derivatives) can replace
+    /// the default 60-second preset without changing the renderer or navigation contract.
+    public func usePreparedFilm(_ film: PreparedNativeFilm, derivativeRead: @escaping (FilmCover) async throws -> URL) throws {
+        try film.manifest.validate(plan: film.plan, captions: film.captions)
+        exporter.cancel()
+        exporter = FilmExportModel(session: session, manifest: film.manifest, plan: film.plan, captions: film.captions,
+            directory: directory.appendingPathComponent("exports"), expectedJourney: story.journey, currentJourney: readJourney,
+            derivativeRead: derivativeRead, soundtrackRead: soundtrackRead)
+    }
+    public func invalidate() { story.invalidate(); importer?.cancel(); exporter.cancel() }
+    private func updated(_ source: MediaJourney, _ destination: MediaJourney) throws {
+        refresh(source, destination)
+        try story.update(source)
+        let film = try FilmPreparation.prepare(journey: source, reducedMotion: UIAccessibility.isReduceMotionEnabled)
+        try usePreparedFilm(film, derivativeRead: { _ in throw MediaFailure.unavailable })
+    }
+    public static func scopeDirectory(root: URL, scopeID: String) -> URL {
+        let digest = SHA256.hash(data: Data(scopeID.utf8)).map { String(format: "%02x", $0) }.joined()
+        return root.appendingPathComponent(digest, isDirectory: true)
+    }
+}
+
+public struct NativeMediaFeature: View {
+    @StateObject private var model: NativeMediaFeatureModel
+    public init(model: NativeMediaFeatureModel) { _model = StateObject(wrappedValue: model) }
+    public var body: some View {
+        NativeStoryDestination(model: model.story, importer: model.importer, exporter: model.exporter, moveModel: model.mover)
+    }
+}
