@@ -95,17 +95,19 @@ import Foundation
         let duration = try await source.load(.duration)
         guard let sourceVideo = try await source.loadTracks(withMediaType: .video).first else { throw MediaFailure.encoding }
         let asset = AVURLAsset(url: soundtrack)
-        let length = try await asset.load(.duration)
-        guard length.seconds.isFinite, length.seconds > 0,
-              let track = try await asset.loadTracks(withMediaType: .audio).first,
+        guard let track = try await asset.loadTracks(withMediaType: .audio).first,
               let target = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+            throw MediaFailure.unavailable
+        }
+        let audioRange = try await track.load(.timeRange)
+        guard audioRange.start.seconds.isFinite, audioRange.duration.seconds.isFinite, audioRange.duration > .zero else {
             throw MediaFailure.unavailable
         }
         var cursor = CMTime.zero
         while cursor < duration {
             try Task.checkCancellation()
-            let span = CMTimeMinimum(length, duration - cursor)
-            try target.insertTimeRange(CMTimeRange(start: .zero, duration: span), of: track, at: cursor)
+            let span = CMTimeMinimum(audioRange.duration, duration - cursor)
+            try target.insertTimeRange(CMTimeRange(start: audioRange.start, duration: span), of: track, at: cursor)
             cursor = cursor + span
         }
         let mix = AVMutableAudioMix()
