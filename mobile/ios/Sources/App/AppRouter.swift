@@ -13,6 +13,9 @@ final class AppRouter: ObservableObject {
     }
     @Published var error: String?
     @Published var rendered = false
+    #if DEBUG
+    private(set) var completedFocusCount = 0
+    #endif
     private(set) var access: AtlasAccess = .owner
     private(set) var earthExperience = "default"
     private var identity: String?
@@ -74,7 +77,11 @@ final class AppRouter: ObservableObject {
             }
             if event.kind == .story, let selection { path = [selection] }
         case .invalidate: onInvalidation?()
-        case .rendered: rendered = true
+        case .rendered:
+            #if DEBUG
+            if !rendered { completedFocusCount += 1 }
+            #endif
+            rendered = true
         case .cameraInterrupted: rendered = false
         case .ready: break
         }

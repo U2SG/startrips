@@ -56,7 +56,12 @@ struct AtlasRootView: View {
             .overlay(alignment: .top) {
                 if session.busy { ProgressView("正在读取图谱…").padding().background(.regularMaterial) }
                 #if DEBUG
-                if fixtureMode && router.rendered { Text("地球已就绪").accessibilityIdentifier("earth-rendered") }
+                if fixtureMode {
+                    VStack {
+                        if router.rendered { Text("地球已就绪").accessibilityIdentifier("earth-rendered") }
+                        Text(String(router.completedFocusCount)).accessibilityIdentifier("atlas.focus.count")
+                    }
+                }
                 #endif
             }
         }
