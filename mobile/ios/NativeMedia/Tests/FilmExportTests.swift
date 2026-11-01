@@ -163,7 +163,14 @@ final class FilmExportTests: XCTestCase {
         let asset = AVURLAsset(url: output)
         let tracks = try await asset.loadTracks(withMediaType: .audio)
         XCTAssertEqual(tracks.count, 1)
-        let span = try await XCTUnwrap(tracks.first).load(.timeRange)
+        let audio = try XCTUnwrap(tracks.first)
+        let span = try await audio.load(.timeRange)
         XCTAssertEqual(span.duration.seconds, 5, accuracy: 0.1)
+        let musicFormats = try await audio.load(.formatDescriptions)
+        XCTAssertEqual(CMFormatDescriptionGetMediaSubType(try XCTUnwrap(musicFormats.first)), kAudioFormatMPEG4AAC)
+        let pictures = try await asset.loadTracks(withMediaType: .video)
+        let pictureFormats = try await XCTUnwrap(pictures.first).load(.formatDescriptions)
+        XCTAssertEqual(CMFormatDescriptionGetMediaSubType(try XCTUnwrap(pictureFormats.first)), kCMVideoCodecType_H264)
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: root.path)), ["tone.wav", "soundtrack.mp4"])
     }
 }

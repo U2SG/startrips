@@ -15,10 +15,10 @@ import Foundation
         guard try availableBytes() >= estimate else { throw MediaFailure.diskFull }
         guard !FileManager.default.fileExists(atPath: destination.path) else { throw MediaFailure.encoding }
         let silent = destination.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".silent.mp4")
-        var succeeded = false
+        let muxed = destination.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".mux.mp4")
         defer {
             try? FileManager.default.removeItem(at: silent)
-            if !succeeded { try? FileManager.default.removeItem(at: destination) }
+            try? FileManager.default.removeItem(at: muxed)
         }
         let writer = try AVAssetWriter(outputURL: silent, fileType: .mp4)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
@@ -69,14 +69,13 @@ import Foundation
             guard writer.status == .completed else { throw writer.error ?? MediaFailure.encoding }
             try await authorize()
             if let soundtrack {
-                try await mux(video: silent, output: destination, soundtrack: soundtrack, volume: soundtrackVolume)
-            } else {
-                try FileManager.default.moveItem(at: silent, to: destination)
+                try await mux(video: silent, output: muxed, soundtrack: soundtrack, volume: soundtrackVolume)
             }
-            try Task.checkCancellation(); try await authorize()
-            succeeded = true; progress(1); return destination
+            try Task.checkCancellation(); try await authorize(); try Task.checkCancellation()
+            try FileManager.default.moveItem(at: soundtrack == nil ? silent : muxed, to: destination)
+            progress(1); return destination
         } catch {
-            writer.cancelWriting()
+            if writer.status == .writing { writer.cancelWriting() }
             let nsError = error as NSError
             if nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileWriteOutOfSpaceError { throw MediaFailure.diskFull }
             throw error
@@ -91,12 +90,10 @@ import Foundation
                                       bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue) else { throw MediaFailure.encoding }
         context.draw(image, in: CGRect(x: 0, y: 0, width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer)))
     }
-    private func mux(video: URL, output: URL, soundtrack: URL, volume: Float) async throws {
+    private nonisolated func mux(video: URL, output: URL, soundtrack: URL, volume: Float) async throws {
         let composition = AVMutableComposition(), source = AVURLAsset(url: video)
         let duration = try await source.load(.duration)
-        guard let sourceVideo = try await source.loadTracks(withMediaType: .video).first,
-              let videoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw MediaFailure.encoding }
-        try videoTrack.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: sourceVideo, at: .zero)
+        guard let sourceVideo = try await source.loadTracks(withMediaType: .video).first else { throw MediaFailure.encoding }
         let asset = AVURLAsset(url: soundtrack)
         let length = try await asset.load(.duration)
         guard length.seconds.isFinite, length.seconds > 0,
@@ -115,10 +112,65 @@ import Foundation
         let parameters = AVMutableAudioMixInputParameters(track: target)
         parameters.setVolume(min(1, max(0, volume)), at: .zero)
         mix.inputParameters = [parameters]
-        guard let exporter = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else { throw MediaFailure.encoding }
-        exporter.outputURL = output; exporter.outputFileType = .mp4; exporter.audioMix = mix
-        await withTaskCancellationHandler(operation: { await exporter.export() }, onCancel: { exporter.cancelExport() })
+        // The silent track is already H.264. Copy its compressed samples and
+        // encode only the looped soundtrack, avoiding a second video encoder.
+        let videoReader = try AVAssetReader(asset: source)
+        let picture = AVAssetReaderTrackOutput(track: sourceVideo, outputSettings: nil)
+        let musicReader = try AVAssetReader(asset: composition)
+        let music = AVAssetReaderAudioMixOutput(audioTracks: [target], audioSettings: [
+            AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 48000, AVNumberOfChannelsKey: 2,
+            AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false
+        ])
+        music.audioMix = mix
+        guard videoReader.canAdd(picture), musicReader.canAdd(music),
+              let hint = try await sourceVideo.load(.formatDescriptions).first else { throw MediaFailure.encoding }
+        picture.alwaysCopiesSampleData = false; music.alwaysCopiesSampleData = false
+        videoReader.add(picture); musicReader.add(music)
+        let writer = try AVAssetWriter(outputURL: output, fileType: .mp4)
+        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: nil, sourceFormatHint: hint)
+        let audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: [
+            AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48000, AVNumberOfChannelsKey: 2, AVEncoderBitRateKey: 192000
+        ])
+        guard writer.canAdd(videoInput), writer.canAdd(audioInput) else { throw MediaFailure.encoding }
+        writer.add(videoInput); writer.add(audioInput)
+        defer {
+            if videoReader.status == .reading { videoReader.cancelReading() }
+            if musicReader.status == .reading { musicReader.cancelReading() }
+            if writer.status == .writing { writer.cancelWriting() }
+        }
+        guard videoReader.startReading(), musicReader.startReading(), writer.startWriting() else {
+            throw videoReader.error ?? musicReader.error ?? writer.error ?? MediaFailure.encoding
+        }
+        writer.startSession(atSourceTime: .zero)
+        var tracks: [(AVAssetReader, AVAssetReaderOutput, AVAssetWriterInput)] = [
+            (videoReader, picture, videoInput), (musicReader, music, audioInput)
+        ]
+        var lastProgress = ProcessInfo.processInfo.systemUptime
+        while !tracks.isEmpty {
+            try Task.checkCancellation()
+            guard writer.status == .writing else { throw writer.error ?? MediaFailure.encoding }
+            var progressed = false
+            for index in tracks.indices.reversed() {
+                let (reader, samples, input) = tracks[index]
+                guard input.isReadyForMoreMediaData else { continue }
+                if let sample = samples.copyNextSampleBuffer() {
+                    guard input.append(sample) else { throw writer.error ?? MediaFailure.encoding }
+                } else {
+                    guard reader.status == .completed else { throw reader.error ?? MediaFailure.encoding }
+                    input.markAsFinished(); tracks.remove(at: index)
+                }
+                progressed = true
+            }
+            if progressed { lastProgress = ProcessInfo.processInfo.systemUptime }
+            else {
+                guard ProcessInfo.processInfo.systemUptime - lastProgress < 30 else { throw MediaFailure.encoding }
+                try await Task.sleep(nanoseconds: 2_000_000)
+            }
+        }
+        writer.endSession(atSourceTime: duration)
+        await writer.finishWriting()
         try Task.checkCancellation()
-        guard exporter.status == .completed else { throw exporter.error ?? MediaFailure.encoding }
+        guard writer.status == .completed else { throw writer.error ?? MediaFailure.encoding }
     }
 }
