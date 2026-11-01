@@ -1,5 +1,6 @@
 import CryptoKit
 import XCTest
+import WebKit
 @testable import Startrips
 
 final class GoogleLoginTests: XCTestCase {
@@ -64,6 +65,9 @@ final class GoogleLoginTests: XCTestCase {
                             headerFields: ["Set-Cookie": header])!
         }
         XCTAssertEqual(try flow.sessionCookie(response(header)).domain, "atlas.example")
+        let bare = header.replacingOccurrences(of: "__Secure-startrips.session_token", with: "startrips.session_token")
+        XCTAssertEqual(try flow.sessionCookie(response(bare)).name, "startrips.session_token")
+        XCTAssertThrowsError(try flow.sessionCookie(response(bare.replacingOccurrences(of: "; Secure", with: ""))))
         XCTAssertThrowsError(try flow.sessionCookie(response(header + "; Domain=atlas.example")))
         XCTAssertThrowsError(try flow.sessionCookie(response(header.replacingOccurrences(of: "; Secure", with: ""))))
         XCTAssertThrowsError(try flow.sessionCookie(response(header.replacingOccurrences(of: "; HttpOnly", with: ""))))
@@ -100,6 +104,61 @@ final class GoogleLoginTests: XCTestCase {
         XCTAssertFalse(session.isOwnerLoginCurrent(captured, at: origin))
         try session.configureOwner()
         XCTAssertFalse(session.isOwnerLoginCurrent(captured, at: origin))
+    }
+
+    @MainActor
+    func testDelayedCookieWriteCanBeCancelledThenRetriedWithoutTouchingTheActiveStore() async throws {
+        let testOrigin = url("https://\(UUID().uuidString.lowercased()).example")
+        let defaults = UserDefaults.standard
+        let oldOrigin = defaults.object(forKey: "atlas.origin")
+        let key = "atlas.stores." + AtlasSession.ownerStoreID(testOrigin).uuidString
+        defer { defaults.set(oldOrigin, forKey: "atlas.origin"); defaults.removeObject(forKey: key) }
+        let session = AtlasSession()
+        session.originText = testOrigin.absoluteString
+        try session.configureOwner()
+        session.loginPresented = true
+        let originalStore = session.cookieStore
+        let originalID = try XCTUnwrap(originalStore.identifier)
+        func cookie(_ name: String) throws -> HTTPCookie {
+            let headers = ["Set-Cookie": "\(name)=fixture; Path=/; Secure; HttpOnly"]
+            return try XCTUnwrap(HTTPCookie.cookies(withResponseHeaderFields: headers, for: testOrigin).first)
+        }
+        let before = try cookie("__Secure-startrips.session_token")
+        let after = try cookie("startrips.session_token")
+        await originalStore.httpCookieStore.setCookie(before)
+        await originalStore.httpCookieStore.setCookie(try cookie("__Secure-startrips.session_data"))
+        let generation = session.generation
+        var pending = true
+        let cancelled = await session.publishGoogleSession(after, at: testOrigin, generation: generation, pending: { pending }) {
+            value, candidate in
+            XCTAssertNotEqual(candidate.identifier, originalID)
+            await candidate.httpCookieStore.setCookie(value)
+            XCTAssertEqual(session.cookieStore.identifier, originalID)
+            pending = false // cancellation during WebKit's asynchronous write
+        }
+        XCTAssertFalse(cancelled)
+        let untouched = await session.cookieStore.httpCookieStore.allCookies()
+        XCTAssertEqual(Set(untouched.map(\.name)), ["__Secure-startrips.session_token", "__Secure-startrips.session_data"])
+        pending = true
+        let switched = await session.publishGoogleSession(after, at: testOrigin, generation: generation, pending: { pending }) {
+            value, candidate in
+            await candidate.httpCookieStore.setCookie(value)
+            session.disconnect()
+            try? session.configureOwner()
+        }
+        XCTAssertFalse(switched)
+        XCTAssertEqual(session.cookieStore.identifier, originalID)
+        let completed = await session.publishGoogleSession(after, at: testOrigin, generation: session.generation, pending: { true })
+        XCTAssertTrue(completed)
+        let newID = try XCTUnwrap(session.cookieStore.identifier)
+        XCTAssertNotEqual(newID, originalID)
+        let committed = await session.cookieStore.httpCookieStore.allCookies()
+        XCTAssertEqual(committed.map(\.name), ["startrips.session_token"])
+        try session.configureOwner()
+        XCTAssertEqual(session.cookieStore.identifier, newID)
+        session.disconnect()
+        try? await WKWebsiteDataStore.remove(forIdentifier: newID)
+        try? await WKWebsiteDataStore.remove(forIdentifier: originalID)
     }
 
     private func fields(_ request: URLRequest) throws -> [String: String] {
