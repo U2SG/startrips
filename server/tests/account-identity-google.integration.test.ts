@@ -425,6 +425,7 @@ describe("native Google browser handoff", () => {
     const authorize = await app.request(link.href);
     expect(authorize.status).toBe(200);
     expect(authorize.headers.get("cache-control")).toContain("no-store");
+    expect(authorize.headers.get("referrer-policy")).toBe("origin");
     const browser = jarFrom(authorize);
     return {verifier,state,browser};
   }
@@ -454,6 +455,7 @@ describe("native Google browser handoff", () => {
     expect(reviewURL.origin).toBe(ORIGIN); expect(reviewURL.pathname).toBe(native+"/review");
     const review = await app.request(reviewURL.href,{headers:{cookie:browser}});
     expect(review.status).toBe(200);
+    expect(review.headers.get("referrer-policy")).toBe("origin");
     expect(await review.text()).toContain(email);
     return {...flow, browser, email, orgId};
   }

@@ -36,6 +36,8 @@ const escape = (text: string) => text.replace(/[&<>"']/g, (x) =>
 const form = (path: string, label: string) =>
   '<form method="post" action="' + base + path + '"><button type="submit">' + label + '</button></form>';
 function page(c: Context, title: string, body: string) {
+  // A navigation form POST with no-referrer sends Origin: null. Keep the origin but omit the proof query.
+  c.header("Referrer-Policy", "origin");
   return c.html('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' +
     title + '</title><main><h1>' + title + '</h1>' + body + '</main></html>');
 }
@@ -81,7 +83,7 @@ nativeAuthRoutes.use("*", async (c, next) => {
   await next();
 });
 nativeAuthRoutes.post("/start", async (c) => {
-  if (!limiter.hit(clientAddress(c) ?? "unknown", 30)) return c.json({error: "RATE_LIMITED"}, 429);
+  if (!limiter.hit(clientAddress(c) ?? "unknown", 30, Date.now())) return c.json({error: "RATE_LIMITED"}, 429);
   const data = await readJsonObject(() => c.req.json());
   if (!data || !allowedBody(data, ["state","codeChallenge","intent"]) || !opaque(data.state) || !opaque(data.codeChallenge) ||
       (data.intent !== "sign-in" && data.intent !== "sign-up")) return rejected(c);
