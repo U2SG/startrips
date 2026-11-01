@@ -22,6 +22,7 @@ import { createJourneyForAtlas } from "../repositories/journey-repository";
 import { disabledStorage } from "../storage/disabled-storage";
 import type { MultipartStorage } from "../storage/multipart-storage";
 import {
+  abortUploadForAtlas,
   finalizeUpload,
   reconcileUploadCandidates,
   type ReconciliationDependencies,
@@ -294,6 +295,65 @@ describe("read an upload after an interrupted response", () => {
     }
     const anonymous = await app.request(`${path}${upload.id}/status`);
     expect(anonymous.status).toBe(401);
+  });
+});
+
+describe("cancel an upload after reconnecting", () => {
+  it("accepts concurrent and repeated cancellation with one storage abort", async () => {
+    const upload = await startedUpload();
+    const abort = vi.spyOn(disabledStorage, "abortMultipartUpload").mockResolvedValue(undefined);
+    const cancel = () => app.request(`${TEST_ORIGIN}/api/uploads/${upload.id}`, {
+      method: "DELETE", headers: authHeaders(identity.cookie),
+    });
+    try {
+      const responses = await Promise.all([cancel(), cancel()]);
+      expect(responses.map((response) => response.status)).toEqual([204, 204]);
+      expect((await cancel()).status).toBe(204);
+      expect(abort).toHaveBeenCalledTimes(1);
+      const [row] = await db.select({ status: mediaUploads.status }).from(mediaUploads)
+        .where(eq(mediaUploads.id, upload.id));
+      expect(row.status).toBe("aborted");
+    } finally {
+      abort.mockRestore();
+    }
+  });
+
+  it.each(["finalizing", "completion_unknown", "reconciling", "completed"])(
+    "preserves the %s claim without cancelling storage",
+    async (status) => {
+      const upload = await startedUpload({ status });
+      const abort = vi.spyOn(disabledStorage, "abortMultipartUpload").mockResolvedValue(undefined);
+      try {
+        const response = await app.request(`${TEST_ORIGIN}/api/uploads/${upload.id}`, {
+          method: "DELETE", headers: authHeaders(identity.cookie),
+        });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({ error: "UPLOAD_NOT_ABORTABLE" });
+        expect(abort).not.toHaveBeenCalled();
+        const [row] = await db.select({ status: mediaUploads.status }).from(mediaUploads)
+          .where(eq(mediaUploads.id, upload.id));
+        expect(row.status).toBe(status);
+      } finally {
+        abort.mockRestore();
+      }
+    },
+  );
+
+  it("allows retry after a provider abort failed", async () => {
+    const upload = await startedUpload();
+    const abort = vi.spyOn(disabledStorage, "abortMultipartUpload")
+      .mockRejectedValueOnce(new Error("temporary abort failure"))
+      .mockResolvedValueOnce(undefined);
+    try {
+      await expect(abortUploadForAtlas(identity.atlasId, upload.id)).rejects.toThrow("temporary abort failure");
+      const [row] = await db.select({ status: mediaUploads.status }).from(mediaUploads)
+        .where(eq(mediaUploads.id, upload.id));
+      expect(row.status).toBe("initiated");
+      await expect(abortUploadForAtlas(identity.atlasId, upload.id)).resolves.toBeNull();
+      expect(abort).toHaveBeenCalledTimes(2);
+    } finally {
+      abort.mockRestore();
+    }
   });
 });
 

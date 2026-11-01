@@ -19,8 +19,8 @@ const STALE_UPLOAD_AFTER_MS = 24 * 60 * 60 * 1_000;
 const RECONCILE_INTERVAL_MS = 60 * 60 * 1_000;
 const RECONCILE_BATCH_SIZE = 25;
 
-async function findUpload(uploadId: string, atlasId: string) {
-  const [row] = await db
+function scopedUpload(connection: Pick<typeof db, "select">, uploadId: string, atlasId: string) {
+  return connection
     .select({ upload: mediaUploads })
     .from(mediaUploads)
     .innerJoin(journeys, eq(journeys.id, mediaUploads.journeyId))
@@ -32,6 +32,10 @@ async function findUpload(uploadId: string, atlasId: string) {
       ),
     )
     .limit(1);
+}
+
+async function findUpload(uploadId: string, atlasId: string) {
+  const [row] = await scopedUpload(db, uploadId, atlasId);
   return row?.upload;
 }
 
@@ -785,21 +789,24 @@ export async function abortUploadForAtlas(
   atlasId: string,
   uploadId: string,
 ) {
-  const upload = await findUpload(uploadId, atlasId);
-  if (!upload) return { body: { error: "UPLOAD_NOT_FOUND" }, status: 404 as const };
-  if (upload.status === "completed" || upload.status === "finalizing") {
-    return { body: { error: "UPLOAD_NOT_ABORTABLE" }, status: 409 as const };
-  }
+  if (!UUID_PATTERN.test(uploadId)) return { body: { error: "UPLOAD_NOT_FOUND" }, status: 404 as const };
+  return db.transaction(async (tx) => {
+    // Serialize with the completion and reconciliation claims before asking storage
+    // to discard parts. A failed storage abort rolls back and can be retried.
+    const [row] = await scopedUpload(tx, uploadId, atlasId).for("update", { of: mediaUploads });
+    if (!row) return { body: { error: "UPLOAD_NOT_FOUND" }, status: 404 as const };
+    const { upload } = row;
+    if (upload.status === "aborted") return null;
+    if (upload.status !== "initiated") {
+      return { body: { error: "UPLOAD_NOT_ABORTABLE" }, status: 409 as const };
+    }
 
-  await getMultipartStorage(upload.storageDriver).abortMultipartUpload({
-    key: upload.storageKey,
-    providerUploadId: upload.providerUploadId,
+    await getMultipartStorage(upload.storageDriver).abortMultipartUpload({
+      key: upload.storageKey,
+      providerUploadId: upload.providerUploadId,
+    });
+    await tx.update(mediaUploads).set({ status: "aborted", updatedAt: new Date() })
+      .where(and(eq(mediaUploads.id, uploadId), eq(mediaUploads.atlasId, atlasId)));
+    return null;
   });
-  await db
-    .update(mediaUploads)
-    .set({ status: "aborted", updatedAt: new Date() })
-    .where(
-      and(eq(mediaUploads.id, upload.id), eq(mediaUploads.atlasId, atlasId)),
-    );
-  return null;
 }
