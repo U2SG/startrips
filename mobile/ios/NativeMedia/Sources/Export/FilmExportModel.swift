@@ -9,7 +9,9 @@ import UIKit
     @Published public private(set) var failure: String?
     @Published public private(set) var file: URL?
     private let session: ScopedMediaSession
-    @Published public var includeNotes = true { didSet { if includeNotes != oldValue { discardResult() } } }
+    @Published public var presetSeconds = 30 { didSet { if presetSeconds != oldValue { discardResult() } } }
+    @Published public var portrait = true { didSet { if portrait != oldValue { discardResult() } } }
+    @Published public var includeNotes = false { didSet { if includeNotes != oldValue { discardResult() } } }
     @Published public var includeSoundtrack = true { didSet { if includeSoundtrack != oldValue { discardResult() } } }
     public var canConfigureNotes: Bool { preparedFilm == nil }
     public var hasSoundtrack: Bool { soundtrackRead != nil }
@@ -42,7 +44,7 @@ import UIKit
     func prepareForExport() throws -> PreparedNativeFilm {
         guard session.access == .owner else { throw MediaFailure.readOnly }
         if let preparedFilm { return preparedFilm }
-        return try FilmPreparation.prepare(journey: expectedJourney, includeNotes: includeNotes,
+        return try FilmPreparation.prepare(journey: expectedJourney, presetSeconds: presetSeconds, portrait: portrait, includeNotes: includeNotes,
                                             reducedMotion: UIAccessibility.isReduceMotionEnabled)
     }
     public func start() {
@@ -141,6 +143,13 @@ public struct FilmExportButton: View {
                 Button("取消导出") { model.cancel() }.frame(minHeight: 44)
             } else {
                 if model.canConfigureNotes {
+                    Picker("画面比例", selection: $model.portrait) {
+                        Text("竖屏 9:16").tag(true)
+                        Text("横屏 16:9").tag(false)
+                    }.accessibilityIdentifier("story.export.aspect")
+                    Picker("目标时长", selection: $model.presetSeconds) {
+                        ForEach([15, 30, 60], id: \.self) { seconds in Text("\(seconds) 秒").tag(seconds) }
+                    }.accessibilityIdentifier("story.export.duration")
                     Toggle("包含感想字幕", isOn: $model.includeNotes).accessibilityIdentifier("story.export.captions")
                 }
                 if model.hasSoundtrack {

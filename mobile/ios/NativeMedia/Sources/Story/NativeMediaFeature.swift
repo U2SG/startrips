@@ -82,6 +82,8 @@ import UIKit
         previous.invalidate()
         let replacement = FilmExportModel(session: session, directory: directory.appendingPathComponent("exports"),
             expectedJourney: journey, currentJourney: readJourney, soundtrackRead: soundtrackRead)
+        replacement.presetSeconds = previous.presetSeconds
+        replacement.portrait = previous.portrait
         replacement.includeNotes = previous.includeNotes
         replacement.includeSoundtrack = previous.includeSoundtrack
         exporter = replacement

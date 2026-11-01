@@ -1,5 +1,7 @@
 # Startrips iPhone — #767
 
+[中文开发与验收指南](README.zh-CN.md)
+
 The `Startrips` shared scheme has an ordinary SwiftUI application entry, a hosted
 XCTest/Swift Testing target and an XCUITest target. Requires Xcode 16+ and iOS 17+.
 Install the repository's pinned pnpm dependencies before opening

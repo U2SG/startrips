@@ -74,12 +74,27 @@ final class ImportScopeTests: XCTestCase {
         XCTAssertEqual(batchPoint, "point-two")
 
         let old = try XCTUnwrap(feature.exporter)
-        old.includeNotes = false
+        XCTAssertFalse(old.includeNotes)
+        let normal = try old.prepareForExport()
+        XCTAssertEqual(normal.manifest.output.width, 1080)
+        XCTAssertEqual(normal.manifest.output.height, 1920)
+        XCTAssertEqual(normal.plan.actualDurationMs, 30000, accuracy: 10)
+        for seconds in [15, 30, 60] {
+            old.presetSeconds = seconds
+            old.portrait = false
+            let configured = try old.prepareForExport()
+            XCTAssertEqual(configured.plan.actualDurationMs, Double(seconds * 1000), accuracy: 10)
+            XCTAssertEqual(configured.manifest.output.width, 1920)
+            XCTAssertEqual(configured.manifest.output.height, 1080)
+        }
+        old.includeNotes = true
         current.title = "旅程的新标题"; current.revision += 1
         try feature.updateJourney(current)
         let refreshed = try XCTUnwrap(feature.exporter)
         XCTAssertFalse(old === refreshed)
-        XCTAssertFalse(refreshed.includeNotes)
+        XCTAssertTrue(refreshed.includeNotes)
+        XCTAssertEqual(refreshed.presetSeconds, 60)
+        XCTAssertFalse(refreshed.portrait)
         XCTAssertEqual(feature.mover?.source, current)
         XCTAssertEqual(try refreshed.prepareForExport().manifest.journeyRevision, current.revision)
         XCTAssertTrue(try refreshed.prepareForExport().manifest.narrativeSnapshot.matches(current))
@@ -96,6 +111,8 @@ final class ImportScopeTests: XCTestCase {
             readJourney: { journey }, refresh: { _, _ in }, onReturn: { _ in })
         XCTAssertEqual(feature.story.cursor.current?.asset?.id, "photo-one")
         let exporter = try XCTUnwrap(feature.exporter)
+        XCTAssertNoThrow(try exporter.prepareForExport())
+        exporter.includeNotes = true
         XCTAssertThrowsError(try exporter.prepareForExport()) {
             XCTAssertTrue($0 is FilmPreparation.CaptionError)
         }
