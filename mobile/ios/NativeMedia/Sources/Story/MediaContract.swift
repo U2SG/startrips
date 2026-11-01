@@ -29,6 +29,8 @@ public struct MediaAsset: Codable, Equatable, Identifiable, Sendable {
     public var mimeType: String
     public var bytes: Int64
     public var sortOrder: Int
+    public var contentHash: String? = nil
+    public var contentHashVerified: Bool? = nil
     public var isVideo: Bool { mimeType.hasPrefix("video/") }
     public var isVisual: Bool { isVideo || mimeType.hasPrefix("image/") }
 }

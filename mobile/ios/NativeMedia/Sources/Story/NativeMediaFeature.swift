@@ -86,6 +86,7 @@ import UIKit
         replacement.portrait = previous.portrait
         replacement.includeNotes = previous.includeNotes
         replacement.includeSoundtrack = previous.includeSoundtrack
+        replacement.includeCover = previous.includeCover
         exporter = replacement
     }
     public static func scopeDirectory(root: URL, scopeID: String) -> URL {

@@ -13,6 +13,8 @@ import UIKit
     @Published public var portrait = true { didSet { if portrait != oldValue { discardResult() } } }
     @Published public var includeNotes = false { didSet { if includeNotes != oldValue { discardResult() } } }
     @Published public var includeSoundtrack = true { didSet { if includeSoundtrack != oldValue { discardResult() } } }
+    @Published public var includeCover = true { didSet { if includeCover != oldValue { discardResult() } } }
+    private var publishedCover: OwnerFilmCover?
     public var canConfigureNotes: Bool { preparedFilm == nil }
     public var hasSoundtrack: Bool { soundtrackRead != nil }
     private let preparedFilm: PreparedNativeFilm?
@@ -41,11 +43,30 @@ import UIKit
                   preparedFilm: PreparedNativeFilm(manifest: manifest, plan: plan, captions: captions),
                   derivativeRead: derivativeRead, soundtrackRead: soundtrackRead)
     }
-    func prepareForExport() throws -> PreparedNativeFilm {
+    func prepareForExport(cover: FilmCover? = nil, reducedMotion: Bool? = nil) throws -> PreparedNativeFilm {
         guard session.access == .owner else { throw MediaFailure.readOnly }
         if let preparedFilm { return preparedFilm }
         return try FilmPreparation.prepare(journey: expectedJourney, presetSeconds: presetSeconds, portrait: portrait, includeNotes: includeNotes,
-                                            reducedMotion: UIAccessibility.isReduceMotionEnabled)
+                                            reducedMotion: reducedMotion ?? UIAccessibility.isReduceMotionEnabled, cover: cover)
+    }
+    func prepareForRendering(reducedMotion: Bool) async throws -> (film: PreparedNativeFilm, opening: OwnerFilmCover?) {
+        guard session.access == .owner else { throw MediaFailure.readOnly }
+        if let preparedFilm {
+            guard let declared = preparedFilm.manifest.cover,
+                  preparedFilm.manifest.shots.contains(where: { $0.openingDerivativeId != nil }) else {
+                return (preparedFilm, nil)
+            }
+            if reducedMotion {
+                return (preparedFilm.withoutArtisticOpening(), nil)
+            }
+            guard let current = try await OwnerFilmCover.resolve(journey: expectedJourney, session: session),
+                  current.filmCover == declared else { throw MediaFailure.staleIntent }
+            return (preparedFilm, current)
+        }
+        let opening = includeCover && !reducedMotion
+            ? try await OwnerFilmCover.resolve(journey: expectedJourney, session: session) : nil
+        let film = try prepareForExport(cover: opening?.filmCover, reducedMotion: reducedMotion)
+        return (film, film.manifest.shots.contains(where: { $0.openingDerivativeId != nil }) ? opening : nil)
     }
     public func start() {
         guard !busy else { return }
@@ -56,10 +77,10 @@ import UIKit
             defer { busy = false }
             let scratch = directory.appendingPathComponent(UUID().uuidString, isDirectory: true)
             do {
-                let film = try prepareForExport()
+                let journey = try await authorizedJourney()
+                let (film, opening) = try await prepareForRendering(reducedMotion: UIAccessibility.isReduceMotionEnabled)
                 let manifest = film.manifest, plan = film.plan, captions = film.captions
                 try manifest.validate(plan: plan, captions: captions)
-                let journey = try await authorizedJourney()
                 try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true,
                     attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
                 defer { try? FileManager.default.removeItem(at: scratch) }
@@ -71,7 +92,14 @@ import UIKit
                     files[id] = try await download(try await session.mediaURL(id), to: scratch)
                 }
                 if let cover = manifest.cover, manifest.shots.contains(where: { $0.openingDerivativeId != nil }) {
-                    derivatives[cover.derivativeId] = try await download(try await derivativeRead(cover), to: scratch)
+                    guard let opening else { throw MediaFailure.staleIntent }
+                    let url: URL
+                    if preparedFilm == nil { url = try await opening.renewedURL(in: session) }
+                    else { try await opening.verify(in: session); url = try await derivativeRead(cover) }
+                    let file = try await download(url, to: scratch)
+                    let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                    guard let size, size > 0, size <= 16 * 1024 * 1024 else { throw MediaFailure.invalidManifest }
+                    derivatives[cover.derivativeId] = file
                 }
                 var soundtrack: URL?
                 if includeSoundtrack, let soundtrackRead { soundtrack = try await download(try await soundtrackRead(), to: scratch) }
@@ -85,6 +113,14 @@ import UIKit
                         let values = try self.directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
                         return values.volumeAvailableCapacityForImportantUsage ?? 0
                     }, progress: { self.progress = $0 })
+                do {
+                    try await opening?.verify(in: session)
+                    try Task.checkCancellation()
+                } catch {
+                    try? FileManager.default.removeItem(at: result)
+                    throw error
+                }
+                publishedCover = opening
                 file = result
             } catch is CancellationError {} catch { failure = error.localizedDescription }
         }
@@ -93,16 +129,22 @@ import UIKit
     public func invalidate() { cancel(); discardResult() }
     private func discardResult() {
         if let file { try? FileManager.default.removeItem(at: file) }
-        file = nil; failure = nil
+        file = nil; failure = nil; publishedCover = nil
     }
     public func authorizeShare() async throws -> URL {
+        let candidate = file, opening = publishedCover
         do {
             _ = try await authorizedJourney()
-            guard let file else { throw MediaFailure.unavailable }
-            return file
+            guard let candidate else { throw MediaFailure.unavailable }
+            try await opening?.verify(in: session)
+            guard file == candidate else { throw MediaFailure.staleIntent }
+            return candidate
         } catch {
-            if let file { try? FileManager.default.removeItem(at: file); self.file = nil }
-            failure = error.localizedDescription; throw error
+            if file == candidate {
+                discardResult()
+                failure = error.localizedDescription
+            }
+            throw error
         }
     }
     private func authorizedJourney() async throws -> MediaJourney {
@@ -151,6 +193,7 @@ public struct FilmExportButton: View {
                         ForEach([15, 30, 60], id: \.self) { seconds in Text("\(seconds) 秒").tag(seconds) }
                     }.accessibilityIdentifier("story.export.duration")
                     Toggle("包含感想字幕", isOn: $model.includeNotes).accessibilityIdentifier("story.export.captions")
+                    Toggle("使用已生成的艺术封面", isOn: $model.includeCover).accessibilityIdentifier("story.export.cover")
                 }
                 if model.hasSoundtrack {
                     Toggle("包含旅程配乐", isOn: $model.includeSoundtrack).accessibilityIdentifier("story.export.soundtrack")
@@ -170,4 +213,16 @@ private struct FilmShareSheet: UIViewControllerRepresentable {
     let file: URL
     func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: [file], applicationActivities: nil) }
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+private extension PreparedNativeFilm {
+    func withoutArtisticOpening() -> PreparedNativeFilm {
+        let shots = manifest.shots.map { FilmShot(sourceSceneIndex: $0.sourceSceneIndex, startFrame: $0.startFrame,
+            endFrame: $0.endFrame, openingDerivativeId: nil, captionCues: $0.captionCues) }
+        let reduced = FilmManifest(version: manifest.version, exportKind: manifest.exportKind, journeyId: manifest.journeyId,
+            journeyRevision: manifest.journeyRevision, narrativeSnapshot: manifest.narrativeSnapshot, privacy: manifest.privacy,
+            fps: manifest.fps, output: manifest.output, reducedMotion: true, totalFrames: manifest.totalFrames,
+            actualDurationMs: manifest.actualDurationMs, sourceDurationMs: manifest.sourceDurationMs, cover: nil, shots: shots)
+        return PreparedNativeFilm(manifest: reduced, plan: plan, captions: captions)
+    }
 }
