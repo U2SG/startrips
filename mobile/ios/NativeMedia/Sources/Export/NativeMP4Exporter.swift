@@ -2,20 +2,10 @@ import AVFoundation
 import CoreVideo
 import Foundation
 
-public struct FilmAudioSource {
-    public let file: URL
-    public let startSeconds: Double
-    public let sourceSeconds: Double
-    public let outputSeconds: Double
-    public init(file: URL, startSeconds: Double, sourceSeconds: Double, outputSeconds: Double) {
-        self.file = file; self.startSeconds = startSeconds; self.sourceSeconds = sourceSeconds; self.outputSeconds = outputSeconds
-    }
-}
-
 @MainActor public final class NativeMP4Exporter {
     public init() {}
     public func export(manifest: FilmManifest, renderer: FilmFrameRendering, destination: URL,
-                       foregroundAudio: [FilmAudioSource] = [], soundtrack: URL? = nil, soundtrackVolume: Float = 0.8,
+                       soundtrack: URL? = nil, soundtrackVolume: Float = 0.8,
                        authorize: @escaping () async throws -> Void,
                        availableBytes: () throws -> Int64,
                        progress: (Double) -> Void = { _ in }) async throws -> URL {
@@ -78,11 +68,10 @@ public struct FilmAudioSource {
             try Task.checkCancellation()
             guard writer.status == .completed else { throw writer.error ?? MediaFailure.encoding }
             try await authorize()
-            if foregroundAudio.isEmpty && soundtrack == nil {
-                try FileManager.default.moveItem(at: silent, to: destination)
+            if let soundtrack {
+                try await mux(video: silent, output: destination, soundtrack: soundtrack, volume: soundtrackVolume)
             } else {
-                try await mux(video: silent, output: destination, foreground: foregroundAudio,
-                              soundtrack: soundtrack, volume: soundtrackVolume)
+                try FileManager.default.moveItem(at: silent, to: destination)
             }
             try Task.checkCancellation(); try await authorize()
             succeeded = true; progress(1); return destination
@@ -102,63 +91,30 @@ public struct FilmAudioSource {
                                       bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue) else { throw MediaFailure.encoding }
         context.draw(image, in: CGRect(x: 0, y: 0, width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer)))
     }
-    private func mux(video: URL, output: URL, foreground: [FilmAudioSource], soundtrack: URL?, volume: Float) async throws {
+    private func mux(video: URL, output: URL, soundtrack: URL, volume: Float) async throws {
         let composition = AVMutableComposition(), source = AVURLAsset(url: video)
         let duration = try await source.load(.duration)
         guard let sourceVideo = try await source.loadTracks(withMediaType: .video).first,
               let videoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw MediaFailure.encoding }
         try videoTrack.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: sourceVideo, at: .zero)
-        var audible: [(Double, Double)] = []
-        for clip in foreground {
+        let asset = AVURLAsset(url: soundtrack)
+        let length = try await asset.load(.duration)
+        guard length.seconds.isFinite, length.seconds > 0,
+              let track = try await asset.loadTracks(withMediaType: .audio).first,
+              let target = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+            throw MediaFailure.unavailable
+        }
+        var cursor = CMTime.zero
+        while cursor < duration {
             try Task.checkCancellation()
-            let asset = AVURLAsset(url: clip.file)
-            guard let track = try await asset.loadTracks(withMediaType: .audio).first else { continue }
-            let sourceDuration = try await asset.load(.duration).seconds
-            let seconds = min(sourceDuration, clip.sourceSeconds)
-            guard seconds > 0, clip.outputSeconds > 0, clip.startSeconds >= 0,
-                  clip.startSeconds + clip.outputSeconds <= duration.seconds + 0.001,
-                  let target = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw MediaFailure.invalidManifest }
-            let start = CMTime(seconds: clip.startSeconds, preferredTimescale: 600)
-            let span = CMTime(seconds: seconds, preferredTimescale: 600)
-            try target.insertTimeRange(CMTimeRange(start: .zero, duration: span), of: track, at: start)
-            target.scaleTimeRange(CMTimeRange(start: start, duration: span), toDuration: CMTime(seconds: clip.outputSeconds, preferredTimescale: 600))
-            audible.append((clip.startSeconds, clip.startSeconds + clip.outputSeconds))
+            let span = CMTimeMinimum(length, duration - cursor)
+            try target.insertTimeRange(CMTimeRange(start: .zero, duration: span), of: track, at: cursor)
+            cursor = cursor + span
         }
         let mix = AVMutableAudioMix()
-        if let soundtrack {
-            let asset = AVURLAsset(url: soundtrack)
-            let length = try await asset.load(.duration)
-            guard length.seconds.isFinite, length.seconds > 0,
-                  let track = try await asset.loadTracks(withMediaType: .audio).first,
-                  let target = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw MediaFailure.unavailable }
-            var cursor = CMTime.zero
-            while cursor < duration {
-                try Task.checkCancellation()
-                let span = CMTimeMinimum(length, duration - cursor)
-                try target.insertTimeRange(CMTimeRange(start: .zero, duration: span), of: track, at: cursor)
-                cursor = cursor + span
-            }
-            let parameters = AVMutableAudioMixInputParameters(track: target)
-            let baseline = min(1, max(0, volume))
-            parameters.setVolume(baseline, at: .zero)
-            // Sample the same time-based duck envelope as live playback. This also handles
-            // adjacent videos without overlapping release/attack ramps or a loud gap.
-            var from = baseline, previous = 0.0
-            var rampStart = 0.0, rampFrom = baseline, lastAudible = false
-            let count = Int(ceil(duration.seconds / 0.02))
-            for step in 0...count {
-                let now = min(duration.seconds, Double(step) * 0.02)
-                let isAudible = audible.contains { now >= $0.0 && now < $0.1 }
-                if isAudible != lastAudible { rampStart = now; rampFrom = from; lastAudible = isAudible }
-                let to = SoundtrackGain.ramp(from: rampFrom, to: SoundtrackGain.target(baseline: baseline, audible: isAudible), elapsed: now - rampStart)
-                if now > previous {
-                    parameters.setVolumeRamp(fromStartVolume: from, toEndVolume: to,
-                        timeRange: CMTimeRange(start: CMTime(seconds: previous, preferredTimescale: 600), duration: CMTime(seconds: now - previous, preferredTimescale: 600)))
-                }
-                previous = now; from = to
-            }
-            mix.inputParameters = [parameters]
-        }
+        let parameters = AVMutableAudioMixInputParameters(track: target)
+        parameters.setVolume(min(1, max(0, volume)), at: .zero)
+        mix.inputParameters = [parameters]
         guard let exporter = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else { throw MediaFailure.encoding }
         exporter.outputURL = output; exporter.outputFileType = .mp4; exporter.audioMix = mix
         await withTaskCancellationHandler(operation: { await exporter.export() }, onCancel: { exporter.cancelExport() })
