@@ -5,15 +5,16 @@ import test from "node:test";
 const read = (name) => fs.readFileSync(new URL(`../${name}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const ci = read(".github/workflows/ci.yml");
 const reproduction = read(".github/workflows/story-autoplay-reproduction.yml");
+const matrix = JSON.parse(read(".github/browser-matrix.json")).include;
 const job = (name) => ci.split(`\n  ${name}:\n`)[1]?.split(/\n  [a-z][a-z-]*:\n/)[0];
 
 test("all 42 suite commands are retained exactly once across at most eight shards", () => {
   const browser = job("browser-qa");
-  const matrix = browser.slice(browser.indexOf("      matrix:"), browser.indexOf("\n    steps:"));
-  const names = [...matrix.matchAll(/^          - name: (.+)$/gm)].map((m) => m[1]);
+  assert.match(browser, /matrix: \$\{\{ fromJSON\(needs.quick-checks.outputs.browser_matrix\) \}\}/);
+  const names = matrix.map((row) => row.name);
   assert.ok(names.length <= 8);
   assert.equal(new Set(names).size, names.length);
-  const rows = [...matrix.matchAll(/^              ([a-z0-9-]+)::(.+)$/gm)];
+  const rows = matrix.flatMap((row) => row.commands.split("\n").map((command) => command.match(/^([a-z0-9-]+)::(.+)$/)));
   assert.equal(rows.length, 42);
   assert.equal(new Set(rows.map((m) => m[1])).size, 42);
   assert.equal(rows.filter((m) => m[1] === "journal-hotels").length, 1);
@@ -27,9 +28,9 @@ test("all 42 suite commands are retained exactly once across at most eight shard
       : `pnpm qa:${suite === "post-login" ? "post-login-controls" : suite}`;
     assert.equal(command, expected, suite);
   }
-  for (const block of matrix.split("          - name: ").slice(1)) {
-    const declared = block.match(/suites: "([^"]+)"/)[1].split("|").filter(Boolean).sort();
-    const executed = [...block.matchAll(/^              ([a-z0-9-]+)::/gm)].map((m) => m[1]).sort();
+  for (const block of matrix) {
+    const declared = block.suites.split("|").filter(Boolean).sort();
+    const executed = block.commands.split("\n").map((command) => command.split("::")[0]).sort();
     assert.deepEqual(declared, executed);
   }
   assert.match(browser, /fail-fast: false/);
@@ -44,7 +45,7 @@ test("editor navigation and compact layout checks remain mandatory independent s
     "node scripts/qa-mobile-classic-views.mjs 320 && node scripts/qa-mobile-classic-views.mjs 360 && node scripts/qa-mobile-classic-views.mjs 390 && node scripts/qa-mobile-classic-views.mjs 430 && node scripts/qa-mobile-classic-views.mjs 844 390 && node scripts/qa-page-flip-lifecycle.mjs && node scripts/qa-stream-input.mjs");
   const browser = job("browser-qa");
   for (const suite of ["story-presentation-navigation", "mobile-classic-views"]) {
-    assert.equal((browser.match(new RegExp(`^              ${suite}::pnpm qa:${suite}$`, "gm")) || []).length, 1);
+    assert.equal(matrix.flatMap((row) => row.commands.split("\n")).filter((command) => command === `${suite}::pnpm qa:${suite}`).length, 1);
     assert.ok(browser.includes(`contains(matrix.suites, '|${suite}|')`));
   }
   assert.match(browser, /path: artifacts\/story-repair\//);

@@ -99,10 +99,8 @@ test("fails closed when final uses more than one commit", () => {
 
 test("workflow keeps all 42 logical browser suites across at most eight shards", () => {
   const workflow = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".github", "workflows", "ci.yml"), "utf8").replace(/\r\n/g, "\n");
-  const matrixStart = workflow.indexOf("      matrix:\n        include:");
-  const stepsStart = workflow.indexOf("\n    steps:", matrixStart);
-  assert.ok(matrixStart >= 0 && stepsStart > matrixStart);
-  const matrixText = workflow.slice(matrixStart, stepsStart);
+  assert.ok(workflow.includes("matrix: ${{ fromJSON(needs.quick-checks.outputs.browser_matrix) }}"));
+  const matrix = JSON.parse(fs.readFileSync(new URL("../.github/browser-matrix.json", import.meta.url), "utf8")).include;
   const expectedSuites = new Set([
     "login-media", "post-login", "playback-prefetch", "playback-continuity", "playback-map-bridge", "final-acceptance",
     "route-anchoring", "city-label-anchoring", "earth-dive", "attention-hierarchy",
@@ -116,16 +114,13 @@ test("workflow keeps all 42 logical browser suites across at most eight shards",
     "journal-streaming",
     "journey-book-3d-turns", "journey-book-3d-drags", "journey-book-3d-last-spread", "journey-book-3d-phone",
   ]);
-  const shardNames = [...matrixText.matchAll(/^          - name: ([a-z0-9-]+)$/gm)].map((match) => match[1]);
+  const shardNames = matrix.map((row) => row.name);
   assert.ok(shardNames.length <= 8);
   assert.equal(new Set(shardNames).size, shardNames.length);
-  const suites = new Set();
-  for (const match of matrixText.matchAll(/^            suites: "([^"]+)"$/gm)) {
-    for (const suite of match[1].split("|").filter(Boolean)) suites.add(suite);
-  }
-  assert.deepEqual(suites, expectedSuites);
-  assert.equal((matrixText.match(/pnpm qa:[a-z0-9-]+/g) ?? []).length, 44);
-  assert.equal((matrixText.match(/^\s+[a-z0-9][a-z0-9-]*::.+$/gm) ?? []).length, 42);
+  assert.deepEqual(new Set(matrix.flatMap((row) => row.suites.split("|").filter(Boolean))), expectedSuites);
+  const commands = matrix.flatMap((row) => row.commands.split("\n"));
+  assert.equal((commands.join("\n").match(/pnpm qa:[a-z0-9-]+/g) ?? []).length, 44);
+  assert.equal(commands.length, 42);
 });
 
 function jobs({ productFailure = false, wrongLedgerFailure = false } = {}) {
