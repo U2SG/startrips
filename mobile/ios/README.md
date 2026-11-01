@@ -36,8 +36,9 @@ order. Duplicate IDs, stale scopes/revisions and foreign point/media ownership
 are rejected. Render acknowledgements also bind the current selection request.
 Swift and TypeScript decode the same synthetic `Fixtures/bridge.json`.
 
-Manual camera input suspends commanded centering; a new selection resumes it
-immediately, or it resumes after 20 seconds of inactivity. Detail-map input uses
+The bundled GlobeTimeScrubber uses the production useGlobeTimeCursor. A scrub changes route reveal and point focus in the same scene; only the committed point crosses the bridge. The scene measures the visible controls when layout changes to keep the camera viewport above the timeline.
+
+Manual camera input suspends commanded centering until the next selection. After about 20 seconds of inactivity, the production renderer releases to idle rotation at the current orientation. Detail-map input uses
 the production controller. Card connector lines are hidden. Account Earth
 preference is fetched through the existing account endpoint; guest mode does not
 query account preferences. Native foreground/periodic refresh revalidates access.

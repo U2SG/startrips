@@ -57,6 +57,24 @@ final class BundledSceneServer {
         return decoded == "/" ? "index.html" : String(decoded.dropFirst())
     }
 
+    // The public server returns absolute first-party proxy URLs inside style
+    // and TileJSON documents. Keep those resources on the scene's own origin.
+    static func localizeMapDocument(_ data: Data, from origin: URL, port: UInt16) throws -> Data {
+        let upstream = origin.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let local = "http://127.0.0.1:\(port)"
+        func rebase(_ value: Any) -> Any {
+            if let url = value as? String, url.hasPrefix(upstream + "/api/mapstyle?")
+                || url.hasPrefix(upstream + "/api/mapstyle/sprite/") {
+                return local + String(url.dropFirst(upstream.count))
+            }
+            if let array = value as? [Any] { return array.map(rebase) }
+            if let object = value as? [String: Any] { return object.mapValues(rebase) }
+            return value
+        }
+        let document = try JSONSerialization.jsonObject(with: data)
+        return try JSONSerialization.data(withJSONObject: rebase(document))
+    }
+
     private func respond(_ connection: NWConnection, request: String) {
         let parts = request.components(separatedBy: "\r\n").first?.split(separator: " ") ?? []
         guard parts.count == 3, parts[0] == "GET", let relative = Self.resourcePath(String(parts[1])) else {
@@ -64,7 +82,7 @@ final class BundledSceneServer {
         }
         if (relative == "api/mapstyle" || relative.hasPrefix("api/mapstyle/sprite/")), let mapOrigin {
             let target = String(parts[1])
-            guard let url = URL(string: target, relativeTo: mapOrigin)?.absoluteURL,
+            guard let port = listener?.port?.rawValue, let url = URL(string: target, relativeTo: mapOrigin)?.absoluteURL,
                   url.host == mapOrigin.host, url.scheme == "https" else {
                 send(connection, status: 400, data: Data(), mime: "text/plain"); return
             }
@@ -76,8 +94,15 @@ final class BundledSceneServer {
             session.dataTask(with: mapRequest) { data, response, _ in
                 defer { session.finishTasksAndInvalidate() }
                 let http = response as? HTTPURLResponse
-                self.send(connection, status: http?.statusCode ?? 503, data: data ?? Data(),
-                          mime: http?.value(forHTTPHeaderField: "Content-Type") ?? "application/octet-stream")
+                let mime = http?.value(forHTTPHeaderField: "Content-Type") ?? "application/octet-stream"
+                if relative == "api/mapstyle", http?.statusCode == 200, mime.lowercased().contains("json"), let data {
+                    guard let local = try? Self.localizeMapDocument(data, from: mapOrigin, port: port) else {
+                        self.send(connection, status: 502, data: Data(), mime: "text/plain"); return
+                    }
+                    self.send(connection, status: 200, data: local, mime: mime)
+                } else {
+                    self.send(connection, status: http?.statusCode ?? 503, data: data ?? Data(), mime: mime)
+                }
             }.resume()
             return
         }

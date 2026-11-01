@@ -2,15 +2,18 @@ html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
 body { background: var(--archive-bg); color: var(--archive-ink); font-family: var(--archive-sans); }
 .native-atlas { position: relative; width: 100%; height: 100%; min-height: 0; }
 .native-atlas__timeline, .native-atlas__selection { pointer-events: auto; }
-.persistent-earth-host { bottom: 160px; }
+.persistent-earth-host { bottom: var(--native-atlas-bottom, 0px); }
 .particle-earth-journey-connector { display: none; }
-.native-atlas__earth { position: absolute; inset: 0 0 160px; }
+.native-atlas__earth { position: absolute; inset: 0 0 var(--native-atlas-bottom, 0px); }
 .living-atlas.native-atlas > .native-atlas__earth { pointer-events: none; }
 .native-atlas__earth > * { width: 100%; height: 100%; }
-.native-atlas__timeline { position: absolute; bottom: 0; left: 0; right: 0; height: 160px; overflow: auto; }
-.native-atlas__selection { position: absolute; left: 16px; right: 16px; bottom: 168px; padding: 8px 16px; border-radius: 16px; background: var(--atlas-panel); }
+.native-atlas__panel { position: absolute; inset: auto 0 0; display: flex; flex-direction: column; max-height: 48%; overflow: auto; pointer-events: auto; }
+.native-atlas__panel .globe-time-scrubber { position: relative; inset: auto; transform: none; margin: 0 12px; flex: none; }
+.native-atlas__timeline { position: relative; flex: none; }
+.native-atlas__timeline .journey-timeline { position: relative; inset: auto; padding: 6px 16px; }
+.native-atlas__selection { margin: 0 12px; padding: 4px 12px; border-radius: 16px; background: var(--atlas-panel); }
 .native-atlas__selection button { min-height: 44px; min-width: 44px; background: transparent; border: 0; color: inherit; }
 .native-atlas__points { display: flex; overflow-x: auto; gap: 8px; }
 .native-atlas__points button { flex-shrink: 0; }
 .native-atlas__points button[aria-pressed="true"] { text-decoration: underline; }
-.native-atlas__empty { position: absolute; left: 16px; bottom: 176px; }
+.native-atlas__empty { margin: 8px 16px; }

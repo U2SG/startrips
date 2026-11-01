@@ -21,12 +21,22 @@ final class AtlasUITests: XCTestCase {
         earth.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.28))
             .press(forDuration: 0.1, thenDragTo: earth.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.35)))
         XCTAssertTrue(app.staticTexts["earth-rendered"].waitForNonExistence(timeout: 5))
-        // Production gesture interruption and the approximately 20-second return.
-        XCTAssertTrue(app.staticTexts["earth-rendered"].waitForExistence(timeout: 35))
+        // Releasing to idle rotation must not recenter the manually rotated globe.
+        XCTAssertFalse(app.staticTexts["earth-rendered"].waitForExistence(timeout: 22))
+        coast.tap()
+        XCTAssertTrue(app.staticTexts["earth-rendered"].waitForExistence(timeout: 30))
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "production-globe-after-consecutive-selection"; screenshot.lifetime = .keepAlways
         add(screenshot)
-        app.webViews.buttons["打开故事"].firstMatch.tap()
+        let cursor = app.webViews.sliders["时间轴"]
+        XCTAssertTrue(cursor.waitForExistence(timeout: 10))
+        let center = cursor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        center.press(forDuration: 0.1, thenDragTo: cursor.coordinate(withNormalizedOffset: CGVector(dx: -0.03, dy: 0.5)))
+        XCTAssertTrue(app.webViews.buttons["打开故事：起点"].waitForExistence(timeout: 10))
+        center.press(forDuration: 0.1, thenDragTo: cursor.coordinate(withNormalizedOffset: CGVector(dx: 1.03, dy: 0.5)))
+        let coastStory = app.webViews.buttons["打开故事：海岸"]
+        XCTAssertTrue(coastStory.waitForExistence(timeout: 10))
+        coastStory.tap()
         XCTAssertTrue(app.otherElements["story-handoff"].waitForExistence(timeout: 10))
         app.buttons["return-to-atlas"].tap()
         XCTAssertTrue(app.webViews.buttons["海岸"].waitForExistence(timeout: 10))
