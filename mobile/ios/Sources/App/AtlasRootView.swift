@@ -7,6 +7,7 @@ struct AtlasRootView: View {
     @State private var connected = false
     @State private var sceneIdentity = UUID()
     @State private var fixtureMode = false
+    @State private var googleLoginFailed = false
 
     var body: some View {
         NavigationStack(path: $router.path) {
@@ -61,9 +62,17 @@ struct AtlasRootView: View {
         }
         .sheet(isPresented: $session.loginPresented, onDismiss: { connectOwner() }) {
             if let origin = session.origin {
+                let generation = session.generation
                 NavigationStack {
-                    PrivateWebView(url: origin, store: session.cookieStore)
-                        .toolbar { Button("返回图谱") { session.loginPresented = false } }
+                    PrivateWebView(url: origin, store: session.cookieStore, googleLogin: .init(
+                        isCurrent: { session.isOwnerLoginCurrent(generation, at: origin) },
+                        failed: { googleLoginFailed = true }
+                    ))
+                    .id(generation)
+                    .toolbar { Button("返回图谱") { session.loginPresented = false } }
+                    .alert("Google 登录未完成", isPresented: $googleLoginFailed) {
+                        Button("好", role: .cancel) { }
+                    } message: { Text("请确认此 Startrips 站点支持 App 登录，然后重试。") }
                 }
             }
         }

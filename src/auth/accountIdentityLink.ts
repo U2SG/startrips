@@ -97,6 +97,12 @@ async function readJson<T>(fetchImpl: typeof fetch, url: string): Promise<T> {
   return await response.json() as T;
 }
 
+/** Only the native owner-login sheet can open Google's system authentication session. */
+export function nativeGoogleLoginUrl(userAgent: string, requestSignUp: boolean): string | null {
+  if (!userAgent.split(/\s+/).includes("StartripsOwnerLogin/1")) return null;
+  return `startrips-google://login/${requestSignUp ? "sign-up" : "sign-in"}`;
+}
+
 /** Which providers this deployment configured. Readable before signing in. */
 export async function loadSignInProviders(deps: AccountIdentityDeps = {}): Promise<string[]> {
   const payload = await readJson<{ signInProviders?: string[] }>(

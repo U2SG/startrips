@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CryptoKit
 import WebKit
 
 enum SessionFailure: LocalizedError {
@@ -23,12 +24,26 @@ final class AtlasSession: ObservableObject {
     @Published var loginPresented = false
     private(set) var origin: URL?
     private(set) var guestToken: String?
-    private var generation = UUID()
+    private(set) var generation = UUID()
     private var refreshID = UUID()
-    let cookieStore = WKWebsiteDataStore.default()
+    private(set) var cookieStore = WKWebsiteDataStore.nonPersistent()
+
+    // HTTP cookies do not distinguish ports; a private store isolates each configured HTTPS origin.
+    static func ownerStoreID(_ url: URL) -> UUID {
+        let key = "startrips.owner.https|\(url.host?.lowercased() ?? "")|\(url.port ?? 443)"
+        var bytes = Array(SHA256.hash(data: Data(key.utf8)).prefix(16))
+        bytes[6] = (bytes[6] & 0x0f) | 0x80
+        bytes[8] = (bytes[8] & 0x3f) | 0x80
+        return bytes.withUnsafeBytes { UUID(uuid: $0.loadUnaligned(as: uuid_t.self)) }
+    }
+
+    func isOwnerLoginCurrent(_ captured: UUID, at url: URL) -> Bool {
+        loginPresented && generation == captured && origin == url && guestToken == nil
+    }
 
     func disconnect() {
         generation = UUID(); refreshID = UUID(); origin = nil; guestToken = nil; busy = false
+        cookieStore = .nonPersistent()
     }
 
     static func validatedOrigin(_ text: String) throws -> URL {
@@ -45,10 +60,14 @@ final class AtlasSession: ObservableObject {
         components.fragment = nil; components.path = ""
         origin = try Self.validatedOrigin(components.string ?? "")
         guestToken = token; generation = UUID()
+        cookieStore = .nonPersistent()
     }
 
     func configureOwner() throws {
-        origin = try Self.validatedOrigin(originText)
+        let selected = try Self.validatedOrigin(originText)
+        let storeID = Self.ownerStoreID(selected)
+        if cookieStore.identifier != storeID { cookieStore = WKWebsiteDataStore(forIdentifier: storeID) }
+        origin = selected
         guestToken = nil; generation = UUID()
         UserDefaults.standard.set(origin?.absoluteString, forKey: "atlas.origin")
     }
@@ -126,7 +145,7 @@ final class AtlasSession: ObservableObject {
     }
 }
 
-private final class NoRedirect: NSObject, URLSessionTaskDelegate {
+final class NoRedirect: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
 }

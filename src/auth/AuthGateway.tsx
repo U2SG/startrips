@@ -40,6 +40,7 @@ import {
   finishProviderBind,
   loadAccountIdentities,
   loadSignInProviders,
+  nativeGoogleLoginUrl,
   readProviderBindReturn,
   socialSignInErrorText,
   unlinkProviderIdentity,
@@ -283,6 +284,11 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
   // unrecognised Google subject comes back refused as `signup_disabled`
   // instead of quietly registering one.
   async function signInWithProvider(providerId: "google", requestSignUp: boolean) {
+    const nativeUrl = nativeGoogleLoginUrl(navigator.userAgent, requestSignUp);
+    if (nativeUrl) {
+      window.location.assign(nativeUrl);
+      return;
+    }
     const started = beginSubmission();
     if (!started) return;
     const controller = startRequestBoundary(started.requestId);
