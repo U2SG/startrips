@@ -3,6 +3,7 @@ import XCTest
 final class AtlasUITests: XCTestCase {
     @MainActor
     func testGlobePointSelectionAndStoryRoundTrip() {
+        continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture"]
         app.launch()
@@ -48,5 +49,6 @@ final class AtlasUITests: XCTestCase {
         XCUIDevice.shared.press(.home)
         app.activate()
         XCTAssertTrue(app.navigationBars["图谱"].waitForExistence(timeout: 10))
+        verifyNativeMediaRoundTrip(in: app)
     }
 }

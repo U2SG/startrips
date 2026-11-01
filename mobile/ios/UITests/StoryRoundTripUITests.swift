@@ -1,21 +1,15 @@
 import XCTest
 
-final class StoryRoundTripUITests: XCTestCase {
-    @MainActor func testStorySelectionInterruptedPagingAndReturn() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["-atlas-fixture"]
-        app.launch()
-        let journey = app.webViews.buttons["打开旅程：海岸旅程"]
-        XCTAssertTrue(journey.waitForExistence(timeout: 30))
-        journey.tap()
-        let close = app.buttons["story.close"]
-        XCTAssertTrue(close.waitForExistence(timeout: 10))
-        close.tap()
-
+extension AtlasUITests {
+    // Continue from the same live Atlas, after its initial Story round trip and foreground restore.
+    @MainActor func verifyNativeMediaRoundTrip(in app: XCUIApplication) {
         let point = app.webViews.switches["起点"]
         XCTAssertTrue(point.waitForExistence(timeout: 10))
         point.tap()
         app.webViews.buttons["打开故事：起点"].firstMatch.tap()
+        let close = app.buttons["story.close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 10))
+        XCTAssertEqual(app.staticTexts["story.title"].label, "海岸旅程")
 
         let first = app.descendants(matching: .any).matching(identifier: "story.photo.media:asset-fixture").firstMatch
         let second = app.descendants(matching: .any).matching(identifier: "story.photo.media:asset-second").firstMatch

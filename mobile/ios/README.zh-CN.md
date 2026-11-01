@@ -38,7 +38,7 @@
 | 需要验证的改动 | 验证入口 |
 | --- | --- |
 | 地球加载、连续选点、拖动打断、时间轴和前后台恢复 | `AtlasUITests` 从 App 启动，操作实际打包的地球。 |
-| Story 往返、取消翻页、切换照片和退出播放 | `StoryRoundTripUITests` 从地球进入真实 Story，使用两张合成照片。 |
+| Story 往返、取消翻页、切换照片和退出播放 | 同一个 `AtlasUITests` 流程调用 `verifyNativeMediaRoundTrip`，从已打开的图谱进入真实 Story，使用两张合成照片。 |
 | 导入重试、移动撤销、签名隔离、影片时长、首尾帧和音轨 | `NativeMedia/Tests/` 的 XCTest。上传、数据库权限和事务并发另由 #769 的服务端集成测试覆盖。 |
 
 ## 真机与交付验收
