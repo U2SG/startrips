@@ -7,13 +7,14 @@ body { background: var(--archive-bg); color: var(--archive-ink); font-family: va
 .native-atlas__earth { position: absolute; inset: 0 0 var(--native-atlas-bottom, 0px); }
 .living-atlas.native-atlas > .native-atlas__earth { pointer-events: none; }
 .native-atlas__earth > * { width: 100%; height: 100%; }
-.native-atlas__panel { position: absolute; inset: auto 0 0; display: flex; flex-direction: column; max-height: 48%; overflow: auto; pointer-events: auto; }
+.native-atlas__panel { position: absolute; inset: auto 0 0; display: flex; flex-direction: column; max-height: 48%; overflow: hidden; pointer-events: auto; }
 .native-atlas__panel .globe-time-scrubber { position: relative; inset: auto; transform: none; margin: 0 12px; flex: none; }
-.native-atlas__timeline { position: relative; flex: none; }
+.native-atlas__timeline { position: relative; flex: 0 1 auto; min-height: 0; overflow-y: auto; }
 .native-atlas__timeline .journey-timeline { position: relative; inset: auto; padding: 6px 16px; }
-.native-atlas__selection { margin: 0 12px; padding: 4px 12px; border-radius: 16px; background: var(--atlas-panel); }
+.native-atlas__selection { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; flex: none; margin: 0 12px; padding: 4px 12px; border-radius: 16px; background: var(--atlas-panel); }
 .native-atlas__selection button { min-height: 44px; min-width: 44px; background: transparent; border: 0; color: inherit; }
-.native-atlas__points { display: flex; overflow-x: auto; gap: 8px; }
+.native-atlas__selection > button { grid-column: 2; grid-row: 1; }
+.native-atlas__points { grid-column: 1 / -1; grid-row: 2; min-width: 0; display: flex; overflow-x: auto; gap: 8px; }
 .native-atlas__points button { flex-shrink: 0; }
 .native-atlas__points button[aria-pressed="true"] { text-decoration: underline; }
 .native-atlas__empty { margin: 8px 16px; }
