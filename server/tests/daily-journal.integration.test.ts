@@ -170,7 +170,7 @@ describe("private daily journal API and PostgreSQL", () => {
     Object.assign(serverConfig, { intentDriver: "http-model", intentBaseUrl: "https://model.example.test/v1", intentApiKey: "mock-only-key", intentModel: "mock-model" });
     const upstream = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
       const body = JSON.parse(init!.body as string);
-      const document = JSON.parse(body.messages[1].content);
+      const document = JSON.parse(body.messages.filter((m: any) => m.role === "user").at(-1).content);
       return Response.json({ choices: [{ message: { content: JSON.stringify({ suggestions: document.chapters.flatMap((c: { events: {eventId:string;source:string}[] }) => c.events.map((e) => ({ eventId:e.eventId, text:e.source, questions:[], background:"" }))) }) } }] });
     });
     try {
@@ -196,7 +196,7 @@ describe("private daily journal API and PostgreSQL", () => {
       const body = JSON.parse(init!.body as string), name = body.tool_choice.function.name;
       const args = name === "search_hotels" ? { stays: [{ eventId: cs[0].events[0].id, evidence: "在虚构城入住星桥-酒店", name: "星桥-酒店", area: "虚构城" }], questions: [] }
         : { matches: [{ eventId: cs[0].events[0].id, candidateId: `existing:${j!.routePoints[0].id}` }] };
-      return Response.json({ choices: [{ message: { tool_calls: [{ type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
+      return Response.json({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ id: `mock-${randomUUID()}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
     });
     const preview = (cookie: string) => app.request(`${TEST_ORIGIN}/api/journeys/${j!.id}/journal/hotels/preview`, { method: "POST", headers: authHeaders(cookie), body: "{}" });
     try {
@@ -336,7 +336,7 @@ describe("private daily journal API and PostgreSQL", () => {
       const body = JSON.parse(init!.body as string), name = body.tool_choice.function.name;
       const args = name === "search_hotels" ? { stays: cs[0].events.map(e => ({ eventId: e.id, evidence: `checked in at ${sourceName} in York`, name: sourceName, area: "York" })), questions: [] }
         : { matches: cs[0].events.map(e => ({ eventId: e.id, candidateId: chosen })) };
-      return Response.json({ choices: [{ message: { tool_calls: [{ type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
+      return Response.json({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ id: `mock-${randomUUID()}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
     });
     const search = { search: vi.fn(async () => [{ id: chosen, label, context: "York, UK", countryCode: "GB", latitude: 10, longitude: 20 }]), reverse: vi.fn(), driver: "mock", attribution: null } as LocationSearch;
     const result = await proposeJournalHotels(journal!, j!.routePoints, { baseUrl: "https://model.example.test/v1", apiKey: "mock-only", model: "mock", timeoutMs: 1000, fetcher }, search);

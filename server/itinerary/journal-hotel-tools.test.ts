@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { hotelSourceHash, proposeJournalHotels, signHotelPlan, verifyHotelPlan } from "./journal-hotel-tools";
 import { previewJournalImport } from "../../src/journey/dailyJournal";
-import type { LocationSearch } from "../location/location-search";
+import { LocationSearchUnavailableError, type LocationSearch } from "../location/location-search";
 
 const chapters = previewJournalImport("2027-05-01\n实际：她在虚构城入住星桥酒店，23:40准备睡觉。\n取消：原计划入住山谷酒店。", "2027-05-01");
 const event = chapters[0].events[0];
@@ -13,7 +14,7 @@ function setup(stays: unknown[] = [stay], candidates = [candidate], chosen = "pr
     const body = JSON.parse(init?.body as string);
     const name = body.tool_choice.function.name;
     const args = name === "search_hotels" ? { stays, questions: [] } : { matches: [{ eventId: event.id, candidateId: chosen }] };
-    return Response.json({ choices: [{ message: { tool_calls: [{ type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
+    return Response.json({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ id: `mock-${randomUUID()}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
   });
   const search = { search: vi.fn(async () => candidates), reverse: vi.fn(), driver: "mock", attribution: null } as LocationSearch;
   const model = { baseUrl: "https://model.example.test/v1", apiKey: "mock-only", model: "test", timeoutMs: 1000, fetcher };
@@ -105,7 +106,7 @@ describe("hotel tool boundaries", () => {
     expect(result.hotels).toEqual([]); expect(s.search.search).not.toHaveBeenCalled();
   });
   it("refuses arbitrary function calls and changed/expired confirmation tokens", async () => {
-    const s = setup(); s.model.fetcher = vi.fn(async () => Response.json({ choices: [{ message: { tool_calls: [{ type: "function", function: { name: "execute_sql", arguments: "{}" } }] } }] }));
+    const s = setup(); s.model.fetcher = vi.fn(async () => Response.json({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ id: `mock-${randomUUID()}`, type: "function", function: { name: "execute_sql", arguments: "{}" } }] } }] }));
     await expect(proposeJournalHotels(journal, [], s.model, s.search)).rejects.toThrow();
     const plan = { atlasId: "a", journeyId: "j", journalRevision: 1, journeyRevision: 2, expires: Date.now() + 10000, hotels: [] };
     const token = signHotelPlan(plan, "test-secret"); expect(verifyHotelPlan(token, "test-secret")).toEqual(plan);
@@ -138,4 +139,37 @@ describe("hotel tool boundaries", () => {
     expect(() => signHotelPlan({ ...plan, hotels: [...plan.hotels, hotel] }, "test-secret")).toThrow("容量");
     expect(() => signHotelPlan({ ...plan, hotels: [{ ...hotel, providerId: "x".repeat(100000) }] }, "test-secret")).toThrow("容量");
   });
+});
+
+it("corrects hotel selection with full matched search history without repeating searches", async () => {
+  const s = setup(); let selections = 0;
+  const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)), name = body.tool_choice.function.name;
+    if (name === "search_hotels") return Response.json({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ id: "search", type: "function", function: { name, arguments: JSON.stringify({ stays: [stay], questions: [] }) } }] } }] });
+    selections++;
+    expect(body.messages.find((m: any) => m.role === "tool" && m.tool_call_id === "search")).toBeDefined();
+    const trusted = JSON.parse(body.messages.find((m: any) => m.role === "tool" && m.tool_call_id === "search").content);
+    expect(trusted.searches[0].candidates[0].candidateId).toBe(candidate.id);
+    if (selections === 2) expect(body.messages.at(-1).tool_call_id).toBe("select-1");
+    const args = { matches: [{ eventId: event.id, candidateId: selections === 1 ? "forged" : candidate.id }] };
+    return Response.json({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ id: `select-${selections}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
+  });
+  const result = await proposeJournalHotels(journal, [], { ...s.model, fetcher }, s.search);
+  expect(result.hotels).toHaveLength(1); expect(fetcher).toHaveBeenCalledTimes(3); expect(s.search.search).toHaveBeenCalledTimes(1);
+});
+it("validates the entire hotel batch before the first external search", async () => {
+  const s = setup([stay, { ...stay, eventId: "foreign-event" }]);
+  await expect(proposeJournalHotels(journal, [], s.model, s.search)).rejects.toMatchObject({ code: "TOOL_ARGUMENTS_INVALID" });
+  expect(s.search.search).not.toHaveBeenCalled(); expect(s.fetcher).toHaveBeenCalledTimes(2);
+});
+it("does not retry an uncertain hotel search outcome or ask the model to repair it", async () => {
+  const s = setup(); s.search.search = vi.fn(async () => { throw new Error("SEARCH_RESULT_UNKNOWN"); });
+  await expect(proposeJournalHotels(journal, [], s.model, s.search)).rejects.toThrow("SEARCH_RESULT_UNKNOWN");
+  expect(s.fetcher).toHaveBeenCalledTimes(1); expect(s.search.search).toHaveBeenCalledTimes(1);
+});
+
+it("classifies trusted search failure separately from tool arguments without replay", async () => {
+  const s = setup(); s.search.search = vi.fn(async () => { throw new LocationSearchUnavailableError("private provider detail"); });
+  await expect(proposeJournalHotels(journal, [], s.model, s.search)).rejects.toMatchObject({ code: "HOTEL_SEARCH_FAILED" });
+  expect(s.fetcher).toHaveBeenCalledTimes(1); expect(s.search.search).toHaveBeenCalledTimes(1);
 });
