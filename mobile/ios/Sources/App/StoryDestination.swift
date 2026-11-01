@@ -48,7 +48,7 @@ struct StoryDestination: View {
                 directory: directory, uploader: uploader, currentIntent: {
                     let live = router.path.last
                     return StoryIntent(journeyId: live?.journeyId ?? "", routePointId: live?.routePointId,
-                        assetId: live?.assetId, revision: intent.revision, requestId: live?.requestId ?? "")
+                        assetId: live?.assetId, revision: live?.revision ?? -1, requestId: live?.requestId ?? "")
                 }, latestJourney: { session.mediaJourneys[current.journeyId] },
                 readJourney: { try await session.mediaJourney(current.journeyId, scope: scope) },
                 refresh: { source, destination in
@@ -60,7 +60,8 @@ struct StoryDestination: View {
                     router.commitStoryPosition(StoryHandoff(journeyId: journey.id, routePointId: point,
                         assetId: beat.asset?.id, revision: journey.revision, requestId: target.requestId))
                 }, onReturn: { result in
-                    guard router.path.last?.requestId == result.requestId, session.activeIdentity == scope else { return }
+                    guard router.path.last?.requestId == result.requestId, router.path.last?.revision == result.revision,
+                          session.activeIdentity == scope else { return }
                     if let id = result.journeyId {
                         router.commitStoryPosition(StoryHandoff(journeyId: id, routePointId: result.routePointId,
                             assetId: result.assetId, revision: journey.revision, requestId: target.requestId))

@@ -21,6 +21,7 @@ public struct MediaReturn: Equatable, Sendable {
     public let assetId: String?
     public let expanded: Bool
     public let requestId: String
+    public let revision: Int
 }
 
 public func resolveMediaReturn(entry: StoryIntent, committed: PlaybackPosition?, reason: MediaReturn.Reason,
@@ -30,7 +31,7 @@ public func resolveMediaReturn(entry: StoryIntent, committed: PlaybackPosition?,
     func result(_ surface: MediaReturn.Surface, _ fallback: MediaReturn.Fallback,
                 _ journeyID: String?, _ pointID: String? = nil, _ assetID: String? = nil) -> MediaReturn {
         MediaReturn(surface: surface, reason: reason, fallback: fallback, journeyId: journeyID,
-                    routePointId: pointID, assetId: assetID, expanded: surface == .story && expanded, requestId: entry.requestId)
+                    routePointId: pointID, assetId: assetID, expanded: surface == .story && expanded, requestId: entry.requestId, revision: entry.revision)
     }
     guard let journey, journey.id == entry.journeyId else { return result(.atlas, .journeyUnavailable, nil) }
     if reason == .completed { return result(.atlas, .none, journey.id) }

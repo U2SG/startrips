@@ -12,7 +12,7 @@ import UIKit
     @Published public private(set) var paused = false
     @Published public private(set) var tempo: NarrativeTempo = .standard
     public let foreground: ForegroundPlayback
-    public let intent: StoryIntent
+    public private(set) var intent: StoryIntent
     public private(set) var journey: MediaJourney
     public let session: ScopedMediaSession
     private let currentIntent: () -> StoryIntent
@@ -123,7 +123,8 @@ import UIKit
         if playback?.completed == true { finish(.completed) } else { activateBeat() }
     }
     private func activateBeat() {
-        guard let beat = playback?.current else { return }
+        let live = currentIntent()
+        guard live.requestId == intent.requestId, live.revision == intent.revision, let beat = playback?.current else { return }
         if beat.asset != nil || beat.routePointId != nil {
             committed = PlaybackPosition(journeyId: journey.id, routePointId: beat.asset?.routePointId ?? beat.routePointId, assetId: beat.asset?.id)
         }
@@ -139,10 +140,12 @@ import UIKit
     public func update(_ value: MediaJourney) throws {
         guard value.id == journey.id else { throw MediaFailure.staleIntent }
         let selected = cursor.current
-        let refreshed = StoryIntent(journeyId: value.id, routePointId: selected?.routePointId,
-                                    assetId: selected?.asset?.id, revision: value.revision, requestId: intent.requestId)
+        let position = playback == nil ? nil : committed
+        let refreshed = StoryIntent(journeyId: value.id, routePointId: position?.routePointId ?? selected?.routePointId,
+                                    assetId: playback == nil ? selected?.asset?.id : position?.assetId,
+                                    revision: value.revision, requestId: intent.requestId)
         cursor = try StoryCursor(journey: value, intent: refreshed)
-        journey = value
+        intent = refreshed; journey = value
         playback = nil; clockTask?.cancel(); commitCurrent(); loadCurrent()
     }
     private func loadCurrent() {
@@ -222,10 +225,11 @@ import UIKit
 
     public func finish(_ reason: MediaReturn.Reason = .exited) {
         guard !closed else { return }
-        closed = true; cursor.cancel(); disappear()
         let current = currentIntent()
-        if let result = resolveMediaReturn(entry: intent, committed: committed, reason: reason,
-                                           currentRequestID: current.requestId, currentIntentRevision: current.revision,
-                                           journey: latestJourney(), expanded: expanded) { onReturn(result) }
+        guard current.revision == intent.revision, let result = resolveMediaReturn(entry: intent, committed: committed, reason: reason,
+                                              currentRequestID: current.requestId, currentIntentRevision: current.revision,
+                                              journey: latestJourney(), expanded: expanded) else { return }
+        closed = true; cursor.cancel(); disappear()
+        onReturn(result)
     }
 }

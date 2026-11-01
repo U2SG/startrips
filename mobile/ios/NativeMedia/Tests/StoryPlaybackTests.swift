@@ -70,6 +70,23 @@ final class StoryPlaybackTests: XCTestCase {
         XCTAssertEqual(resolve(journey)?.fallback, .routePointUnavailable)
         XCTAssertEqual(resolve(nil)?.fallback, .journeyUnavailable)
     }
+    @MainActor func testOldReturnCannotCloseRefreshedStoryAndAcceptedRefreshCanExit() throws {
+        var journey = try MediaFixtures.journey()
+        var live = MediaFixtures.intent()
+        let session = ScopedMediaSession(scopeID: "owner", access: .owner,
+            read: { _ in throw MediaFailure.unavailable }, request: { _, _, _ in Data() }, revalidate: {})
+        var exits: [MediaReturn] = []
+        let model = try StoryModel(journey: journey, intent: live, session: session,
+            currentIntent: { live }, latestJourney: { journey }, onReturn: { exits.append($0) })
+        live.revision += 1; journey.revision = live.revision
+        model.finish()
+        XCTAssertTrue(exits.isEmpty)
+        try model.update(journey)
+        model.finish()
+        XCTAssertEqual(exits.map(\.revision), [live.revision])
+        XCTAssertEqual(exits.first?.assetId, "photo-one")
+    }
+
     @MainActor func testOnePlaybackOwnerAndStaleRelease() {
         let owner = PlaybackOwnership()
         var stopped: [String] = []
