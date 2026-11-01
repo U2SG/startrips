@@ -266,6 +266,24 @@ describe("read an upload after an interrupted response", () => {
     });
   });
 
+  it.each(["finalizing", "completion_unknown", "reconciling", "aborted"])(
+    "reports %s without renewing the lease or reconciling on a read",
+    async (status) => {
+      const upload = await startedUpload({ status });
+      const lastWrite = new Date("2025-01-01T00:00:00.000Z");
+      await db.update(mediaUploads).set({ updatedAt: lastWrite }).where(eq(mediaUploads.id, upload.id));
+
+      const response = await app.request(`${TEST_ORIGIN}/api/uploads/${upload.id}/status`, {
+        headers: authHeaders(identity.cookie),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ...uploadStatusFixture, uploadId: upload.id, status });
+      const [row] = await db.select({ status: mediaUploads.status, updatedAt: mediaUploads.updatedAt })
+        .from(mediaUploads).where(eq(mediaUploads.id, upload.id));
+      expect(row).toEqual({ status, updatedAt: lastWrite });
+    },
+  );
+
   it("does not disclose another Atlas's upload or require a storage lookup for an invalid id", async () => {
     const upload = await startedUpload();
     const path = `${TEST_ORIGIN}/api/uploads/`;

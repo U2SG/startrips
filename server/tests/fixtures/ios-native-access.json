@@ -1,0 +1,33 @@
+{
+  "owner": {
+    "session": {
+      "method": "GET",
+      "path": "/api/auth/get-session"
+    },
+    "mutation": {
+      "method": "POST",
+      "path": "/api/uploads/start",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "journeyId": "02434927-3185-41d9-bdea-945283d63bb6",
+        "routePointId": null,
+        "fileName": "sample.jpg",
+        "mimeType": "image/jpeg",
+        "bytes": 12345
+      }
+    }
+  },
+  "guest": {
+    "method": "GET",
+    "path": "/api/shared/journeys",
+    "unavailable": {
+      "status": 404,
+      "body": {
+        "error": "SHARE_UNAVAILABLE",
+        "message": "Share link unavailable"
+      }
+    }
+  }
+}

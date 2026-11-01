@@ -16,6 +16,11 @@ on:
       - "pnpm-lock.yaml"
       - ".github/workflows/perf-api.yml"
   workflow_dispatch:
+    inputs:
+      native_contracts:
+        description: Run the native API contract suite instead of the latency benchmark
+        type: boolean
+        default: false
 
 concurrency:
   group: perf-api-${{ github.event.pull_request.number || github.ref }}
@@ -26,7 +31,7 @@ permissions:
 
 jobs:
   api-latency:
-    name: api-latency
+    name: ${{ inputs.native_contracts && 'native-api-contracts' || 'api-latency' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
@@ -73,13 +78,26 @@ jobs:
         timeout-minutes: 3
       - name: Apply migrations
         run: pnpm db:migrate
+      - name: Verify first-party and guest native API contracts
+        if: inputs.native_contracts
+        env:
+          STORAGE_DRIVER: disabled
+        run: |
+          pnpm exec tsc -p tsconfig.server.json --noEmit
+          pnpm exec vitest run --maxWorkers=1 \
+            server/tests/upload-evidence.integration.test.ts \
+            server/tests/share-grants.integration.test.ts \
+            server/tests/session-cookie-cache-revocation.integration.test.ts \
+            server/tests/tenant-isolation.integration.test.ts \
+            server/tests/daily-journal.integration.test.ts
       - name: Run API latency harness
+        if: ${{ !inputs.native_contracts }}
         run: |
           set -euo pipefail
           pnpm exec tsx server/bench/api-latency.ts
           cat artifacts/perf-api/summary.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload API latency evidence
-        if: always()
+        if: ${{ always() && !inputs.native_contracts }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: perf-api-latency-${{ github.run_attempt }}

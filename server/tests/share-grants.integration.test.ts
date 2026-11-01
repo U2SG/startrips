@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { routeSegmentSourceKey } from "../../src/journey/journeyModel";
 import type { RouteSegmentRecord } from "../../src/journey/types";
 import { app } from "../app";
+import nativeAccess from "./fixtures/ios-native-access.json";
 import {
   generateShareToken,
   hashShareToken,
@@ -1031,6 +1032,12 @@ describe("guest journey read", () => {
       await guestRead(doomedGrant.token),
       await guestRead(generateShareToken()),
       await guestRead("not-a-token"),
+      await app.request(`${TEST_ORIGIN}${nativeAccess.guest.path}`, {
+        headers: authHeaders(identity.cookie),
+      }),
+      await app.request(`${TEST_ORIGIN}${nativeAccess.guest.path}`, {
+        headers: { ...authHeaders(identity.cookie), authorization: `Bearer ${revokedToken}` },
+      }),
       await app.request(`${TEST_ORIGIN}/api/shared/journeys`),
       await app.request(`${TEST_ORIGIN}/api/shared/journeys`, {
         headers: { authorization: "Basic abc" },
@@ -1046,10 +1053,7 @@ describe("guest journey read", () => {
     // One body for every cause: a probe cannot tell an expired grant from a
     // token that never existed.
     expect(bodies.size).toBe(1);
-    expect([...bodies][0]).toBe(JSON.stringify({
-      error: "SHARE_UNAVAILABLE",
-      message: "Share link unavailable",
-    }));
+    expect([...bodies][0]).toBe(JSON.stringify(nativeAccess.guest.unavailable.body));
   });
 
   it("exposes no mutation method on the guest journey read", async () => {
