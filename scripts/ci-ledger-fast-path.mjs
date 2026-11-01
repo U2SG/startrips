@@ -125,8 +125,10 @@ export function classifySourceCi(run, jobs, scope = null) {
   if (browser.length < 1) return { green: false, reason: "source-browser-jobs-missing" };
   if (scope) {
     if (!names.has("quick-checks") || !names.has("ios-native")) return { green: false, reason: "source-scope-jobs-missing" };
-    for (const shard of scope.shards) {
-      if (!names.has(`browser-qa / ${shard}`)) return { green: false, reason: `source-browser-job-missing:${shard}` };
+    const expected = new Set(["ledger", "verify", "quick-checks", "core", "keepsake-render", "ios-native",
+      ...(scope.web ? scope.shards.map((shard) => `browser-qa / ${shard}`) : ["browser-qa / ${{ matrix.name }}"])]);
+    if (names.size !== expected.size || [...expected].some((name) => !names.has(name))) {
+      return { green: false, reason: "source-job-set-does-not-match-scope" };
     }
   }
   if (effective.some((job) => job.status !== "completed")) {
@@ -148,6 +150,19 @@ export function classifySourceCi(run, jobs, scope = null) {
     return { green: false, reason: "source-verify-not-expected-pre-seal-failure" };
   }
 
+  if (scope) {
+    const steps = verify.steps ?? [];
+    const proofName = `Validate product lanes / ${scope.mode} / native-${scope.native}`;
+    const proofs = steps.filter((step) => step.name?.startsWith("Validate product lanes / "));
+    const independent = steps.filter((step) => step.name === "Re-classify soc-client-only and prove reusable Source CI for a ledger-only final");
+    const failures = steps.filter((step) => !["success", "skipped"].includes(step.conclusion));
+    if (independent.length !== 1 || independent[0].status !== "completed" || independent[0].conclusion !== "success"
+        || proofs.length !== 1 || proofs[0].name !== proofName || proofs[0].status !== "completed" || proofs[0].conclusion !== "success"
+        || failures.length !== 1 || failures[0].name !== "Require current ledger" || failures[0].status !== "completed"
+        || failures[0].conclusion !== "failure") {
+      return { green: false, reason: "source-lane-proof-not-established" };
+    }
+  }
   const product = effective.filter((job) => !["ledger", "verify"].includes(job.name));
   const failedProduct = product.filter((job) => {
     const skipped = scope && ((job.name === "ios-native" && !scope.native)

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { browserMatrix, changedPaths, classifyPaths, WEB_SHARDS } from "./ci-ios-scope.mjs";
-import { validateResults } from "./ci-validation-results.mjs";
+import { validateProductResults, validateResults } from "./ci-validation-results.mjs";
 import { classifySourceCi } from "./ci-ledger-fast-path.mjs";
 
 test("native design runs native only; docs allocate no macOS or browser runner", () => {
@@ -94,9 +94,17 @@ test("Source reuse proves native lane and expected skips; cancellation is never 
   const run = { status: "completed", conclusion: "failure", run_attempt: 1 };
   const jobs = ["ledger", "verify", "quick-checks", "core", "keepsake-render", "browser-qa / ${{ matrix.name }}", "ios-native"].map((name, id) => ({
     id, name, status: "completed", conclusion: ["ledger", "verify"].includes(name) ? "failure" : ["quick-checks", "ios-native"].includes(name) ? "success" : "skipped",
-    steps: name === "ledger" ? [{ name: "Validate current PR ledger", conclusion: "failure" }] : [],
+    steps: name === "ledger" ? [{ name: "Validate current PR ledger", conclusion: "failure" }]
+      : name === "verify" ? [{ name: "Re-classify soc-client-only and prove reusable Source CI for a ledger-only final", status: "completed", conclusion: "success" },
+        { name: "Validate product lanes / ios / native-true", status: "completed", conclusion: "success" },
+        { name: "Require current ledger", status: "completed", conclusion: "failure" }] : [],
   }));
   assert.equal(classifySourceCi(run, jobs, scope).green, true);
+  assert.equal(classifySourceCi(run, jobs.map((job) => job.name === "verify" ? { ...job, steps: [] } : job), scope).green, false);
+  assert.equal(classifySourceCi(run, [...jobs, { ...jobs[0], name: "unclassified", id: 99, conclusion: "skipped" }], scope).green, false);
+  assert.doesNotThrow(() => validateProductResults({ ...gate, LEDGER_RESULT: "failure" }));
+  assert.throws(() => validateResults({ ...gate, LEDGER_RESULT: "failure" }));
+  assert.throws(() => validateProductResults({ ...gate, CORE_RESULT: "success", LEDGER_RESULT: "failure" }));
   for (const conclusion of ["cancelled", "skipped", "failure"]) {
     assert.equal(classifySourceCi(run, jobs.map((job) => job.name === "ios-native" ? { ...job, conclusion } : job), scope).green, false);
   }

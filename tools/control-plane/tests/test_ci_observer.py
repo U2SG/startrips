@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import unittest
+from pathlib import Path
 from unittest import mock
 import test_control_plane as fixture
 import ci_observer as ci
@@ -130,6 +131,90 @@ class ClassificationCases(unittest.TestCase):
     def test_no_matching_head_does_not_use_another_run(self):
         with mock.patch.object(ci, 'api', return_value={'workflow_runs': [run(head_sha=fixture.B)]}):
             self.assertEqual('missing', ci.latest_ci('synthetic/project', fixture.A)['state'])
+
+
+class ScopedProductCases(unittest.TestCase):
+    def test_expected_shards_match_the_product_matrix(self):
+        bundle = Path(__file__).resolve().parents[1]
+        root = bundle.parents[1] if bundle.parent.name == 'tools' else bundle / 'startrips'
+        matrix = json.loads((root / '.github/browser-matrix.json').read_bytes())['include']
+        self.assertCountEqual(ci.WEB_SHARDS, [row['name'] for row in matrix])
+
+    def rows(self, mode='ios', native=True, final=False):
+        # #772 at a450c7c5: GitHub reports a single literal placeholder for the unexpanded matrix.
+        flag = 'true' if native else 'false'
+        web = mode in {'mixed', 'full'}
+        steps = [{'name': ci.SCOPE_STEP, 'status': 'completed', 'conclusion': 'success'},
+                 {'name': ci.PRODUCT_PROOF + mode + ' / native-' + flag, 'status': 'completed', 'conclusion': 'success'},
+                 {'name': ci.LEDGER_STEP, 'status': 'completed', 'conclusion': 'success' if final else 'failure'}]
+        values = [job('ledger', 1, 'success' if final else 'failure'), job('verify', 2, 'success' if final else 'failure', steps=steps),
+                  job('quick-checks', 3), job('core', 4, 'success' if web else 'skipped'),
+                  job('keepsake-render', 5, 'success' if web else 'skipped'),
+                  job('ios-native', 6, 'success' if native and mode not in {'ledger-final', 'soc'} else 'skipped')]
+        if not web:
+            return values + [job(ci.MATRIX_PLACEHOLDER, 7, 'skipped')]
+        shards = ci.WEB_SHARDS if mode == 'full' else {'shell-composer'}
+        return values + [job('browser-qa / ' + s, 10 + i) for i, s in enumerate(sorted(shards))]
+
+    def test_proved_source_scopes_and_reused_final(self):
+        for mode, native in [('ios', True), ('docs', False), ('mixed', True), ('full', False), ('full', True), ('soc', False)]:
+            with self.subTest(mode=mode, native=native):
+                result = ci.classify(run(), self.rows(mode, native), missing_ledger=True)
+                self.assertTrue(result['source_green'])
+                self.assertFalse(result['final_green'])
+                self.assertEqual({'ledger', 'verify'}, {j['name'] for j in result['failures']})
+        for native in [True, False]:
+            result = ci.classify(run(conclusion='success'), self.rows('ledger-final', native, final=True))
+            self.assertFalse(result['source_green'])
+            self.assertTrue(result['final_green'])
+            self.assertEqual([], result['failures'])
+        # Exact push CI may itself run only the relevant lanes, without a missing PR ledger.
+        self.assertTrue(ci.classify(run(conclusion='success'), self.rows('ios', True, final=True))['final_green'])
+
+    def test_missing_failed_malformed_duplicate_and_contradictory_proofs(self):
+        rows = self.rows()
+        steps = rows[1]['steps']
+        bad = [[], 'malformed', ['malformed'], steps[1:], steps[:-1], steps + [steps[1]],
+               [steps[0], {**steps[1], 'conclusion': 'skipped'}, steps[2]],
+               [{**steps[0], 'conclusion': 'failure'}, *steps[1:]],
+               [steps[0], {**steps[1], 'name': ci.PRODUCT_PROOF + 'docs / native-true'}, steps[2]],
+               [steps[0], {**steps[1], 'name': ci.PRODUCT_PROOF + 'unknown'}, steps[2]],
+               steps + [{'name': 'Other failed check', 'status': 'completed', 'conclusion': 'failure'}],
+               steps + [{'name': 'Unexpected cancellation', 'status': 'completed', 'conclusion': 'cancelled'}]]
+        for invalid in bad:
+            with self.subTest(steps=invalid):
+                changed = [rows[0], {**rows[1], 'steps': invalid}, *rows[2:]]
+                self.assertFalse(ci.classify(run(), changed, True)['source_green'])
+        rows = self.rows('ledger-final', True, final=True)
+        rows[1]['steps'] = []
+        self.assertFalse(ci.classify(run(conclusion='success'), rows)['final_green'])
+
+    def test_raw_shape_must_fully_match_proof(self):
+        rows = self.rows()
+        for bad in [rows[:-1], rows[:5] + rows[6:], rows + [job('new-lane', 70, 'skipped')],
+                    rows[:-1] + [job('browser-qa / unexpected', 75, 'skipped')],
+                    [r for r in self.rows('full', False) if r['name'] != 'browser-qa / story-media'],
+                    self.rows('mixed') + [job('browser-qa / auth-media', 80)],
+                    [r for r in self.rows('full', True) if r['name'] != 'ios-native']]:
+            with self.subTest(names=[r['name'] for r in bad]):
+                self.assertFalse(ci.classify(run(), bad, True)['source_green'])
+        for name, terminal in [('quick-checks','skipped'),('core','success'),('ios-native','cancelled'),
+                               ('ios-native','failure'), ('ios-native',None), ('keepsake-render','cancelled'),
+                               ('ledger','cancelled'), ('verify','cancelled')]:
+            with self.subTest(name=name, conclusion=terminal):
+                broken = [{**r, 'conclusion': terminal} if r['name'] == name else r for r in rows]
+                self.assertFalse(ci.classify(run(), broken, True)['source_green'])
+        self.assertFalse(ci.classify(run(), rows)['source_green'])
+        self.assertFalse(ci.classify(run(conclusion='cancelled'), rows, True)['source_green'])
+
+    def test_only_superseded_matrix_cancellation_is_ignored(self):
+        rows = self.rows('full', False)
+        old = job(ci.MATRIX_PLACEHOLDER, 7, 'cancelled', run_attempt=1)
+        with_old = rows + [old]
+        self.assertFalse(ci.classify(run(run_attempt=2), with_old, True)['source_green'])
+        retried = [{**r, 'run_attempt': 2} if r['name'].startswith('browser-qa / ') else r for r in rows]
+        self.assertTrue(ci.classify(run(run_attempt=2), retried + [old], True)['source_green'])
+        self.assertFalse(ci.classify(run(run_attempt=2), retried + [{**old, 'run_attempt': 2}], True)['source_green'])
 
 
 class FingerprintCases(fixture.SyntheticOne):
