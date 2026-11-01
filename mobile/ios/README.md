@@ -79,11 +79,22 @@ commits, renames, push ranges, missing SHAs, runner gates, Source reuse and
 failure/cancellation propagation. Existing exact-main, ledger and all 42 browser
 command assertions remain in CI. No heavy local tests/builds were run.
 
-## Acceptance still required
+## Build and verify the integrated app
 
-1. Run current Source CI and fix any Swift, TypeScript, bundling or simulator
-   failures. Static inspection and `node --check` are not test passes.
-2. Integrate B and extend the one simulator flow to its real Story view.
+From the repository root on macOS, install the pinned pnpm dependencies with
+`pnpm install --frozen-lockfile`. Open `mobile/ios/Startrips.xcodeproj`,
+select the shared `Startrips` scheme and an iPhone, then Run. The build phase
+bundles the same Atlas scene used by the app. For owner upload recovery, deploy
+the server change in #769 before distributing the iPhone build. It adds the
+authenticated `GET /api/uploads/{id}/status` endpoint used after interruptions.
+
+1. Run `bash mobile/ios/ci-test.sh` from the repository root on an Apple runner.
+   The package and the app share one simulator. Results are written under
+   `artifacts/ios/`.
+2. The UI tests enter the bundled Atlas and the normal Story destination. They
+   exercise point selection, the time slider, interrupted and completed paging,
+   Journey Playback and return to Atlas. Photo fixtures use a test-only session
+   and private navigation defaults for each launch.
 3. On a real iPhone, use an authorized owner Atlas: globe → consecutive Route
    Points → real Story → Back; verify the same selected point. Drag both globe
    and detail map, wait about 20 seconds, check centering and hidden connectors.
