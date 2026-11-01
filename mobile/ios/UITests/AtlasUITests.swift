@@ -15,9 +15,9 @@ final class AtlasUITests: XCTestCase {
         XCTAssertEqual(storyTitle.label, "海岸旅程")
         XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10))
         app.buttons["story.close"].tap()
-        let start = app.webViews.buttons["起点"]
+        let start = app.webViews.switches["起点"]
         XCTAssertTrue(start.waitForExistence(timeout: 10)); start.tap()
-        let coast = app.webViews.buttons["海岸"]
+        let coast = app.webViews.switches["海岸"]
         XCTAssertTrue(coast.waitForExistence(timeout: 10)); coast.tap()
         XCTAssertTrue(app.staticTexts["earth-rendered"].waitForExistence(timeout: 30))
         let earth = app.webViews.firstMatch
@@ -44,7 +44,7 @@ final class AtlasUITests: XCTestCase {
         XCTAssertEqual(storyTitle.label, "海岸旅程")
         XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10))
         app.buttons["story.close"].tap()
-        XCTAssertTrue(app.webViews.buttons["海岸"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.webViews.switches["海岸"].waitForExistence(timeout: 10))
         XCUIDevice.shared.press(.home)
         app.activate()
         XCTAssertTrue(app.navigationBars["图谱"].waitForExistence(timeout: 10))

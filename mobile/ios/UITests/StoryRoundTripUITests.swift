@@ -12,7 +12,7 @@ final class StoryRoundTripUITests: XCTestCase {
         XCTAssertTrue(close.waitForExistence(timeout: 10))
         close.tap()
 
-        let point = app.webViews.buttons["起点"]
+        let point = app.webViews.switches["起点"]
         XCTAssertTrue(point.waitForExistence(timeout: 10))
         point.tap()
         app.webViews.buttons["打开故事：起点"].firstMatch.tap()
