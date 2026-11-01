@@ -69,8 +69,6 @@ export function acceptsSnapshot(current: Snapshot | null, next: Snapshot) {
   return !current || current.scopeId !== next.scopeId || next.revision >= current.revision;
 }
 
-export const CAMERA_RESUME_MS = 20_000;
-
 declare global {
   interface Window {
     atlasNative: { receive: (json: string) => void };

@@ -9,6 +9,15 @@ final class AppTests: XCTestCase {
         return try JSONDecoder().decode(BridgeFixture.self, from: Data(contentsOf: url))
     }
 
+    func testSnapshotScriptTreatsTitlesAndNotesAsData() throws {
+        let json = #"{"title":"海岸');throw Error('x')//","note":"\"quotes\"\nnew line"}"#
+        let script = try AtlasSceneView.receiveScript(json)
+        let prefix = "window.atlasNative.receive("
+        XCTAssertTrue(script.hasPrefix(prefix)); XCTAssertTrue(script.hasSuffix(")"))
+        let literal = script.dropFirst(prefix.count).dropLast()
+        XCTAssertEqual(try JSONDecoder().decode(String.self, from: Data(literal.utf8)), json)
+    }
+
     func testSharedFixtureAndStaleBridgeMessages() throws {
         let fixture = try fixture()
         XCTAssertNoThrow(try validateSceneEvent(fixture.event, snapshot: fixture.snapshot))
@@ -51,6 +60,19 @@ final class AppTests: XCTestCase {
         XCTAssertTrue(recreated.path.isEmpty)
         recreated.install([], identity: "guest-new", access: .guest, earthExperience: "default")
         XCTAssertTrue(recreated.journeys.isEmpty)
+    }
+
+    func testDetailedMapKeepsFirstPartySpriteAndTileTemplatesOnTheLocalOrigin() throws {
+        let upstream = try XCTUnwrap(URL(string: "https://atlas.example/"))
+        let input = ["tiles": ["https://atlas.example/api/mapstyle?path=tiles/{z}/{x}/{y}"],
+                     "sprites": ["https://atlas.example/api/mapstyle/sprite/base"],
+                     "external": ["https://atlas.example.invalid/api/mapstyle?path=private"]]
+        let data = try JSONEncoder().encode(input)
+        let output = try BundledSceneServer.localizeMapDocument(data, from: upstream, port: 4321)
+        let fields = try JSONDecoder().decode([String: [String]].self, from: output)
+        XCTAssertEqual(fields["tiles"], ["http://127.0.0.1:4321/api/mapstyle?path=tiles/{z}/{x}/{y}"])
+        XCTAssertEqual(fields["sprites"], ["http://127.0.0.1:4321/api/mapstyle/sprite/base"])
+        XCTAssertEqual(fields["external"], input["external"])
     }
 
     func testLocalResourceAndHTTPSBoundaries() throws {

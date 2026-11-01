@@ -15,7 +15,7 @@ final class StoryRoundTripUITests: XCTestCase {
         let point = app.webViews.buttons["起点"]
         XCTAssertTrue(point.waitForExistence(timeout: 10))
         point.tap()
-        app.webViews.buttons["打开故事"].firstMatch.tap()
+        app.webViews.buttons["打开故事：起点"].firstMatch.tap()
 
         let first = app.descendants(matching: .any).matching(identifier: "story.photo.asset-fixture").firstMatch
         let second = app.descendants(matching: .any).matching(identifier: "story.photo.asset-second").firstMatch

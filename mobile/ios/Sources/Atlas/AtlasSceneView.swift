@@ -5,6 +5,12 @@ struct AtlasSceneView: UIViewRepresentable {
     @ObservedObject var router: AppRouter
     let mapOrigin: URL?
 
+    static func receiveScript(_ json: String) throws -> String {
+        // JSONEncoder produces one quoted data literal, including escaping untrusted text.
+        let literal = String(decoding: try JSONEncoder().encode(json), as: UTF8.self)
+        return "window.atlasNative.receive(" + literal + ")"
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator(router: router) }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -59,10 +65,11 @@ struct AtlasSceneView: UIViewRepresentable {
             let encoder = JSONEncoder()
             encoder.outputFormatting = .sortedKeys
             guard loaded, let data = try? encoder.encode(router.snapshot), let json = String(data: data, encoding: .utf8) else { return }
-            guard json != lastJSON else { return }
+            guard json != lastJSON, let script = try? AtlasSceneView.receiveScript(json) else { return }
             lastJSON = json
-            view?.callAsyncJavaScript("window.atlasNative.receive(snapshot)", arguments: ["snapshot": json], in: nil, in: .page) { [weak self] result in
-                if case .failure = result { Task { @MainActor in self?.router.error = "地球通信中断，请刷新。" } }
+            // This page-world API does not link the missing iOS 18.5 simulator Swift overlay.
+            view?.evaluateJavaScript(script) { [weak self] _, error in
+                if error != nil { Task { @MainActor in self?.router.error = "地球通信中断，请刷新。" } }
             }
         }
 
