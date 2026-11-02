@@ -53,6 +53,23 @@ struct StoryDestination: View {
         }
     }
 
+    // Return through one scope-checked production boundary. The media projection
+    // can already contain an imported or moved asset while Atlas still holds
+    // its older scene; only the matching active request may commit that asset.
+    @MainActor static func completeReturn(_ result: MediaReturn, target: StoryHandoff,
+                                          scope: String, session: AtlasSession, router: AppRouter) {
+        guard session.activeIdentity == scope,
+              let active = router.path.last,
+              active.journeyId == target.journeyId, active.requestId == target.requestId,
+              active.requestId == result.requestId, active.revision == result.revision else { return }
+        if let journeyID = result.journeyId, journeyID == active.journeyId {
+            router.commitStoryPosition(StoryHandoff(journeyId: journeyID, routePointId: result.routePointId,
+                assetId: result.assetId, revision: result.revision, requestId: result.requestId),
+                mediaJourney: session.mediaJourneys[journeyID])
+        }
+        router.returnToAtlas()
+    }
+
     // The media projection can advance between the Atlas tap and the first
     // destination task. Synchronize the real Router before StoryModel starts,
     // or close and playback would reject the initial intent as stale.
@@ -101,15 +118,10 @@ struct StoryDestination: View {
                 }, onBeat: { beat in
                     guard let point = beat.routePointId, session.activeIdentity == scope else { return }
                     router.commitStoryPosition(StoryHandoff(journeyId: journey.id, routePointId: point,
-                        assetId: beat.asset?.id, revision: journey.revision, requestId: target.requestId))
+                        assetId: beat.asset?.id, revision: journey.revision, requestId: target.requestId),
+                        mediaJourney: session.mediaJourneys[journey.id])
                 }, onReturn: { result in
-                    guard router.path.last?.requestId == result.requestId, router.path.last?.revision == result.revision,
-                          session.activeIdentity == scope else { return }
-                    if let id = result.journeyId {
-                        router.commitStoryPosition(StoryHandoff(journeyId: id, routePointId: result.routePointId,
-                            assetId: result.assetId, revision: result.revision, requestId: target.requestId))
-                    }
-                    router.returnToAtlas()
+                    Self.completeReturn(result, target: target, scope: scope, session: session, router: router)
                 })
             feature = model; failure = nil
             model.importer?.recover()

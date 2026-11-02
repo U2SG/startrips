@@ -337,7 +337,8 @@ final class AtlasSession: ObservableObject {
                 ? Self.preservingNewerMedia(media, previous: mediaJourneys)
                 : media
             activeIdentity = identity; mediaJourneys = projected
-            router.install(payload.journeys, identity: identity, access: isGuest ? .guest : .owner, earthExperience: preference)
+            router.install(payload.journeys, identity: identity, access: isGuest ? .guest : .owner,
+                           earthExperience: preference, mediaJourneys: projected)
         } catch {
             guard generation == request && refreshID == observation else { return }
             activeIdentity = nil; mediaJourneys = [:]
