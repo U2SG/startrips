@@ -26,7 +26,7 @@ final class AtlasSession: ObservableObject {
     private(set) var origin: URL?
     private(set) var guestToken: String?
     private(set) var activeIdentity: String?
-    private(set) var mediaJourneys: [String: MediaJourney] = [:]
+    @Published private(set) var mediaJourneys: [String: MediaJourney] = [:]
     private(set) var generation = UUID()
     private var refreshID = UUID()
     @Published private(set) var cookieStore = WKWebsiteDataStore.nonPersistent()
@@ -265,7 +265,23 @@ final class AtlasSession: ObservableObject {
         return result
     }
 
-    func replaceMedia(_ journey: MediaJourney) { mediaJourneys[journey.id] = journey }
+    // A delayed server response must not overwrite a newer import/move result.
+    // Only keys present in the authoritative response survive, so deletions still apply.
+    static func preservingNewerMedia(_ incoming: [String: MediaJourney],
+                                    previous: [String: MediaJourney]) -> [String: MediaJourney] {
+        var merged = incoming
+        for (id, candidate) in incoming {
+            if let known = previous[id], known.revision > candidate.revision {
+                merged[id] = known
+            }
+        }
+        return merged
+    }
+
+    func replaceMedia(_ journey: MediaJourney) {
+        guard (mediaJourneys[journey.id]?.revision ?? Int.min) <= journey.revision else { return }
+        mediaJourneys[journey.id] = journey
+    }
 
     #if DEBUG
     func installFixture(_ data: Data, scope: String) throws {
@@ -315,7 +331,12 @@ final class AtlasSession: ObservableObject {
                       identity == "\(origin.absoluteString)|\(verified.user.id)|\(organization)" else { throw SessionFailure.unavailable(401) }
             }
             guard generation == request && refreshID == observation else { return }
-            activeIdentity = identity; mediaJourneys = media
+            // Preserve later local media mutations only inside the same identity.
+            // A different account/share always receives its own fresh projection.
+            let projected = activeIdentity == identity
+                ? Self.preservingNewerMedia(media, previous: mediaJourneys)
+                : media
+            activeIdentity = identity; mediaJourneys = projected
             router.install(payload.journeys, identity: identity, access: isGuest ? .guest : .owner, earthExperience: preference)
         } catch {
             guard generation == request && refreshID == observation else { return }

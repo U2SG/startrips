@@ -60,6 +60,8 @@ struct AtlasRootView: View {
                     VStack {
                         if router.rendered { Text("地球已就绪").accessibilityIdentifier("earth-rendered") }
                         Text(String(router.completedFocusCount)).accessibilityIdentifier("atlas.focus.count")
+                        Text(router.selection?.routePointId ?? "").accessibilityIdentifier("atlas.selection.point")
+                        Text(router.selection?.assetId ?? "").accessibilityIdentifier("atlas.selection.asset")
                     }
                 }
                 #endif

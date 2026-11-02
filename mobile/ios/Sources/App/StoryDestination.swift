@@ -26,14 +26,53 @@ struct StoryDestination: View {
         .task(id: target.requestId) { build() }
         .onChange(of: session.mediaJourneys[target.journeyId]) { _, fresh in
             guard let fresh, let feature, fresh != feature.story.journey else { return }
-            do { try feature.updateJourney(fresh) } catch { feature.invalidate(); router.returnToAtlas() }
+            Self.reconcileRefresh(fresh, feature: feature, target: target, router: router)
         }
     }
 
+    // A late refresh can outlive its Story destination. Never let request A
+    // dismiss or invalidate request B after navigation has already moved on.
+    @MainActor static func reconcileRefresh(_ fresh: MediaJourney, feature: NativeMediaFeatureModel,
+                                            target: StoryHandoff, router: AppRouter) {
+        guard let active = router.path.last,
+              active.journeyId == target.journeyId, active.requestId == target.requestId,
+              feature.story.intent.requestId == target.requestId else { return }
+        // An older Atlas response can be published after a newer local media
+        // update. It is not an invalid Story request and must not dismiss it.
+        guard fresh.revision >= feature.story.intent.revision else { return }
+        do {
+            try feature.updateJourney(fresh)
+        } catch {
+            // Only the destination that rejected this refresh may return to Atlas.
+            // In particular, a superseded callback must not pop a replacement Story.
+            guard let stillActive = router.path.last,
+                  stillActive.journeyId == target.journeyId,
+                  stillActive.requestId == target.requestId else { return }
+            feature.invalidate()
+            router.returnToAtlas()
+        }
+    }
+
+    // The media projection can advance between the Atlas tap and the first
+    // destination task. Synchronize the real Router before StoryModel starts,
+    // or close and playback would reject the initial intent as stale.
+    @MainActor static func authorizeInitialStory(_ journey: MediaJourney,
+                                                 target: StoryHandoff, router: AppRouter) -> StoryHandoff? {
+        guard let active = router.path.last,
+              active.journeyId == target.journeyId, active.requestId == target.requestId,
+              journey.id == target.journeyId, journey.revision >= active.revision,
+              let projected = router.current(active),
+              router.acceptStoryRevision(journeyId: active.journeyId, requestId: active.requestId,
+                                         from: active.revision, to: journey.revision) else { return nil }
+        return StoryHandoff(journeyId: active.journeyId, routePointId: projected.routePointId,
+                            assetId: projected.assetId, revision: journey.revision, requestId: active.requestId)
+    }
+
     @MainActor private func build() {
-        guard let current = router.current(target), let scope = session.activeIdentity,
-              let journey = session.mediaJourneys[current.journeyId] else {
-            failure = "旅程已不可用，请返回图谱刷新。"; return
+        guard let scope = session.activeIdentity,
+              let journey = session.mediaJourneys[target.journeyId],
+              let current = Self.authorizeInitialStory(journey, target: target, router: router) else {
+            failure = "旅程已不可用或正在刷新，请返回图谱重试。"; return
         }
         let intent = StoryIntent(journeyId: current.journeyId, routePointId: current.routePointId,
                                  assetId: current.assetId, revision: journey.revision, requestId: target.requestId)
@@ -50,7 +89,11 @@ struct StoryDestination: View {
                     return StoryIntent(journeyId: live?.journeyId ?? "", routePointId: live?.routePointId,
                         assetId: live?.assetId, revision: live?.revision ?? -1, requestId: live?.requestId ?? "")
                 }, latestJourney: { session.mediaJourneys[current.journeyId] },
-                readJourney: { try await session.mediaJourney(current.journeyId, scope: scope) },
+                acceptRevision: { old, new in
+                    guard session.activeIdentity == scope else { return false }
+                    return router.acceptStoryRevision(journeyId: current.journeyId, requestId: target.requestId,
+                                                      from: old, to: new)
+                }, readJourney: { try await session.mediaJourney(current.journeyId, scope: scope) },
                 refresh: { source, destination in
                     guard session.activeIdentity == scope else { return }
                     session.replaceMedia(source); session.replaceMedia(destination)

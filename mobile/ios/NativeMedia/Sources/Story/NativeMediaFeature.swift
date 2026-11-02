@@ -14,17 +14,20 @@ import UIKit
     private let directory: URL
     private let readJourney: () async throws -> MediaJourney
     private let refresh: (MediaJourney, MediaJourney) -> Void
+    private let acceptRevision: (Int, Int) -> Bool
     private var soundtrackRead: (() async throws -> URL)?
 
     public init(journey: MediaJourney, intent: StoryIntent, session: ScopedMediaSession,
                 directory: URL, uploader: PartUploading,
                 currentIntent: @escaping () -> StoryIntent,
                 latestJourney: @escaping () -> MediaJourney?,
+                acceptRevision: @escaping (Int, Int) -> Bool = { _, _ in true },
                 readJourney: @escaping () async throws -> MediaJourney,
                 refresh: @escaping (MediaJourney, MediaJourney) -> Void,
                 onBeat: @escaping (PlaybackBeat) -> Void = { _ in },
                 onReturn: @escaping (MediaReturn) -> Void) throws {
         self.session = session; self.directory = directory; self.readJourney = readJourney; self.refresh = refresh
+        self.acceptRevision = acceptRevision
         // Audio remains an ordinary scoped asset read. A guest's projected Journey cannot
         // acquire an owner-only soundtrack through a separate endpoint.
         let readSoundtrack: (() async throws -> URL)? = journey.soundtrack.map { asset in { try await session.mediaURL(asset.id) } }
@@ -65,6 +68,10 @@ import UIKit
 
     public func updateJourney(_ journey: MediaJourney) throws {
         guard journey != story.journey else { return }
+        // Keep the exact Router request in sync for both local import/move and
+        // externally refreshed Journeys; StoryModel uses it to authorize beats
+        // and return transitions.
+        guard acceptRevision(story.intent.revision, journey.revision) else { throw MediaFailure.staleIntent }
         let oldSoundtrack = story.journey.soundtrack?.id
         try story.update(journey)
         let newSoundtrack = journey.soundtrack?.id

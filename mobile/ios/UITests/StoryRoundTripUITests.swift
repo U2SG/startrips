@@ -36,5 +36,9 @@ extension AtlasUITests {
         XCTAssertTrue(app.buttons["story.play"].waitForExistence(timeout: 5))
         close.tap()
         XCTAssertTrue(point.waitForExistence(timeout: 10))
+        // Assert the real Atlas navigation state after native Story returns,
+        // not only that a selectable point is rendered again.
+        XCTAssertEqual(app.staticTexts["atlas.selection.point"].label, "point-a")
+        XCTAssertEqual(app.staticTexts["atlas.selection.asset"].label, "asset-fixture")
     }
 }
