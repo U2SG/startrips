@@ -37,8 +37,8 @@
     },
     {
       "name": "route-candidates",
-      "suites": "|route-candidates|playback-manual-camera|playback-prefetch|playback-continuity|brand-signature-motion|",
-      "commands": "route-candidates::pnpm qa:route-candidates\nplayback-manual-camera::pnpm qa:playback-manual-camera\nplayback-prefetch::pnpm qa:playback-prefetch\nplayback-continuity::pnpm qa:playback-continuity\nbrand-signature-motion::pnpm qa:brand-signature-motion"
+      "suites": "|route-candidates|playback-manual-camera|playback-prefetch|playback-continuity|brand-signature-motion|route-point-batch|",
+      "commands": "route-candidates::pnpm qa:route-candidates\nplayback-manual-camera::pnpm qa:playback-manual-camera\nplayback-prefetch::pnpm qa:playback-prefetch\nplayback-continuity::pnpm qa:playback-continuity\nbrand-signature-motion::pnpm qa:brand-signature-motion\nroute-point-batch::pnpm qa:route-point-batch"
     }
   ]
 }
