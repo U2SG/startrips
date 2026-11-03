@@ -166,11 +166,11 @@ describe("private daily journal API and PostgreSQL", () => {
     expect((await replay.json()).journal).toEqual(updated);
   });
   it("routes journal AI through the existing standard model adapter, not a custom document endpoint", async () => {
-    const prior = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel };
-    Object.assign(serverConfig, { intentDriver: "http-model", intentBaseUrl: "https://model.example.test/v1", intentApiKey: "mock-only-key", intentModel: "mock-model" });
+    const prior = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel, journalModel: serverConfig.journalModel, journalTimeoutMs: serverConfig.journalTimeoutMs };
+    Object.assign(serverConfig, { intentDriver: "http-model", intentBaseUrl: "https://model.example.test/v1", intentApiKey: "mock-only-key", intentModel: "simple-mock", journalModel: "mock-model" });
     const upstream = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
       const body = JSON.parse(init!.body as string);
-      const document = JSON.parse(body.messages[1].content);
+      const document = JSON.parse(body.messages.filter((m: any) => m.role === "user").at(-1).content);
       return Response.json({ choices: [{ message: { content: JSON.stringify({ suggestions: document.chapters.flatMap((c: { events: {eventId:string;source:string}[] }) => c.events.map((e) => ({ eventId:e.eventId, text:e.source, questions:[], background:"" }))) }) } }] });
     });
     try {
@@ -180,6 +180,7 @@ describe("private daily journal API and PostgreSQL", () => {
       expect(upstream).toHaveBeenCalledTimes(1);
       expect(upstream.mock.calls[0][0]).toBe("https://model.example.test/v1/chat/completions");
       const body = JSON.parse(upstream.mock.calls[0][1]!.body as string);
+      expect(body.model).toBe("mock-model");
       expect(body.response_format.json_schema.strict).toBe(true);
       expect(body).not.toHaveProperty("document");
       expect(await (await request()).json()).toEqual(before);
@@ -189,22 +190,33 @@ describe("private daily journal API and PostgreSQL", () => {
     const j = await createJourneyForAtlas(owner.atlasId, owner.userId, { title: "工具预览", startedOn: "2027-05-01", endedOn: null, note: "", lightColor: "#ffffff", routePoints: [{ label: "星桥酒店", regionContext: "虚构城，中心路", latitude: 10, longitude: 20, isStop: true, occurredAt: null }] });
     const cs = previewJournalImport("2027-05-01\n实际：她在虚构城入住星桥-酒店。" + " Quiet.".repeat(13000), "2027-05-01");
     await writeDailyJournal(j!.id, owner.atlasId, 0, cs);
-    const prior = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel };
-    Object.assign(serverConfig, { intentDriver: "http-model", intentBaseUrl: "https://model.example.test/v1", intentApiKey: "mock-only", intentModel: "mock" });
+    const prior = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel, journalModel: serverConfig.journalModel, journalTimeoutMs: serverConfig.journalTimeoutMs };
+    Object.assign(serverConfig, { intentDriver: "http-model", intentBaseUrl: "https://model.example.test/v1", intentApiKey: "mock-only", intentModel: "simple-mock", journalModel: "mock" });
+    let changeModelDuringCall = true;
     const upstream = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
       expect(url).toBe("https://model.example.test/v1/chat/completions");
       const body = JSON.parse(init!.body as string), name = body.tool_choice.function.name;
+      expect(body.model).toBe("mock");
       const args = name === "search_hotels" ? { stays: [{ eventId: cs[0].events[0].id, evidence: "在虚构城入住星桥-酒店", name: "星桥-酒店", area: "虚构城" }], questions: [] }
         : { matches: [{ eventId: cs[0].events[0].id, candidateId: `existing:${j!.routePoints[0].id}` }] };
-      return Response.json({ choices: [{ message: { tool_calls: [{ type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
+      if (changeModelDuringCall) Object.assign(serverConfig, { journalModel: "different-journal-model" });
+      return Response.json({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ id: `mock-${randomUUID()}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
     });
     const preview = (cookie: string) => app.request(`${TEST_ORIGIN}/api/journeys/${j!.id}/journal/hotels/preview`, { method: "POST", headers: authHeaders(cookie), body: "{}" });
     try {
       expect((await preview(other.cookie)).status).toBe(404); expect(upstream).not.toHaveBeenCalled();
+      const changed = await preview(owner.cookie);
+      expect(changed.status).toBe(409);
+      expect((await changed.json()).error).toBe("JOURNAL_PROVIDER_CHANGED");
+      expect(upstream).toHaveBeenCalledTimes(1);
+      changeModelDuringCall = false;
+      Object.assign(serverConfig, { journalModel: "mock" });
+      upstream.mockClear();
       const response = await preview(owner.cookie); expect(response.status).toBe(200);
       const { preview: proposed } = await response.json();
       expect(proposed.hotels[0]).toMatchObject({ existingPointId: j!.routePoints[0].id, sourceName: "星桥-酒店", label: "星桥酒店", evidence: cs[0].events[0].source });
       expect(proposed.token.length).toBeLessThan(100000);
+      expect(verifyHotelPlan(proposed.token, serverConfig.authSecret)?.provider).toEqual({ baseUrl: expect.stringMatching(/^provider:[a-f0-9]{64}$/), model: "mock" });
       expect(upstream).toHaveBeenCalledTimes(2);
       const [row] = await db.select().from(journeyJournals).where(eq(journeyJournals.journeyId, j!.id));
       expect(row.revision).toBe(1); expect(row.chapters).toEqual(cs);
@@ -336,7 +348,7 @@ describe("private daily journal API and PostgreSQL", () => {
       const body = JSON.parse(init!.body as string), name = body.tool_choice.function.name;
       const args = name === "search_hotels" ? { stays: cs[0].events.map(e => ({ eventId: e.id, evidence: `checked in at ${sourceName} in York`, name: sourceName, area: "York" })), questions: [] }
         : { matches: cs[0].events.map(e => ({ eventId: e.id, candidateId: chosen })) };
-      return Response.json({ choices: [{ message: { tool_calls: [{ type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
+      return Response.json({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ id: `mock-${randomUUID()}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
     });
     const search = { search: vi.fn(async () => [{ id: chosen, label, context: "York, UK", countryCode: "GB", latitude: 10, longitude: 20 }]), reverse: vi.fn(), driver: "mock", attribution: null } as LocationSearch;
     const result = await proposeJournalHotels(journal!, j!.routePoints, { baseUrl: "https://model.example.test/v1", apiKey: "mock-only", model: "mock", timeoutMs: 1000, fetcher }, search);

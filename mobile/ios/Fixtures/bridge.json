@@ -1,0 +1,77 @@
+{
+  "snapshot": {
+    "version": 1,
+    "scopeId": "synthetic-atlas-scope",
+    "revision": 7,
+    "access": "owner",
+    "earthExperience": "default",
+    "active": true,
+    "selection": {
+      "journeyId": "journey-fixture",
+      "routePointId": "point-a",
+      "assetId": null,
+      "revision": 3,
+      "requestId": "00000000-0000-4000-8000-000000000001"
+    },
+    "journeys": [
+      {
+        "id": "journey-fixture",
+        "title": "海岸旅程",
+        "startedOn": "2025-01-01",
+        "endedOn": "2025-01-02",
+        "note": "Synthetic bridge fixture",
+        "lightColor": "#d6b58c",
+        "revision": 3,
+        "routePoints": [
+          {
+            "id": "point-a",
+            "latitude": 1.3,
+            "longitude": 103.8,
+            "label": "起点",
+            "isStop": true,
+            "occurredAt": null
+          },
+          {
+            "id": "point-b",
+            "latitude": 1.4,
+            "longitude": 104,
+            "label": "海岸",
+            "isStop": false,
+            "occurredAt": null,
+            "note": "沿着海岸走。"
+          }
+        ],
+        "media": [
+          {
+            "id": "asset-fixture",
+            "routePointId": "point-a",
+            "fileName": "synthetic.jpg",
+            "mimeType": "image/jpeg",
+            "bytes": 10,
+            "journeyId": "journey-fixture",
+            "sortOrder": 0
+          },
+          {
+            "id": "asset-second",
+            "routePointId": "point-a",
+            "fileName": "second.png",
+            "mimeType": "image/jpeg",
+            "bytes": 10,
+            "journeyId": "journey-fixture",
+            "sortOrder": 1
+          }
+        ]
+      }
+    ]
+  },
+  "event": {
+    "version": 1,
+    "kind": "story",
+    "scopeId": "synthetic-atlas-scope",
+    "requestId": "00000000-0000-4000-8000-000000000002",
+    "revision": 7,
+    "journeyId": "journey-fixture",
+    "routePointId": "point-a",
+    "assetId": "asset-fixture"
+  }
+}

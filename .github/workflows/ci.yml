@@ -88,6 +88,10 @@ jobs:
       ledger_only_final: ${{ steps.final-plan.outputs.ledger_only_final }}
       soc_client_only: ${{ steps.final-plan.outputs.soc_client_only }}
       source_sha: ${{ steps.final-plan.outputs.source_sha }}
+      ios: ${{ steps.scope.outputs.native }}
+      web: ${{ steps.scope.outputs.web }}
+      mode: ${{ steps.scope.outputs.mode }}
+      browser_matrix: ${{ steps.scope.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -101,29 +105,38 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node scripts/ci-ledger-fast-path.mjs
+      - name: Select validation from the whole change before allocating runners
+        id: scope
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before || '' }}
+        run: node scripts/ci-ios-scope.mjs
+      - name: Test native scope and runner gates
+        run: node --test scripts/ci-ios-scope.node-test.mjs
       - name: Test CI execution and fail-closed gate contracts
         run: node --test scripts/ci-validation-results.node-test.mjs scripts/ci-browser-runtime.node-test.mjs scripts/ci-latency.node-test.mjs scripts/ci-ledger-fast-path.node-test.mjs scripts/ci-ensure-ffmpeg.node-test.mjs scripts/ci-ensure-cjk-font.node-test.mjs scripts/qa-chapter-rail-observation.node-test.mjs scripts/browser-qa-shard.node-test.mjs
       - uses: pnpm/action-setup@v6
-        if: steps.final-plan.outputs.ledger_only_final != 'true'
+        if: steps.final-plan.outputs.ledger_only_final != 'true' && steps.scope.outputs.web == 'true'
         with:
           version: 10.17.1
       - uses: actions/setup-node@v7
-        if: steps.final-plan.outputs.ledger_only_final != 'true'
+        if: steps.final-plan.outputs.ledger_only_final != 'true' && steps.scope.outputs.web == 'true'
         with:
           node-version: 22
           cache: pnpm
       - name: Install dependencies
-        if: steps.final-plan.outputs.ledger_only_final != 'true'
+        if: steps.final-plan.outputs.ledger_only_final != 'true' && steps.scope.outputs.web == 'true'
         timeout-minutes: 3
         run: pnpm install --frozen-lockfile
       - name: Typecheck
-        if: steps.final-plan.outputs.ledger_only_final != 'true'
+        if: steps.final-plan.outputs.ledger_only_final != 'true' && steps.scope.outputs.web == 'true'
         run: pnpm typecheck
 
   core:
     name: core
     needs: quick-checks
-    if: needs.quick-checks.outputs.ledger_only_final != 'true' && needs.quick-checks.outputs.soc_client_only != 'true'
+    if: needs.quick-checks.outputs.ledger_only_final != 'true' && needs.quick-checks.outputs.soc_client_only != 'true' && needs.quick-checks.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -197,7 +210,7 @@ jobs:
   keepsake-render:
     name: keepsake-render
     needs: quick-checks
-    if: needs.quick-checks.outputs.ledger_only_final != 'true' && needs.quick-checks.outputs.soc_client_only != 'true'
+    if: needs.quick-checks.outputs.ledger_only_final != 'true' && needs.quick-checks.outputs.soc_client_only != 'true' && needs.quick-checks.outputs.web == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -279,7 +292,7 @@ jobs:
   browser-qa:
     name: browser-qa / ${{ matrix.name }}
     needs: quick-checks
-    if: needs.quick-checks.outputs.ledger_only_final != 'true' && needs.quick-checks.outputs.soc_client_only != 'true'
+    if: needs.quick-checks.outputs.ledger_only_final != 'true' && needs.quick-checks.outputs.soc_client_only != 'true' && needs.quick-checks.outputs.web == 'true'
     runs-on: ubuntu-24.04
     env:
       QA_PLAYWRIGHT_VERSION: '1.55.0'
@@ -288,74 +301,7 @@ jobs:
     timeout-minutes: 55
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: auth-media
-            suites: "|earth-dive|login-media|composer-playback-preview|"
-            commands: |
-              earth-dive::pnpm qa:earth-dive
-              login-media::QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:login-v3 && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-controls && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-reclassification
-              composer-playback-preview::pnpm qa:composer-playback-preview
-          - name: story-media
-            suites: "|story-media-handoff|story-note-beats|media-motion-lab|soundtrack-ducking|journey-book-3d-turns|"
-            commands: |
-              story-media-handoff::pnpm qa:story-media-handoff
-              story-note-beats::pnpm qa:story-note-beats
-              media-motion-lab::pnpm qa:media-motion-lab
-              soundtrack-ducking::pnpm qa:soundtrack-ducking
-              journey-book-3d-turns::pnpm qa:journey-book-3d-turns
-          - name: labels-recovery
-            suites: "|city-label-anchoring|recovery-surfaces|mobile-native|journey-book-3d-last-spread|journey-book-3d-phone|journal-hotels|journal-streaming|"
-            commands: |
-              city-label-anchoring::pnpm qa:city-label-anchoring
-              recovery-surfaces::pnpm qa:recovery-surfaces
-              mobile-native::pnpm qa:mobile-native
-              journey-book-3d-last-spread::pnpm qa:journey-book-3d-last-spread
-              journey-book-3d-phone::pnpm qa:journey-book-3d-phone
-              journal-hotels::pnpm qa:journal-hotels
-              journal-streaming::pnpm qa:journal-streaming
-          - name: reveal-share
-            suites: "|cover-reveal-opening|cover-reveal|owner-share|playback-map-bridge|"
-            commands: |
-              cover-reveal-opening::pnpm qa:cover-reveal-opening
-              cover-reveal::pnpm qa:cover-reveal
-              owner-share::pnpm qa:owner-share
-              playback-map-bridge::pnpm qa:playback-map-bridge
-          - name: shell-composer
-            suites: "|post-login|mobile-contract|story-presentation-navigation|mobile-classic-views|composer-route-points|composer-mobile-ia|entry-boundaries|final-acceptance|"
-            commands: |
-              post-login::pnpm qa:post-login-controls
-              mobile-contract::pnpm qa:mobile-contract
-              story-presentation-navigation::pnpm qa:story-presentation-navigation
-              mobile-classic-views::pnpm qa:mobile-classic-views
-              composer-route-points::pnpm qa:composer-route-points
-              composer-mobile-ia::pnpm qa:composer-mobile-ia
-              entry-boundaries::pnpm qa:entry-boundaries
-              final-acceptance::pnpm qa:final-acceptance
-          - name: globe-context
-            suites: "|globe-focus-chrome|globe-render-budget|recorded-track-lod|route-point-context|attention-hierarchy|"
-            commands: |
-              globe-focus-chrome::pnpm qa:globe-focus-chrome
-              globe-render-budget::pnpm qa:globe-render-budget
-              recorded-track-lod::pnpm qa:recorded-track-lod
-              route-point-context::pnpm qa:route-point-context
-              attention-hierarchy::pnpm qa:attention-hierarchy
-          - name: route-home-share
-            suites: "|route-anchoring|guest-share|home-base-suggestion|home-base-context|journey-book-3d-drags|"
-            commands: |
-              route-anchoring::pnpm qa:route-anchoring
-              guest-share::pnpm qa:guest-share
-              home-base-suggestion::pnpm qa:home-base-suggestion
-              home-base-context::pnpm qa:home-base-context
-              journey-book-3d-drags::pnpm qa:journey-book-3d-drags
-          - name: route-candidates
-            suites: "|route-candidates|playback-manual-camera|playback-prefetch|playback-continuity|brand-signature-motion|"
-            commands: |
-              route-candidates::pnpm qa:route-candidates
-              playback-manual-camera::pnpm qa:playback-manual-camera
-              playback-prefetch::pnpm qa:playback-prefetch
-              playback-continuity::pnpm qa:playback-continuity
-              brand-signature-motion::pnpm qa:brand-signature-motion
+      matrix: ${{ fromJSON(needs.quick-checks.outputs.browser_matrix) }}
 
     steps:
       - uses: actions/checkout@v7
@@ -571,6 +517,43 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  ios-native:
+    name: ios-native
+    needs: quick-checks
+    if: needs.quick-checks.outputs.ledger_only_final != 'true' && needs.quick-checks.outputs.soc_client_only != 'true' && needs.quick-checks.outputs.ios == 'true'
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.17.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check bridge types and shared decoding fixture
+        run: |
+          pnpm exec tsc -p mobile/ios/Scene/tsconfig.json
+          pnpm exec vitest run mobile/ios/Scene --maxWorkers=1
+      - uses: actions/cache@v6
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData/Startrips
+          key: ios-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mobile/ios/Startrips.xcodeproj/**', 'pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: ios-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mobile/ios/Startrips.xcodeproj/**', 'pnpm-lock.yaml') }}-
+      - name: Build and run XCTest and one simulator XCUITest
+        run: bash mobile/ios/ci-test.sh
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: ios-native-${{ github.run_attempt }}
+          path: artifacts/ios/*.xcresult
+          if-no-files-found: error
+          retention-days: 7
+
   verify:
     name: verify
     runs-on: ubuntu-latest
@@ -586,6 +569,7 @@ jobs:
       - core
       - browser-qa
       - keepsake-render
+      - ios-native
     steps:
       - uses: actions/checkout@v7
         with:
@@ -599,10 +583,10 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          PUSH_BEFORE_SHA: ${{ github.event.before || '' }}
         run: node scripts/ci-ledger-fast-path.mjs
-      - name: Require every validation lane to pass
+      - name: "Validate product lanes / ${{ steps.source-proof.outputs.ledger_only_final == 'true' && 'ledger-final' || steps.source-proof.outputs.soc_client_only == 'true' && 'soc' || steps.source-proof.outputs.scope_mode }} / native-${{ steps.source-proof.outputs.scope_native }}"
         env:
-          LEDGER_RESULT: ${{ needs.ledger.result }}
           QUICK_CHECKS_RESULT: ${{ needs.quick-checks.result }}
           CORE_RESULT: ${{ needs.core.result }}
           BROWSER_QA_RESULT: ${{ needs.browser-qa.result }}
@@ -612,5 +596,14 @@ jobs:
           CLASSIFIED_SOC_ONLY: ${{ needs.quick-checks.outputs.soc_client_only }}
           PROVEN_SOC_ONLY: ${{ steps.source-proof.outputs.soc_client_only }}
           SOURCE_PROOF_OUTCOME: ${{ steps.source-proof.outcome }}
-        run: node scripts/ci-validation-results.mjs
+          CLASSIFIED_SCOPE: ${{ needs.quick-checks.outputs.mode }}
+          PROVEN_SCOPE: ${{ steps.source-proof.outputs.scope_mode }}
+          CLASSIFIED_IOS: ${{ needs.quick-checks.outputs.ios }}
+          PROVEN_IOS: ${{ steps.source-proof.outputs.scope_native }}
+          IOS_RESULT: ${{ needs.ios-native.result }}
+        run: node scripts/ci-validation-results.mjs --product-only
+      - name: Require current ledger
+        env:
+          LEDGER_RESULT: ${{ needs.ledger.result }}
+        run: test "$LEDGER_RESULT" = success
 

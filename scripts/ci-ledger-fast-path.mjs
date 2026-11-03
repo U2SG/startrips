@@ -5,6 +5,7 @@ import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { validatePrLedger } from "./pr-history.mjs";
+import { readScope } from "./ci-ios-scope.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -101,7 +102,7 @@ function isSupersededMatrixPlaceholder(job, jobs, run) {
     && other.run_attempt > job.run_attempt);
 }
 
-export function classifySourceCi(run, jobs) {
+export function classifySourceCi(run, jobs, scope = null) {
   if (!run || run.status !== "completed" || !["success", "failure"].includes(run.conclusion)) {
     return { green: false, reason: "source-run-not-terminal" };
   }
@@ -122,6 +123,14 @@ export function classifySourceCi(run, jobs) {
   }
   const browser = effective.filter((job) => job.name.startsWith("browser-qa / "));
   if (browser.length < 1) return { green: false, reason: "source-browser-jobs-missing" };
+  if (scope) {
+    if (!names.has("quick-checks") || !names.has("ios-native")) return { green: false, reason: "source-scope-jobs-missing" };
+    const expected = new Set(["ledger", "verify", "quick-checks", "core", "keepsake-render", "ios-native",
+      ...(scope.web ? scope.shards.map((shard) => `browser-qa / ${shard}`) : ["browser-qa / ${{ matrix.name }}"])]);
+    if (names.size !== expected.size || [...expected].some((name) => !names.has(name))) {
+      return { green: false, reason: "source-job-set-does-not-match-scope" };
+    }
+  }
   if (effective.some((job) => job.status !== "completed")) {
     return { green: false, reason: "source-jobs-not-terminal" };
   }
@@ -141,8 +150,25 @@ export function classifySourceCi(run, jobs) {
     return { green: false, reason: "source-verify-not-expected-pre-seal-failure" };
   }
 
+  if (scope) {
+    const steps = verify.steps ?? [];
+    const proofName = `Validate product lanes / ${scope.mode} / native-${scope.native}`;
+    const proofs = steps.filter((step) => step.name?.startsWith("Validate product lanes / "));
+    const independent = steps.filter((step) => step.name === "Re-classify soc-client-only and prove reusable Source CI for a ledger-only final");
+    const failures = steps.filter((step) => !["success", "skipped"].includes(step.conclusion));
+    if (independent.length !== 1 || independent[0].status !== "completed" || independent[0].conclusion !== "success"
+        || proofs.length !== 1 || proofs[0].name !== proofName || proofs[0].status !== "completed" || proofs[0].conclusion !== "success"
+        || failures.length !== 1 || failures[0].name !== "Require current ledger" || failures[0].status !== "completed"
+        || failures[0].conclusion !== "failure") {
+      return { green: false, reason: "source-lane-proof-not-established" };
+    }
+  }
   const product = effective.filter((job) => !["ledger", "verify"].includes(job.name));
-  const failedProduct = product.filter((job) => job.conclusion !== "success");
+  const failedProduct = product.filter((job) => {
+    const skipped = scope && ((job.name === "ios-native" && !scope.native)
+      || (!scope.web && (job.name === "core" || job.name === "keepsake-render" || job.name.startsWith("browser-qa / "))));
+    return job.conclusion !== (skipped ? "skipped" : "success");
+  });
   if (failedProduct.length) {
     return { green: false, reason: `source-product-not-green:${failedProduct.map((job) => job.name).join(",")}` };
   }
@@ -246,6 +272,9 @@ async function main() {
   const baseSha = process.env.PR_BASE_SHA || "";
   const { GITHUB_REPOSITORY: repo, PR_HEAD_REF: branch, GITHUB_TOKEN: token } = process.env;
   const source = { repo, branch, token };
+  const scope = readScope();
+  output("scope_mode", scope.mode);
+  output("scope_native", String(scope.native));
 
   if (process.env.SOURCE_WORKFLOW === "soc.yml") {
     // Fail closed by rebuilding: anything short of proof runs the full soc lanes.
@@ -299,7 +328,10 @@ async function main() {
     return;
   }
 
-  const proof = await proveSourceCi({ ...source, sourceSha: plan.sourceSha });
+  // Derive the Source plan from its whole PR diff, never from the final ledger delta.
+  const sourceScope = readScope({ ...process.env, PR_HEAD_SHA: plan.sourceSha });
+  const proof = await proveSourceCi({ ...source, sourceSha: plan.sourceSha,
+    classify: (run, jobs) => classifySourceCi(run, jobs, sourceScope) });
   console.log(`ledger-only final reuses Source CI run ${proof.runId} attempt ${proof.attempt}: ${proof.url}`);
 }
 

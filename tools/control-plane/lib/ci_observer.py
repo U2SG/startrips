@@ -43,6 +43,87 @@ def effective_jobs(jobs):
     return list(latest.values())
 
 
+PRODUCT_PROOF = 'Validate product lanes / '
+SCOPE_STEP = 'Re-classify soc-client-only and prove reusable Source CI for a ledger-only final'
+LEDGER_STEP = 'Require current ledger'
+MATRIX_PLACEHOLDER = 'browser-qa / ${{ matrix.name }}'
+WEB_SHARDS = {'auth-media', 'story-media', 'labels-recovery', 'reveal-share',
+              'shell-composer', 'globe-context', 'route-home-share', 'route-candidates'}
+
+
+def classify_scoped(run, effective, missing_ledger):
+    """The independently recomputed scope and the actual GitHub jobs must both agree."""
+    by_name = {job['name']: job for job in effective}
+    verify = by_name['verify']
+    steps = verify.get('steps', [])
+    raw_failures = [j for j in effective if j.get('conclusion') != 'success']
+    rejected = {'state': 'failure', 'source_green': False, 'final_green': False, 'failures': raw_failures}
+    if not isinstance(steps, list) or any(not isinstance(s, dict) for s in steps):
+        return rejected
+    proofs = [s for s in steps if str(s.get('name', '')).startswith(PRODUCT_PROOF)]
+    if not proofs:
+        # Legacy full-product and pre-iOS ledger-final evidence keeps its original interpretation.
+        quick_steps = by_name.get('quick-checks', {}).get('steps') or []
+        scoped_workflow = 'ios-native' in by_name or any(isinstance(s, dict) and s.get('name') ==
+            'Select validation from the whole change before allocating runners' for s in quick_steps)
+        if (any(s.get('name') == LEDGER_STEP for s in steps)
+                or (scoped_workflow and ('ios-native' not in by_name or any(j.get('conclusion') == 'skipped' for j in effective)))):
+            return rejected
+        return None
+    if len(proofs) != 1:
+        return rejected
+    match = re.fullmatch(re.escape(PRODUCT_PROOF) + r'(ios|docs|mixed|full|soc|ledger-final) / native-(true|false)', proofs[0]['name'])
+    if not match:
+        return rejected
+    mode, native_flag = match.groups()
+
+    def completed_step(name, conclusion):
+        entries = [s for s in steps if s.get('name') == name]
+        return len(entries) == 1 and entries[0].get('status') == 'completed' and entries[0].get('conclusion') == conclusion
+
+    if not completed_step(SCOPE_STEP, 'success') or not completed_step(proofs[0]['name'], 'success'):
+        return rejected
+    native = native_flag == 'true'
+    if (mode in {'ios', 'mixed'} and not native) or (mode == 'docs' and native):
+        return rejected
+    web = mode in {'full', 'mixed'}
+    expected = {'quick-checks': 'success', 'core': 'success' if web else 'skipped',
+                'keepsake-render': 'success' if web else 'skipped',
+                'ios-native': 'success' if native and mode not in {'ledger-final', 'soc'} else 'skipped'}
+    if web:
+        shards = WEB_SHARDS if mode == 'full' else {'shell-composer'}
+        expected.update({'browser-qa / ' + name: 'success' for name in shards})
+        # An older cancelled, unexpanded matrix can survive a partial Actions rerun.
+        old = by_name.get(MATRIX_PLACEHOLDER)
+        if (old and old.get('conclusion') == 'cancelled' and isinstance(old.get('run_attempt'), int)
+                and old['run_attempt'] < run.get('run_attempt', 0)
+                and any(by_name.get('browser-qa / ' + name, {}).get('run_attempt', 0) > old['run_attempt'] for name in shards)):
+            del by_name[MATRIX_PLACEHOLDER]
+    else:
+        expected[MATRIX_PLACEHOLDER] = 'skipped'
+    if set(by_name) != set(expected) | {'ledger', 'verify'}:
+        return rejected
+    if any(by_name[name].get('conclusion') != conclusion for name, conclusion in expected.items()):
+        return rejected
+
+    ledger = by_name['ledger']
+    ledger_steps = ledger.get('steps', [])
+    if not isinstance(ledger_steps, list) or any(not isinstance(s, dict) for s in ledger_steps):
+        return rejected
+    invalid_steps = lambda values: [s.get('name') for s in values if s.get('conclusion') not in {'success', 'skipped'}]
+    gap = (missing_ledger and ledger.get('conclusion') == 'failure'
+           and invalid_steps(ledger_steps) == ['Validate current PR ledger']
+           and any(s.get('name') == 'Validate current PR ledger' and s.get('conclusion') == 'failure' for s in ledger_steps))
+    verify_failed_steps = invalid_steps(steps)
+    if (gap and mode != 'ledger-final' and run.get('conclusion') == 'failure' and verify.get('conclusion') == 'failure'
+            and completed_step(LEDGER_STEP, 'failure') and verify_failed_steps == [LEDGER_STEP]):
+        return {'state': 'failure', 'source_green': True, 'final_green': False, 'failures': [ledger, verify]}
+    if (not missing_ledger and run.get('conclusion') == 'success' and ledger.get('conclusion') == 'success'
+            and verify.get('conclusion') == 'success' and completed_step(LEDGER_STEP, 'success') and not verify_failed_steps):
+        return {'state': 'success', 'source_green': mode != 'ledger-final', 'final_green': True, 'failures': []}
+    return rejected
+
+
 def classify(run, jobs, missing_ledger=False):
     effective = effective_jobs(jobs)
     names = {j['name'] for j in effective}
@@ -59,6 +140,9 @@ def classify(run, jobs, missing_ledger=False):
         return {'state': 'pending', 'source_green': False, 'final_green': False, 'failures': []}
     if run.get('conclusion') not in {'success', 'failure'}:
         return {'state': 'unknown', 'source_green': False, 'final_green': False, 'failures': []}
+    scoped = classify_scoped(run, effective, missing_ledger)
+    if scoped is not None:
+        return scoped
     raw_failures = [j for j in effective if j.get('conclusion') != 'success']
     product = [j for j in effective if j['name'] not in {'ledger', 'verify'}]
     product_green = bool(product) and all(j.get('conclusion') == 'success' for j in product)
@@ -91,7 +175,8 @@ def classify(run, jobs, missing_ledger=False):
     )
 
     failed_steps = [step.get('name') for step in ledger.get('steps', []) if step.get('conclusion') == 'failure']
-    expected_ledger_gap = missing_ledger and failed_steps == ['Validate current PR ledger']
+    expected_ledger_gap = (missing_ledger and run.get('conclusion') == 'failure' and ledger.get('conclusion') == 'failure'
+                           and verify.get('conclusion') == 'failure' and failed_steps == ['Validate current PR ledger'])
     source_green = product_green and (not raw_failures or (expected_ledger_gap and all(j['name'] in {'ledger', 'verify'} for j in raw_failures)))
     failures = [j for j in raw_failures
                 if not (ledger_only_final and j.get('conclusion') == 'skipped' and legal_final_skip(j))]
