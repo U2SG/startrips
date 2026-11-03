@@ -2,6 +2,18 @@ import XCTest
 
 final class AtlasUITests: XCTestCase {
     @MainActor
+    func testFirstLaunchUsesStartripsServerWithoutUserConfiguration() throws {
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.buttons["登录并选择图谱"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["打开图谱"].exists)
+        XCTAssertTrue(app.textFields["分享链接"].exists)
+        XCTAssertFalse(app.textFields["https://your-startrips.example"].exists)
+        XCTAssertFalse(app.textFields["调试服务器（仅开发版）"].exists)
+        XCTAssertFalse(app.alerts["图谱暂不可用"].exists)
+    }
+
+    @MainActor
     func testGlobePointSelectionAndStoryRoundTrip() async throws {
         continueAfterFailure = false
         let app = XCUIApplication()

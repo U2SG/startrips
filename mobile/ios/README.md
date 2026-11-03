@@ -9,8 +9,11 @@ Install the repository's pinned pnpm dependencies before opening
 `bundle-scene.sh`; CI uses that same build path. Select a signing team for a real
 iPhone. No signing identity or deployment credential is committed.
 
-Enter the HTTPS origin of an existing Startrips deployment. Sign in and select
-the Atlas in the separate private WebView, then return to the native Atlas.
+The installed app connects directly to the first-party HTTPS deployment at
+`https://106.53.130.142`; ordinary users never configure a server.
+Only an explicit DEBUG launch with `-allow-server-override` shows a developer
+test-origin field. Sign in and select the Atlas in the private WebView, then
+return to the native Atlas.
 Guest entry accepts the existing `/share#<token>` link. Tokens remain in native
 session memory; guest requests carry only the bearer header and never owner
 cookies. Switching access modes clears native navigation and the local scene.

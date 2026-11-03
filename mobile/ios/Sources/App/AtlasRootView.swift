@@ -17,8 +17,14 @@ struct AtlasRootView: View {
                 } else {
                     Form {
                         Section("我的图谱") {
-                            TextField("https://your-startrips.example", text: $session.originText)
-                                .textContentType(.URL).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            Text("登录 Startrips，查看已经保存的旅程。")
+                            #if DEBUG
+                            // Only explicit developer launches expose a server override.
+                            if ProcessInfo.processInfo.arguments.contains("-allow-server-override") {
+                                TextField("调试服务器（仅开发版）", text: $session.originText)
+                                    .textContentType(.URL).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            }
+                            #endif
                             Button("登录并选择图谱") {
                                 do { try session.configureOwner(); router.clear(); session.loginPresented = true }
                                 catch { router.error = error.localizedDescription }
@@ -106,7 +112,8 @@ struct AtlasRootView: View {
                 return
             }
             #endif
-            if !session.originText.isEmpty { connectOwner() }
+            // A fixed server address does not prove the owner is signed in.
+            // First launch shows login / share rather than issuing a 401 Atlas request.
         }
         .onChange(of: phase) { _, value in
             if value == .active && connected { refresh() }
