@@ -111,7 +111,12 @@ try {
       assert(state.uploads === 0 && state.applies === 0, "File input must create a draft, not silently commit");
 
       if (scenario === "auto") {
-        await review.getByRole("checkbox", { name: "仅本批允许自动整理" }).check();
+        const optIn = review.getByRole("checkbox", { name: "仅本批允许自动整理" });
+        assert(!(await optIn.isChecked()), "A new upload batch must default to no auto authorization");
+        // An eligible opt-in submits immediately and unmounts the checkbox. Click
+        // the actual consent control; .check() incorrectly waits for the now-gone
+        // element to remain checked, even after the auto-submit click succeeds.
+        await optIn.click();
       } else {
         if (scenario === "manual") {
           // Consent is never enough for unlocated or manually edited groups.
