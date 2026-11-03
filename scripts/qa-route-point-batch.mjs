@@ -201,6 +201,14 @@ try {
           "Every file must be assigned to its reviewed existing Route Point");
         const exit = page.getByRole("button", { name: "退出旅程故事" });
         if (mobile) {
+          // The production mobile editor intentionally leaves Manage before
+          // dismissing Story. Verify both transitions via keyboard controls.
+          const done = page.locator(".journey-story__mobile-manage-bar")
+            .getByRole("button", { name: "完成" });
+          await tabTo(page, done, "finish mobile Manage");
+          await page.keyboard.press("Enter");
+          assert(await page.locator(".journey-story").getAttribute("data-mobile-mode") === "viewer",
+            "Mobile editor must return to the viewer before Story can close");
           await tabTo(page, exit, "exit Story");
           await page.keyboard.press("Enter");
         } else await exit.click();

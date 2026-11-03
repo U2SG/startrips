@@ -192,6 +192,12 @@ jobs:
         run: pnpm test
       - name: Build
         run: pnpm build
+      - name: Prepare hosted Chrome for JourneyStory core acceptance
+        env:
+          QA_PLAYWRIGHT_VERSION: '1.55.0'
+        run: |
+          pnpm exec playwright-core install ffmpeg
+          node scripts/ci-browser-runtime.mjs
       - name: Standard JourneyStory batch upload lifecycle (core)
         # #337 requires a mounted file-input-to-undo integration in core, not
         # only helper tests or a browser QA shard. Reuse the exact production
@@ -201,7 +207,6 @@ jobs:
           RUN_ST116_CORE_UPLOAD_QA: '1'
         run: |
           set -euo pipefail
-          node scripts/ci-browser-runtime.mjs
           pnpm exec vite --host 127.0.0.1 --port 4173 --strictPort > /tmp/startrips-route-batch-vite.log 2>&1 &
           VITE_PID=$!
           trap 'kill $VITE_PID 2>/dev/null || true' EXIT
