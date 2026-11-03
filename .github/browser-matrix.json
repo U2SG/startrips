@@ -1,0 +1,44 @@
+{
+  "include": [
+    {
+      "name": "auth-media",
+      "suites": "|earth-dive|login-media|composer-playback-preview|",
+      "commands": "earth-dive::pnpm qa:earth-dive\nlogin-media::QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:login-v3 && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-controls && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-reclassification\ncomposer-playback-preview::pnpm qa:composer-playback-preview"
+    },
+    {
+      "name": "story-media",
+      "suites": "|story-media-handoff|story-note-beats|media-motion-lab|soundtrack-ducking|journey-book-3d-turns|",
+      "commands": "story-media-handoff::pnpm qa:story-media-handoff\nstory-note-beats::pnpm qa:story-note-beats\nmedia-motion-lab::pnpm qa:media-motion-lab\nsoundtrack-ducking::pnpm qa:soundtrack-ducking\njourney-book-3d-turns::pnpm qa:journey-book-3d-turns"
+    },
+    {
+      "name": "labels-recovery",
+      "suites": "|city-label-anchoring|recovery-surfaces|mobile-native|journey-book-3d-last-spread|journey-book-3d-phone|journal-hotels|journal-streaming|",
+      "commands": "city-label-anchoring::pnpm qa:city-label-anchoring\nrecovery-surfaces::pnpm qa:recovery-surfaces\nmobile-native::pnpm qa:mobile-native\njourney-book-3d-last-spread::pnpm qa:journey-book-3d-last-spread\njourney-book-3d-phone::pnpm qa:journey-book-3d-phone\njournal-hotels::pnpm qa:journal-hotels\njournal-streaming::pnpm qa:journal-streaming"
+    },
+    {
+      "name": "reveal-share",
+      "suites": "|cover-reveal-opening|cover-reveal|owner-share|playback-map-bridge|",
+      "commands": "cover-reveal-opening::pnpm qa:cover-reveal-opening\ncover-reveal::pnpm qa:cover-reveal\nowner-share::pnpm qa:owner-share\nplayback-map-bridge::pnpm qa:playback-map-bridge"
+    },
+    {
+      "name": "shell-composer",
+      "suites": "|post-login|mobile-contract|story-presentation-navigation|mobile-classic-views|composer-route-points|composer-mobile-ia|entry-boundaries|final-acceptance|",
+      "commands": "post-login::pnpm qa:post-login-controls\nmobile-contract::pnpm qa:mobile-contract\nstory-presentation-navigation::pnpm qa:story-presentation-navigation\nmobile-classic-views::pnpm qa:mobile-classic-views\ncomposer-route-points::pnpm qa:composer-route-points\ncomposer-mobile-ia::pnpm qa:composer-mobile-ia\nentry-boundaries::pnpm qa:entry-boundaries\nfinal-acceptance::pnpm qa:final-acceptance"
+    },
+    {
+      "name": "globe-context",
+      "suites": "|globe-focus-chrome|globe-render-budget|recorded-track-lod|route-point-context|attention-hierarchy|",
+      "commands": "globe-focus-chrome::pnpm qa:globe-focus-chrome\nglobe-render-budget::pnpm qa:globe-render-budget\nrecorded-track-lod::pnpm qa:recorded-track-lod\nroute-point-context::pnpm qa:route-point-context\nattention-hierarchy::pnpm qa:attention-hierarchy"
+    },
+    {
+      "name": "route-home-share",
+      "suites": "|route-anchoring|guest-share|home-base-suggestion|home-base-context|journey-book-3d-drags|",
+      "commands": "route-anchoring::pnpm qa:route-anchoring\nguest-share::pnpm qa:guest-share\nhome-base-suggestion::pnpm qa:home-base-suggestion\nhome-base-context::pnpm qa:home-base-context\njourney-book-3d-drags::pnpm qa:journey-book-3d-drags"
+    },
+    {
+      "name": "route-candidates",
+      "suites": "|route-candidates|playback-manual-camera|playback-prefetch|playback-continuity|brand-signature-motion|",
+      "commands": "route-candidates::pnpm qa:route-candidates\nplayback-manual-camera::pnpm qa:playback-manual-camera\nplayback-prefetch::pnpm qa:playback-prefetch\nplayback-continuity::pnpm qa:playback-continuity\nbrand-signature-motion::pnpm qa:brand-signature-motion"
+    }
+  ]
+}

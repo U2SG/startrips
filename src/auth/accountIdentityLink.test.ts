@@ -5,6 +5,7 @@ import {
   beginProviderBind,
   bindableProviders,
   finishProviderBind,
+  nativeGoogleLoginUrl,
   readProviderBindReturn,
   socialSignInErrorText,
   unlinkProviderIdentity,
@@ -42,6 +43,15 @@ const REVERIFY = "/api/account-identities/reverify/password";
 const INTENTS = "/api/account-identities/link-intents";
 const AUTHORIZE = "/api/account-identities/providers/google/authorize";
 const COMPLETE = "/api/account-identities/link/complete";
+
+describe("native Google login", () => {
+  it("only intercepts the owner sheet and preserves registration intent", () => {
+    expect(nativeGoogleLoginUrl("Mobile Safari", false)).toBeNull();
+    expect(nativeGoogleLoginUrl("StartripsOwnerLogin/10", true)).toBeNull();
+    expect(nativeGoogleLoginUrl("Mobile StartripsOwnerLogin/1", false)).toBe("startrips-google://login/sign-in");
+    expect(nativeGoogleLoginUrl("Mobile StartripsOwnerLogin/1", true)).toBe("startrips-google://login/sign-up");
+  });
+});
 
 describe("bindableProviders", () => {
   it("offers only a configured provider that is not already bound", () => {
