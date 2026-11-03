@@ -70,6 +70,25 @@ async function journey(atlasId: string, title: string) {
   return result;
 }
 
+/** Server records carry Date instances; Story receives serialized owner JSON.
+ * Keep real Journey/Route Point identities and revision while constructing
+ * the exact browser-facing contract used by the upload draft. */
+function asStoryJourney(record: Awaited<ReturnType<typeof journey>>): Journey {
+  return {
+    id: record.id, atlasId: record.atlasId, title: record.title,
+    startedOn: "2026-09-01", endedOn: null, note: "", lightColor: "#6c8fb7",
+    revision: record.revision, createdByUserId: `user-${record.atlasId}`,
+    createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z",
+    media: [],
+    routePoints: record.routePoints.map((point) => ({
+      id: point.id, journeyId: record.id, sortOrder: point.sortOrder,
+      latitude: point.latitude, longitude: point.longitude, label: point.label,
+      isStop: point.isStop, occurredAt: point.occurredAt?.toISOString() ?? null,
+      createdAt: point.createdAt.toISOString(),
+    })),
+  };
+}
+
 async function asset(options: {
   journeyId: string;
   routePointId?: string | null;
@@ -248,6 +267,7 @@ describe("Route Point batch apply and undo", () => {
   });
   it("connects the standard Story upload proposal to manual and authorized auto receipts", async () => {
     const owner = await journey(atlasA, "Story upload and review");
+    const storyOwner = asStoryJourney(owner);
     const first = await asset({ journeyId: owner.id, sortOrder: 0 });
     const second = await asset({ journeyId: owner.id, sortOrder: 1 });
     const noGps = await asset({ journeyId: owner.id, sortOrder: 2 });
@@ -272,12 +292,12 @@ describe("Route Point batch apply and undo", () => {
         capturedAt: "2026-09-02T10:00:00+08:00", timezoneState: "offset-known" } },
       { status: "no-evidence" },
     ];
-    const draft = createRoutePointBatchDraft(proposal, owner as Journey, reads, 3);
+    const draft = createRoutePointBatchDraft(proposal, storyOwner, reads, 3);
     expect(draft.groups.flatMap((group) => group.fileIndexes).sort()).toEqual([0, 1, 2]);
     expect(draft.autoOrganize).toBe(false);
-    const optedButUnsafe = editRoutePointBatchDraft(draft, { type: "auto-organize", enabled: true }, owner as Journey);
+    const optedButUnsafe = editRoutePointBatchDraft(draft, { type: "auto-organize", enabled: true }, storyOwner);
     expect(shouldAutoSubmitRoutePointBatch(optedButUnsafe, { type: "auto-organize", enabled: true })).toBe(false);
-    const edited = editRoutePointBatchDraft(draft, { type: "rename", id: "new:one", value: "台北已核实" }, owner as Journey);
+    const edited = editRoutePointBatchDraft(draft, { type: "rename", id: "new:one", value: "台北已核实" }, storyOwner);
     const request = buildRoutePointBatchApplyBody(edited, [first.id, second.id, noGps.id], "story-manual");
     expect(request?.attachments.map(({ assetId }) => assetId)).toEqual([first.id, second.id]);
     if (!request) throw new Error("Story manual batch request missing");
@@ -294,6 +314,7 @@ describe("Route Point batch apply and undo", () => {
     expect((await getJourneyForAtlas(owner.id, atlasA))?.routePoints).toHaveLength(owner.routePoints.length);
 
     const automatic = await journey(atlasA, "Story authorized auto");
+    const storyAutomatic = asStoryJourney(automatic);
     const autoA = await asset({ journeyId: automatic.id, sortOrder: 0 });
     const autoB = await asset({ journeyId: automatic.id, sortOrder: 1 });
     const safePlan: MediaPlacementProposalPlan = {
@@ -301,9 +322,9 @@ describe("Route Point batch apply and undo", () => {
       matchExisting: [{ ...proposal.matchExisting[0], journeyId: automatic.id, routePointId: automatic.routePoints[0].id }],
       pendingConfirmation: [],
     };
-    const safeDraft = createRoutePointBatchDraft(safePlan, automatic as Journey, reads.slice(0, 2), 2);
+    const safeDraft = createRoutePointBatchDraft(safePlan, storyAutomatic, reads.slice(0, 2), 2);
     expect(canAutoOrganizeRoutePointBatch(safeDraft)).toBe(false);
-    const opted = editRoutePointBatchDraft(safeDraft, { type: "auto-organize", enabled: true }, automatic as Journey);
+    const opted = editRoutePointBatchDraft(safeDraft, { type: "auto-organize", enabled: true }, storyAutomatic);
     expect(shouldAutoSubmitRoutePointBatch(opted, { type: "auto-organize", enabled: true })).toBe(true);
     const autoRequest = buildRoutePointBatchApplyBody(opted, [autoA.id, autoB.id], "story-auto");
     if (!autoRequest) throw new Error("Story authorized auto request missing");
