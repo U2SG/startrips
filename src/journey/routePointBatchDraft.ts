@@ -251,6 +251,12 @@ export function canAutoOrganizeRoutePointBatch(draft: RoutePointBatchDraft) {
   );
 }
 
+/** One deliberate checkbox action may submit immediately, but editing a group or
+ * opting out can never trigger submission. This is per-draft, not a preference. */
+export function shouldAutoSubmitRoutePointBatch(draft: RoutePointBatchDraft, action: RoutePointReviewAction) {
+  return action.type === "auto-organize" && action.enabled && canAutoOrganizeRoutePointBatch(draft);
+}
+
 /** A planner refresh can update untouched candidates, never user-edited ones. */
 export function reconcileRoutePointBatchDraft(
   prior: RoutePointBatchDraft,
@@ -280,8 +286,8 @@ export type RoutePointBatchApplyBody = {
   attachments: Array<{ assetId: string; candidateId?: string; routePointId?: string; intentionalReuse: false }>;
 };
 
-/** Existing-only and unplaced groups use ordinary upload/move, not #336's
- * new-point-only atomic endpoint. Null means there are no new points to create. */
+/** Both newly created and existing-point-only placements use one atomic
+ * receipt-backed batch. Null means every group stays at Journey level. */
 export type RoutePointBatchAssetAssignment = {
   assetId: string;
   destination: RoutePointReviewGroup["destination"];
@@ -344,8 +350,8 @@ export function buildRoutePointBatchApplyBody(
       assetId: value.assetId, intentionalReuse: false as const,
       ...(value.candidateId ? { candidateId: value.candidateId } : { routePointId: value.routePointId! }),
     }));
-  if (!points.length) return null;
-  if (!/^[A-Za-z0-9._:-]{1,120}$/.test(operationId) || !attachments.length) {
+  if (!attachments.length) return null;
+  if (!/^[A-Za-z0-9._:-]{1,120}$/.test(operationId)) {
     throw new RangeError("Invalid or empty Route Point batch operation");
   }
   return { operationId, baseRevision: draft.scope.routeRevision, points, attachments };

@@ -75,7 +75,7 @@ function parseRoutePointBatchInput(body: Record<string, unknown>): JourneyRouteP
   if (!ROUTE_POINT_BATCH_OPERATION_PATTERN.test(operationId)
     || baseRevision === null
     || !Array.isArray(body.points)
-    || body.points.length < 1
+    // An existing-point-only batch is atomic and receipt-backed when attachments are present.
     || body.points.length > MAX_ROUTE_POINTS
     || !Array.isArray(body.attachments)
     || body.attachments.length < 1

@@ -8,6 +8,7 @@ import {
   editRoutePointBatchDraft,
   reconcileRoutePointBatchDraft,
   resolveRoutePointBatchAssetAssignments,
+  shouldAutoSubmitRoutePointBatch,
 } from "./routePointBatchDraft";
 
 const journey: Journey = {
@@ -166,6 +167,21 @@ describe("Route Point batch review draft / #337", () => {
     expect(canAutoOrganizeRoutePointBatch(edited)).toBe(false);
   });
 
+  it("executes per-batch authorized auto opt-in immediately, never manual or uncertain proposals", () => {
+    const pending = editRoutePointBatchDraft(draft(), { type: "auto-organize", enabled: true }, journey);
+    expect(shouldAutoSubmitRoutePointBatch(pending, { type: "auto-organize", enabled: true })).toBe(false);
+    const eligible = createRoutePointBatchDraft({ ...plan(), pendingConfirmation: [] }, journey, reads, 3);
+    const opted = editRoutePointBatchDraft(eligible, { type: "auto-organize", enabled: true }, journey);
+    expect(shouldAutoSubmitRoutePointBatch(opted, { type: "auto-organize", enabled: true })).toBe(true);
+    expect(shouldAutoSubmitRoutePointBatch(opted, { type: "auto-organize", enabled: false })).toBe(false);
+    expect(shouldAutoSubmitRoutePointBatch(opted, { type: "rename", id: opted.groups[0].id, value: "edit" })).toBe(false);
+    const manuallyEdited = editRoutePointBatchDraft(opted, {
+      type: "rename", id: opted.groups[1].id, value: "人工编辑",
+    }, journey);
+    expect(shouldAutoSubmitRoutePointBatch(manuallyEdited, { type: "auto-organize", enabled: true })).toBe(false);
+    expect(draft().autoOrganize).toBe(false); // no future batch preference
+  });
+
   it("preserves manual edits across a planner refresh, without accepting new batch or revision", () => {
     const initial = draft();
     const id = initial.groups[1].id;
@@ -195,6 +211,23 @@ describe("Route Point batch review draft / #337", () => {
       { assetId: "c", candidateId: "new:1-2", intentionalReuse: false },
     ]);
     expect(() => buildRoutePointBatchApplyBody(value, ["a", "", "c", "d"], "batch-one")).toThrow(/incomplete/);
+  });
+
+  it("builds one idempotent receipt-backed move-only request, leaving unplaced assets alone", () => {
+    const moveOnly = createRoutePointBatchDraft({
+      ...plan(), suggestNew: [],
+      pendingConfirmation: [{ ...plan().pendingConfirmation[0], fileIndexes: [1, 2, 3] }],
+    }, journey, reads, 4);
+    const request = buildRoutePointBatchApplyBody(moveOnly, ["a", "b", "c", "d"], "move-only");
+    expect(request).toEqual({
+      operationId: "move-only", baseRevision: 7, points: [],
+      attachments: [{ assetId: "a", routePointId: "point", intentionalReuse: false }],
+    });
+    const allUnplaced = createRoutePointBatchDraft({
+      ...plan(), matchExisting: [], suggestNew: [],
+      pendingConfirmation: [{ ...plan().pendingConfirmation[0], fileIndexes: [0, 1, 2, 3] }],
+    }, journey, reads, 4);
+    expect(buildRoutePointBatchApplyBody(allUnplaced, ["a", "b", "c", "d"], "no-op")).toBeNull();
   });
 
   it("collapses deduplicated multipart assets only when their destinations agree", () => {

@@ -161,9 +161,11 @@ import {
 import { RoutePointBatchReview } from "./RoutePointBatchReview";
 import {
   buildRoutePointBatchApplyBody,
+  canAutoOrganizeRoutePointBatch,
   createRoutePointBatchDraft,
   editRoutePointBatchDraft,
   resolveRoutePointBatchAssetAssignments,
+  shouldAutoSubmitRoutePointBatch,
   type RoutePointBatchDraft,
   type RoutePointReviewAction,
 } from "./routePointBatchDraft";
@@ -3743,17 +3745,27 @@ export function JourneyStory({
     if (!routePointBatchReview || !journey || routePointBatchBusy) return;
     try {
       const draft = editRoutePointBatchDraft(routePointBatchReview.draft, action, journey);
-      setRoutePointBatchReview({ ...routePointBatchReview, draft });
+      const nextReview = { ...routePointBatchReview, draft };
+      setRoutePointBatchReview(nextReview);
       setRoutePointBatchError(null);
+      // Per-batch opt-in is an action, not just a button label: only a fully
+      // verified, unedited, conflict-free proposal auto-submits immediately.
+      // Uncertain or manually edited groups remain in the explicit review UI.
+      if (shouldAutoSubmitRoutePointBatch(draft, action)) {
+        void confirmRoutePointBatchReview(nextReview, true);
+      }
     } catch (error) {
       setRoutePointBatchError(error instanceof Error ? error.message : "草案修改无效");
     }
   }
 
-  async function confirmRoutePointBatchReview() {
-    const review = routePointBatchReview;
+  async function confirmRoutePointBatchReview(
+    review = routePointBatchReview,
+    autoSubmit = false,
+  ) {
     if (!review || !manageMedia?.applyRoutePointBatch || !manageMedia.readRoutePointBatch
       || routePointBatchBusy || routePointBatchWriteOwnerRef.current) return;
+    if (autoSubmit && !canAutoOrganizeRoutePointBatch(review.draft)) return;
     if (review.draft.scope.journeyId !== journey.id
       || review.draft.scope.routeRevision !== journey.revision) {
       setRoutePointBatchError("旅程路线版本已变化，原草案不能自动套用；请重新选择文件核对。");
@@ -3806,9 +3818,8 @@ export function JourneyStory({
       // Multipart dedupe can make several files refer to the SAME asset.
       // A conflict is a draft-edit state, never an excuse for re-upload or
       // a silent last-writer-wins placement.
-      let assignments: ReturnType<typeof resolveRoutePointBatchAssetAssignments>;
       try {
-        assignments = resolveRoutePointBatchAssetAssignments(draft, ids);
+        resolveRoutePointBatchAssetAssignments(draft, ids);
       } catch (cause) {
         preserveDraftForReconciliation = true;
         setRoutePointBatchReview({ ...review, uploadedAssetIds: ids });
@@ -3820,9 +3831,10 @@ export function JourneyStory({
         return;
       }
       const hasNewPoints = draft.groups.some((group) => group.destination === "new");
-      if (hasNewPoints) {
-        const request = buildRoutePointBatchApplyBody(draft, ids, draft.scope.batchId);
-        if (!request) throw new Error("新的途径点尚未确认");
+      // ST-115's same atomic/idempotent operation now accepts zero new points;
+      // existing-point-only moves receive a durable receipt and single undo.
+      const request = buildRoutePointBatchApplyBody(draft, ids, draft.scope.batchId);
+      if (request) {
         // Persist the operation id *before* posting. An ambiguous response is
         // reconciled via GET, never via a newly generated operation id.
         rememberRoutePointBatchOperation(journey.id, request.operationId);
@@ -3846,30 +3858,20 @@ export function JourneyStory({
           status: "complete",
           tone: operation.status === "applied" ? "success" : "error",
           message: operation.status === "applied"
-            ? `批量创建已保存，共 ${operation.receipt?.createdPoints.length ?? 0} 个新途径点；可重新打开并撤销。`
-            : "服务端返回部分或暂存状态；请核对操作回执，不要重复新建。",
+            ? hasNewPoints
+              ? `批量整理已保存，共 ${operation.receipt?.createdPoints.length ?? 0} 个新途径点；可重新打开并撤销。`
+              : `批量归属已保存，共 ${operation.receipt?.placements.length ?? 0} 个媒体；可重新打开并撤销。`
+            : "服务端返回部分或暂存状态；请核对操作回执，不要重复提交。",
         });
         return;
       }
 
-      // No new point: keep GPS-less media at Journey level, move only groups
-      // explicitly assigned to existing points. Never fabricate a new point.
-      let moved = 0;
-      const byRoutePoint = new Map<string, string[]>();
-      for (const entry of assignments) {
-        if (entry.destination !== "existing" || !entry.routePointId) continue;
-        const groupIds = byRoutePoint.get(entry.routePointId) ?? [];
-        groupIds.push(entry.assetId);
-        byRoutePoint.set(entry.routePointId, groupIds);
-      }
-      for (const [routePointId, groupIds] of byRoutePoint) {
-        await manageMedia.moveJourneyMedia(journey.id, groupIds, routePointId);
-        moved += groupIds.length;
-      }
-      try { await onMediaAdded(journey.id); } catch { /* Explicit state below. */ }
+      // No placement at all: every file stays at Journey level. This is a
+      // truthful no-op rather than a fake server operation or undo receipt.
+      try { await onMediaAdded(journey.id); } catch { /* Upload remains durable. */ }
       setUploadState({
         status: "complete", tone: "success",
-        message: `已上传 ${ids.length} 个媒体，${moved} 个分配至已有途径点；未定位素材保留在 Journey。`,
+        message: `已上传 ${ids.length} 个媒体，全部保留在 Journey；未创建新途径点，也未改变已有归属。`,
       });
     } catch (error) {
       setUploadState({
@@ -3912,7 +3914,7 @@ export function JourneyStory({
       setRoutePointBatchReceipt(outcome);
       try { await onMediaAdded(journey.id); } catch { /* Reopen to refresh. */ }
       setRoutePointBatchError(outcome.status === "undone"
-        ? "已按服务端回执撤销本批创建的途径点；原媒体仍保留。"
+        ? "已按服务端回执撤销本批整理；原媒体仍保留。"
         : "撤销出现部分成功或后续编辑冲突，请检查回执并手动修正。");
     } catch (error) {
       setRoutePointBatchError(error instanceof Error ? error.message : "回执不可用");
@@ -5564,7 +5566,7 @@ export function JourneyStory({
                   <p>新途径点：{routePointBatchReceipt.receipt?.createdPoints.length ?? 0} · 媒体分配：{routePointBatchReceipt.receipt?.placements.length ?? 0}</p>
                   {routePointBatchReceipt.undo.eligible ? (
                     <button type="button" disabled={routePointBatchBusy || mutationPending}
-                      onClick={() => void undoLastRoutePointBatch()}>撤销本批建站</button>
+                      onClick={() => void undoLastRoutePointBatch()}>撤销本批整理</button>
                   ) : <p>当前不可撤销：{routePointBatchReceipt.undo.reason || "后续修改或已完成撤销"}</p>}
                 </section>
               ) : null}
