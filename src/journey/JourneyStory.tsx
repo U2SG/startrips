@@ -103,6 +103,7 @@ import "../styles/starlight-media.css";
 import "../styles/story-experience.css";
 import {
   JourneyApiError,
+  type RoutePointBatchOperation,
   type JourneyMediaMoveUndo,
 } from "./journeyApi";
 import { useAtlasView, type AtlasMutations, type UploadJourneyMedia } from "./atlasView";
@@ -151,11 +152,20 @@ import type {
 } from "./types";
 import {
   completeMediaPlacementUploadPlan,
+  planMediaPlacementProposals,
   groupMediaPlacementSuggestions,
   readMediaPlacementSignal,
   type MediaPlacementBatchResult,
   type MediaPlacementReadResult,
 } from "./mediaPlacement";
+import { RoutePointBatchReview } from "./RoutePointBatchReview";
+import {
+  buildRoutePointBatchApplyBody,
+  createRoutePointBatchDraft,
+  editRoutePointBatchDraft,
+  type RoutePointBatchDraft,
+  type RoutePointReviewAction,
+} from "./routePointBatchReview";
 import { createPlacementAnalysisAuthority, placementAnalysisScope, runPlacementAnalysisBatch, type PlacementAnalysisIntent } from "./placementAnalysisAuthority";
 import { isModalFocusCandidate, useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import type { CommandBarStoryBridge } from "./ProposalCard";
@@ -881,6 +891,27 @@ export function JourneyStory({
   const [retryFiles, setRetryFiles] = useState<File[]>([]);
   const [retryRoutePointId, setRetryRoutePointId] = useState<string | null>(null);
   const [placementReview, setPlacementReview] = useState<PendingPlacementReview | null>(null);
+  const [routePointBatchReview, setRoutePointBatchReview] = useState<{
+    files: File[]; reads: MediaPlacementReadResult[]; draft: RoutePointBatchDraft;
+  } | null>(null);
+  const [routePointBatchReceipt, setRoutePointBatchReceipt] = useState<RoutePointBatchOperation | null>(null);
+  const [routePointBatchError, setRoutePointBatchError] = useState<string | null>(null);
+  const [routePointBatchBusy, setRoutePointBatchBusy] = useState(false);
+  const routePointBatchWriteOwnerRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!manageMedia || !journeyId) return;
+    let operationId: string | null = null;
+    try { operationId = window.sessionStorage.getItem(routePointBatchReceiptStorageKey(journeyId)); }
+    catch { /* Storage can be disabled by privacy settings. */ }
+    if (!operationId) return;
+    let active = true;
+    void manageMedia.readRoutePointBatch(journeyId, operationId)
+      .then((operation) => { if (active) setRoutePointBatchReceipt(operation); })
+      .catch(() => { /* Retain operation id; unknown readback is not a safe retry. */ });
+    return () => { active = false; };
+  }, [journeyId, manageMedia]);
+
+
   const [placementRetryGroups, setPlacementRetryGroups] = useState<PendingPlacementUploadGroup[]>([]);
   const [placementAnalyzing, setPlacementAnalyzing] = useState(false);
   const placementAnalysisAuthorityRef = useRef<ReturnType<typeof createPlacementAnalysisAuthority> | null>(null);
@@ -1883,6 +1914,9 @@ export function JourneyStory({
     setRetryFiles([]);
     setRetryRoutePointId(null);
     setPlacementReview(null);
+    setRoutePointBatchReview(null);
+    setRoutePointBatchReceipt(null);
+    setRoutePointBatchError(null);
     setPlacementRetryGroups([]);
     setPlacementAnalyzing(false);
     setCloseBlocked(false);
@@ -3637,6 +3671,26 @@ export function JourneyStory({
         (file) => readMediaPlacementSignal(file),
       );
       if (!reads || !placementAnalysisIsCurrent(intent)) return;
+      // #337: multi-file placement is an editable, scoped proposal; a planner
+      // result alone must never create a Route Point or lose GPS-less assets.
+      // Keep the previous single-file placement flow unchanged.
+      if (files.length > 1) {
+        const batchId = `route-batch:${crypto.randomUUID()}`;
+        const proposal = planMediaPlacementProposals(
+          reads.map((result, fileIndex) => ({
+            fileIndex,
+            signal: result.status === "signal" ? result.signal : null,
+          })),
+          journey, { batchId },
+        );
+        const draft = createRoutePointBatchDraft(proposal, journey, reads, files.length);
+        if (placementAnalysisIsCurrent(intent)) {
+          setPlacementReview(null);
+          setRoutePointBatchError(null);
+          setRoutePointBatchReview({ files, reads, draft });
+        }
+        return;
+      }
       const signals = reads.map((result) => result.status === "signal" ? result.signal : null);
       const batch = groupMediaPlacementSuggestions(signals, journeys, journey.id);
       if (batch.groups.length === 0) {
@@ -3669,6 +3723,171 @@ export function JourneyStory({
     if (selected.length > 0) void reviewSelectedFiles(selected);
   }
 
+
+  function routePointBatchReceiptStorageKey(id: string) {
+    return `startrips:route-point-batch-receipt:${id}`;
+  }
+
+  function rememberRoutePointBatchOperation(id: string, operationId: string) {
+    // Only a non-secret operation identity is retained. Authorization is always
+    // enforced again by the ST-115 server routes; never store EXIF or opt-in.
+    try { window.sessionStorage.setItem(routePointBatchReceiptStorageKey(id), operationId); }
+    catch { /* Restricted storage is optional; the server owns the receipt. */ }
+  }
+
+  function editPendingRoutePointBatch(action: RoutePointReviewAction) {
+    if (!routePointBatchReview || !journey || routePointBatchBusy) return;
+    try {
+      const draft = editRoutePointBatchDraft(routePointBatchReview.draft, action, journey);
+      setRoutePointBatchReview({ ...routePointBatchReview, draft });
+      setRoutePointBatchError(null);
+    } catch (error) {
+      setRoutePointBatchError(error instanceof Error ? error.message : "草案修改无效");
+    }
+  }
+
+  async function confirmRoutePointBatchReview() {
+    const review = routePointBatchReview;
+    if (!review || !manageMedia || routePointBatchBusy || routePointBatchWriteOwnerRef.current) return;
+    if (review.draft.scope.journeyId !== journey.id
+      || review.draft.scope.routeRevision !== journey.revision) {
+      setRoutePointBatchError("旅程路线版本已变化，原草案不能自动套用；请重新选择文件核对。");
+      return;
+    }
+    const { files, reads, draft } = review;
+    routePointBatchWriteOwnerRef.current = draft.scope.batchId;
+    setRoutePointBatchBusy(true);
+    setRoutePointBatchError(null);
+    setPlacementReview(null);
+    setUploadState({
+      status: "uploading", fileName: "按草案上传媒体",
+      uploadedBytes: 0, totalBytes: files.reduce((size, file) => size + file.size, 0),
+    });
+    // A partially successful upload is *not* a whole new Route Point. Keep
+    // every successful asset at Journey level and never repeat the whole batch.
+    try {
+      const uploaded = await manageMedia.uploadJourneyMedia({
+        journeyId: journey.id, files,
+        recordedEvidenceByFile: reads.map((read) => recordedEvidenceForPlacementRead(read)),
+        onProgress: (progress) => setUploadState({ status: "uploading", ...progress }),
+      });
+      if (uploaded.mediaErrors.length || uploaded.assets.length !== files.length) {
+        if (uploaded.uploadedCount > 0) {
+          try { await onMediaAdded(journey.id); } catch { /* No second upload on refresh failure. */ }
+        }
+        const errors = uploaded.mediaErrors.length;
+        setUploadState({
+          status: "complete", tone: "error",
+          message: `已收到 ${uploaded.uploadedCount} 个媒体，${errors} 个上传失败或未获服务端资产ID。成功素材保留在整段 Journey；未创建新途径点。请先核对列表，不要重复上传整个批次。`,
+        });
+        return;
+      }
+
+      // Re-read authoritative server route revision after uploads but before
+      // ST-115's one-shot write. Never silently rebase a stale candidate.
+      const refreshed = await onMediaAdded(journey.id);
+      if (!refreshed || refreshed.revision !== draft.scope.routeRevision) {
+        setUploadState({
+          status: "complete", tone: "error",
+          message: "媒体已上传到 Journey，但无法确认路线版本；没有创建新途径点。请刷新旅程核对后手动整理，勿重新上传这些文件。",
+        });
+        return;
+      }
+      const ids = uploaded.assets.map((asset) => asset.id);
+      const hasNewPoints = draft.groups.some((group) => group.destination === "new");
+      if (hasNewPoints) {
+        const request = buildRoutePointBatchApplyBody(draft, ids, draft.scope.batchId);
+        if (!request) throw new Error("新的途径点尚未确认");
+        // Persist the operation id *before* posting. An ambiguous response is
+        // reconciled via GET, never via a newly generated operation id.
+        rememberRoutePointBatchOperation(journey.id, request.operationId);
+        let operation: RoutePointBatchOperation;
+        try {
+          operation = await manageMedia.applyRoutePointBatch(journey.id, request);
+        } catch {
+          try {
+            operation = await manageMedia.readRoutePointBatch(journey.id, request.operationId);
+          } catch {
+            setUploadState({
+              status: "complete", tone: "error",
+              message: "媒体已上传，但途径点提交结果未知。已保存本批操作编号供重新打开后核对；不要再次提交或重复上传。",
+            });
+            return;
+          }
+        }
+        setRoutePointBatchReceipt(operation);
+        try { await onMediaAdded(journey.id); } catch { /* Receipt is authoritative. */ }
+        setUploadState({
+          status: "complete",
+          tone: operation.status === "applied" ? "success" : "error",
+          message: operation.status === "applied"
+            ? `批量创建已保存，共 ${operation.receipt?.createdPoints.length ?? 0} 个新途径点；可重新打开并撤销。`
+            : "服务端返回部分或暂存状态；请核对操作回执，不要重复新建。",
+        });
+        return;
+      }
+
+      // No new point: keep GPS-less media at Journey level, move only groups
+      // explicitly assigned to existing points. Never fabricate a new point.
+      let moved = 0;
+      for (const group of draft.groups) {
+        if (group.destination !== "existing" || !group.routePointId) continue;
+        const groupIds = group.fileIndexes.map((index) => ids[index]);
+        await manageMedia.moveJourneyMedia(journey.id, groupIds, group.routePointId);
+        moved += groupIds.length;
+      }
+      try { await onMediaAdded(journey.id); } catch { /* Explicit state below. */ }
+      setUploadState({
+        status: "complete", tone: "success",
+        message: `已上传 ${ids.length} 个媒体，${moved} 个分配至已有途径点；未定位素材保留在 Journey。`,
+      });
+    } catch (error) {
+      setUploadState({
+        status: "complete", tone: "error",
+        message: `本批保存未能确认：${error instanceof Error ? formatUploadError(error.message) : "服务器不可用"}。已成功上传的素材可能仍在 Journey；请先刷新读回，不要重复上传或重建。`,
+      });
+    } finally {
+      // Always consume the selected input once. Its upload may already have
+      // completed even when a later request failed or lost its response.
+      setRoutePointBatchReview(null);
+      setRoutePointBatchBusy(false);
+      routePointBatchWriteOwnerRef.current = null;
+    }
+  }
+
+  async function undoLastRoutePointBatch() {
+    if (!manageMedia || !routePointBatchReceipt || routePointBatchBusy) return;
+    setRoutePointBatchBusy(true);
+    setRoutePointBatchError(null);
+    try {
+      const current = await manageMedia.readRoutePointBatch(journey.id, routePointBatchReceipt.operationId);
+      if (!current.undo.eligible) {
+        setRoutePointBatchReceipt(current);
+        setRoutePointBatchError(`本批已无法撤销（${current.undo.reason ?? "后续更改"}），仍可手动编辑途径点。`);
+        return;
+      }
+      let outcome: RoutePointBatchOperation;
+      try {
+        outcome = await manageMedia.undoRoutePointBatch(journey.id, current.operationId);
+      } catch {
+        // Check the *same* operation identity; never issue a blind second undo.
+        try { outcome = await manageMedia.readRoutePointBatch(journey.id, current.operationId); }
+        catch {
+          setRoutePointBatchError("撤销结果未知，请重新打开旅程核对操作回执，勿重复提交。");
+          return;
+        }
+      }
+      setRoutePointBatchReceipt(outcome);
+      try { await onMediaAdded(journey.id); } catch { /* Reopen to refresh. */ }
+      setRoutePointBatchError(outcome.status === "undone"
+        ? "已按服务端回执撤销本批创建的途径点；原媒体仍保留。"
+        : "撤销出现部分成功或后续编辑冲突，请检查回执并手动修正。");
+    } catch (error) {
+      setRoutePointBatchError(error instanceof Error ? error.message : "回执不可用");
+    } finally {
+      setRoutePointBatchBusy(false);
+    }
+  }
 
   async function uploadPlacementGroups(groups: readonly PendingPlacementUploadGroup[]) {
     if (groups.length === 0 || mutationPending || !manageMedia) return;
@@ -5283,12 +5502,12 @@ export function JourneyStory({
                 multiple
                 tabIndex={-1}
                 aria-hidden="true"
-                disabled={mutationPending || placementAnalyzing || placementReview !== null || deleteState !== "idle"}
+                disabled={mutationPending || placementAnalyzing || placementReview !== null || routePointBatchReview !== null || routePointBatchBusy || deleteState !== "idle"}
                 onChange={selectFiles}
               />
               <button
                 type="button"
-                disabled={mutationPending || placementAnalyzing || placementReview !== null || deleteState !== "idle"}
+                disabled={mutationPending || placementAnalyzing || placementReview !== null || routePointBatchReview !== null || routePointBatchBusy || deleteState !== "idle"}
                 onClick={() => fileInputRef.current?.click()}
               >
                 <IconUpload size={17} stroke={1.35} aria-hidden="true" />
@@ -5298,6 +5517,28 @@ export function JourneyStory({
                     ? "正在读取拍摄信息…"
                     : "添加照片或视频"}
               </button>
+              {routePointBatchReview ? <RoutePointBatchReview
+                draft={routePointBatchReview.draft}
+                journey={journey}
+                disabled={routePointBatchBusy || mutationPending}
+                message={routePointBatchError}
+                onEdit={editPendingRoutePointBatch}
+                onConfirm={() => void confirmRoutePointBatchReview()}
+                onCancel={() => { setRoutePointBatchReview(null); setRoutePointBatchError(null); }}
+              /> : null}
+              {routePointBatchReceipt ? (
+                <section className="route-batch__receipt" aria-label="最近一次批量途径点回执">
+                  <strong>批量操作回执 · {routePointBatchReceipt.status}</strong>
+                  <p>新途径点：{routePointBatchReceipt.receipt?.createdPoints.length ?? 0} · 媒体分配：{routePointBatchReceipt.receipt?.placements.length ?? 0}</p>
+                  {routePointBatchReceipt.undo.eligible ? (
+                    <button type="button" disabled={routePointBatchBusy || mutationPending}
+                      onClick={() => void undoLastRoutePointBatch()}>撤销本批建站</button>
+                  ) : <p>当前不可撤销：{routePointBatchReceipt.undo.reason || "后续修改或已完成撤销"}</p>}
+                </section>
+              ) : null}
+              {routePointBatchError && !routePointBatchReview ? (
+                <p role="status" className="journey-story__upload-message is-error">{routePointBatchError}</p>
+              ) : null}
               {placementReview ? (() => {
                 const { groups, unsuggestedFileIndexes } = placementReview.batch;
                 const groupedUploadPlan = completeMediaPlacementUploadPlan(

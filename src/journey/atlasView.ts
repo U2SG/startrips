@@ -5,6 +5,9 @@ import {
   createHomeBasePeriod,
   everydayFragmentClient,
   type EverydayFragmentClient,
+  applyRoutePointBatch,
+  readRoutePointBatch,
+  undoRoutePointBatch,
   enqueueCoverReveal,
   listCreativeCoverRecipes, readCreativeCoverStatus, readCoverRevealDisplay, type CreativeCoverClient,
   createShare,
@@ -158,6 +161,10 @@ export type AtlasMutations = {
     coverMediaAssetId: string | null,
   ) => Promise<Journey>;
   uploadJourneyMedia: UploadJourneyMedia;
+  /** ST-115 authenticated owner-only batch apply, receipt readback and undo. */
+  applyRoutePointBatch: typeof applyRoutePointBatch;
+  readRoutePointBatch: typeof readRoutePointBatch;
+  undoRoutePointBatch: typeof undoRoutePointBatch;
   /** Owner-private precise metadata. Absent from shared/guest mode. */
   readMediaEvidence?: typeof readMediaEvidence;
   writeMediaDisplayState?: typeof writeMediaDisplayState;
@@ -236,6 +243,9 @@ export function createOwnerAtlasMutations(canEditJourney = true): AtlasMutations
     undoJourneyMediaMove,
     setJourneyCover,
     uploadJourneyMedia,
+    applyRoutePointBatch,
+    readRoutePointBatch,
+    undoRoutePointBatch,
     readMediaEvidence,
     writeMediaDisplayState,
     confirmHomeBasePeriod: createHomeBasePeriod,
