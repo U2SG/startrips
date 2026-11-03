@@ -19,6 +19,9 @@ let pendingSnapshot: string | null = null;
 let deliverSnapshot: ((json: string) => void) | null = null;
 // Installed during module execution, before WKNavigationDelegate.didFinish.
 window.atlasNative = { receive(json) { pendingSnapshot = json; deliverSnapshot?.(json); } };
+// WKNavigationDelegate.didFinish can precede deferred module evaluation.
+// Announce the installed receiver so native snapshots cannot race startup.
+window.webkit?.messageHandlers?.atlas?.postMessage("atlas-script-ready");
 
 function AtlasScene() {
   const earth = usePersistentEarth();

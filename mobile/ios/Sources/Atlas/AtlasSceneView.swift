@@ -38,6 +38,7 @@ struct AtlasSceneView: UIViewRepresentable {
         var server: BundledSceneServer?
         var localURL: URL?
         var loaded = false
+        var scriptReady = false
         var restarts = 0
         var lastJSON: String?
         init(router: AppRouter) { self.router = router }
@@ -64,7 +65,7 @@ struct AtlasSceneView: UIViewRepresentable {
         func publish() {
             let encoder = JSONEncoder()
             encoder.outputFormatting = .sortedKeys
-            guard loaded, let data = try? encoder.encode(router.snapshot), let json = String(data: data, encoding: .utf8) else { return }
+            guard loaded, scriptReady, let data = try? encoder.encode(router.snapshot), let json = String(data: data, encoding: .utf8) else { return }
             guard json != lastJSON, let script = try? AtlasSceneView.receiveScript(json) else { return }
             lastJSON = json
             // This page-world API does not link the missing iOS 18.5 simulator Swift overlay.
@@ -76,11 +77,19 @@ struct AtlasSceneView: UIViewRepresentable {
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.frameInfo.isMainFrame, message.frameInfo.request.url?.host == "127.0.0.1",
                   message.frameInfo.request.url?.port == localURL?.port,
-                  let body = message.body as? String, body.utf8.count <= 8192,
-                  let event = try? JSONDecoder().decode(SceneEvent.self, from: Data(body.utf8)) else { return }
+                  let body = message.body as? String, body.utf8.count <= 8192 else { return }
+            if body == "atlas-script-ready" {
+                scriptReady = true
+                publish()
+                return
+            }
+            guard let event = try? JSONDecoder().decode(SceneEvent.self, from: Data(body.utf8)) else { return }
             router.receive(event)
         }
 
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            loaded = false; scriptReady = false; lastJSON = nil
+        }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded = true; lastJSON = nil; publish() }
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
@@ -89,7 +98,7 @@ struct AtlasSceneView: UIViewRepresentable {
                             && url?.path == "/index.html" ? .allow : .cancel)
         }
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-            loaded = false; router.sceneRestarted(); restarts += 1
+            loaded = false; scriptReady = false; lastJSON = nil; router.sceneRestarted(); restarts += 1
             guard restarts <= 2, let localURL else { router.error = "地球已暂停，请刷新重试。"; return }
             webView.load(URLRequest(url: localURL))
         }
