@@ -1,4 +1,5 @@
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { pathToFileURL } from "node:url";
 
 const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
 
@@ -87,10 +88,46 @@ async function chooseExistingTargets(review, ids) {
   }
 }
 
+async function tabTo(page, target, name) {
+  // Traverse the real document tab order. Programmatic .focus() cannot prove
+  // that a keyboard-only user can reach the actual production form control.
+  for (let attempt = 0; attempt < 160; attempt++) {
+    if (await target.evaluate((node) => document.activeElement === node)) return;
+    await page.keyboard.press("Tab");
+  }
+  throw new Error(`Keyboard traversal could not reach ${name}`);
+}
+
+async function assignExistingWithKeyboard(page, review) {
+  const groups = review.locator(".route-batch__group");
+  assert(await groups.count() === 2, "Mobile fixture must have both editable batch groups");
+  const name = groups.first().getByRole("textbox", { name: "途径点名称" });
+  await tabTo(page, name, "first group name");
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.type("键盘核对的分组");
+  assert(await name.inputValue() === "键盘核对的分组", "Keyboard edit must update the actual draft");
+  for (let index = 0; index < await groups.count(); index++) {
+    const destination = groups.nth(index).getByRole("combobox", { name: "媒体去向" });
+    await tabTo(page, destination, `group ${index + 1} destination`);
+    await page.keyboard.press("Home");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    assert(await destination.inputValue() === "00000000-0000-4000-8000-000000000004",
+      "Keyboard choice must assign the reviewed existing Route Point");
+  }
+  const submit = review.getByRole("button", { name: "确认这些分组并上传" });
+  await tabTo(page, submit, "review confirmation");
+  await page.keyboard.press("Enter");
+}
+
+export async function verifyRoutePointBatchJourneyStory() {
 const browser = await launchQaBrowser({ headless: true });
 try {
-  for (const scenario of ["manual", "auto", "partial"]) {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 850 }, reducedMotion: "reduce" });
+  for (const scenario of ["manual", "auto", "partial", "mobile-keyboard"]) {
+    const mobile = scenario === "mobile-keyboard";
+    const context = await browser.newContext({ viewport: mobile
+      ? { width: 390, height: 844 } : { width: 1280, height: 850 },
+    reducedMotion: "reduce", isMobile: mobile, hasTouch: mobile });
     const page = await context.newPage();
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
@@ -124,10 +161,24 @@ try {
           state = await stateOf(page);
           assert(state.applies === 0, "Uncertain evidence must not auto-write");
         }
-        await chooseExistingTargets(review, scenario === "partial"
-          ? ["00000000-0000-4000-8000-000000000004", "qa-route-point-b"]
-          : ["00000000-0000-4000-8000-000000000004"]);
-        await review.getByRole("button", { name: "确认这些分组并上传" }).click();
+        if (mobile) {
+          assert(await page.evaluate(() => window.innerWidth === 390),
+            "Mobile acceptance must exercise a genuine 390px viewport");
+          assert(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches),
+            "Reduced Motion must remain active throughout the mobile form lifecycle");
+          const layout = await review.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            return { left: bounds.left, right: bounds.right, width: innerWidth };
+          });
+          assert(layout.left >= -1 && layout.right <= layout.width + 1,
+            "Mobile batch editor must fit the viewport without clipping its action controls");
+          await assignExistingWithKeyboard(page, review);
+        } else {
+          await chooseExistingTargets(review, scenario === "partial"
+            ? ["00000000-0000-4000-8000-000000000004", "qa-route-point-b"]
+            : ["00000000-0000-4000-8000-000000000004"]);
+          await review.getByRole("button", { name: "确认这些分组并上传" }).click();
+        }
       }
 
       if (scenario === "partial") {
@@ -148,14 +199,26 @@ try {
           "One upload and one atomic apply must account for every file");
         assert(state.media.every((media) => media.routePointId === "00000000-0000-4000-8000-000000000004"),
           "Every file must be assigned to its reviewed existing Route Point");
-        await page.getByRole("button", { name: "退出旅程故事" }).click();
+        const exit = page.getByRole("button", { name: "退出旅程故事" });
+        if (mobile) {
+          await tabTo(page, exit, "exit Story");
+          await page.keyboard.press("Enter");
+        } else await exit.click();
         await page.locator(".journey-story").waitFor({ state: "detached" });
-        await page.locator("[data-qa-story-reopen]").click();
+        const reopen = page.locator("[data-qa-story-reopen]");
+        if (mobile) {
+          await tabTo(page, reopen, "reopen Story");
+          await page.keyboard.press("Enter");
+        } else await reopen.click();
         await receipt.waitFor({ state: "visible" });
         state = await stateOf(page);
         assert(state.reads >= 1 && state.applies === 1,
           "Reopening must read the durable receipt, never issue a new POST");
-        await receipt.getByRole("button", { name: "撤销本批整理" }).click();
+        const undo = receipt.getByRole("button", { name: "撤销本批整理" });
+        if (mobile) {
+          await tabTo(page, undo, "undo reviewed batch");
+          await page.keyboard.press("Enter");
+        } else await undo.click();
         await page.getByText("已按服务端回执撤销本批整理", { exact: false }).waitFor({ state: "visible" });
         state = await stateOf(page);
         assert(state.undos === 1 && state.media.every((media) => media.routePointId === null),
@@ -171,4 +234,11 @@ try {
   }
 } finally {
   await browser.close();
+}
+}
+
+// CLI remains the independent browser-matrix entry. Vitest's core-lane
+// integration test imports the same real mounted JourneyStory flow.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await verifyRoutePointBatchJourneyStory();
 }
