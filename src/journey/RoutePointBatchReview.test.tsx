@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Journey } from "./types";
 import type { MediaPlacementProposalPlan } from "./mediaPlacement";
-import { createRoutePointBatchDraft, editRoutePointBatchDraft } from "./routePointBatchReview";
+import { createRoutePointBatchDraft, editRoutePointBatchDraft } from "./routePointBatchDraft";
 import { RoutePointBatchReview } from "./RoutePointBatchReview";
 
 const journey: Journey = {

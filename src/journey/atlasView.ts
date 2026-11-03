@@ -162,9 +162,9 @@ export type AtlasMutations = {
   ) => Promise<Journey>;
   uploadJourneyMedia: UploadJourneyMedia;
   /** ST-115 authenticated owner-only batch apply, receipt readback and undo. */
-  applyRoutePointBatch: typeof applyRoutePointBatch;
-  readRoutePointBatch: typeof readRoutePointBatch;
-  undoRoutePointBatch: typeof undoRoutePointBatch;
+  applyRoutePointBatch?: typeof applyRoutePointBatch;
+  readRoutePointBatch?: typeof readRoutePointBatch;
+  undoRoutePointBatch?: typeof undoRoutePointBatch;
   /** Owner-private precise metadata. Absent from shared/guest mode. */
   readMediaEvidence?: typeof readMediaEvidence;
   writeMediaDisplayState?: typeof writeMediaDisplayState;

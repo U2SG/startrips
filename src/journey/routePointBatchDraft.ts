@@ -197,6 +197,9 @@ export function editRoutePointBatchDraft(
     group.longitude = null;
     group.accuracyMeters = null;
     group.spatialSource = "unknown";
+    // A split invalidates the representative's timestamp for BOTH subsets;
+    // neither may silently borrow another photograph's capture time.
+    group.occurredAt = null;
     const split: RoutePointReviewGroup = {
       ...group,
       id: `manual:${draft.nextGroupNumber}`,
@@ -228,6 +231,7 @@ export function editRoutePointBatchDraft(
       group.label = "合并后待指定地点";
     }
     group.accuracyMeters = null;
+    group.occurredAt = null; // A merged candidate has no shared time evidence.
     group.spatialSource = "manual";
     group.basis = { reason: "manual-merge", evidence: [], uncertainty: ["requires-review"] };
     groups.splice(otherIndex, 1);
@@ -278,37 +282,68 @@ export type RoutePointBatchApplyBody = {
 
 /** Existing-only and unplaced groups use ordinary upload/move, not #336's
  * new-point-only atomic endpoint. Null means there are no new points to create. */
+export type RoutePointBatchAssetAssignment = {
+  assetId: string;
+  destination: RoutePointReviewGroup["destination"];
+  routePointId: string | null;
+  candidateId: string | null;
+};
+
+/** Multipart upload may deduplicate identical files onto ONE asset id.
+ * A repeated id with a single destination must become ONE attachment. A
+ * repeated id with conflicting destinations must never pick a winner.
+ */
+export function resolveRoutePointBatchAssetAssignments(
+  draft: RoutePointBatchDraft,
+  assetIdsByFileIndex: readonly string[],
+): RoutePointBatchAssetAssignment[] {
+  assertCoverage(draft.groups, assetIdsByFileIndex.length);
+  const byAsset = new Map<string, RoutePointBatchAssetAssignment>();
+  for (const group of draft.groups) {
+    for (const index of group.fileIndexes) {
+      const assetId = assetIdsByFileIndex[index];
+      if (!assetId) throw new RangeError("Route Point batch media upload incomplete");
+      const next: RoutePointBatchAssetAssignment = {
+        assetId,
+        destination: group.destination,
+        routePointId: group.destination === "existing" ? group.routePointId : null,
+        candidateId: group.destination === "new" ? group.id : null,
+      };
+      const prior = byAsset.get(assetId);
+      if (prior && (prior.destination !== next.destination
+        || prior.routePointId !== next.routePointId
+        || prior.candidateId !== next.candidateId)) {
+        throw new RangeError("同一上传媒体被分配到不同地点：请先把重复照片归到同一个目的地，再确认；不必重复上传。");
+      }
+      if (!prior) byAsset.set(assetId, next);
+    }
+  }
+  return [...byAsset.values()];
+}
+
 export function buildRoutePointBatchApplyBody(
   draft: RoutePointBatchDraft,
   assetIdsByFileIndex: readonly string[],
   operationId: string,
 ): RoutePointBatchApplyBody | null {
-  assertCoverage(draft.groups, assetIdsByFileIndex.length);
+  const assignments = resolveRoutePointBatchAssetAssignments(draft, assetIdsByFileIndex);
   const points: RoutePointBatchApplyBody["points"] = [];
-  const attachments: RoutePointBatchApplyBody["attachments"] = [];
   for (const group of draft.groups) {
-    if (group.destination === "new") {
-      if (!group.label.trim() || group.latitude === null || group.longitude === null) {
-        throw new RangeError("New Route Point needs a confirmed name and coordinate");
-      }
-      points.push({
-        candidateId: group.id, label: group.label.trim(), latitude: group.latitude,
-        longitude: group.longitude, occurredAt: group.occurredAt, isStop: true,
-      });
+    if (group.destination !== "new") continue;
+    if (!group.label.trim() || group.latitude === null || group.longitude === null) {
+      throw new RangeError("New Route Point needs a confirmed name and coordinate");
     }
-    if (group.destination !== "unplaced") {
-      for (const index of group.fileIndexes) {
-        const assetId = assetIdsByFileIndex[index];
-        if (!assetId) throw new RangeError("Route Point batch media upload incomplete");
-        attachments.push({
-          assetId, intentionalReuse: false,
-          ...(group.destination === "new"
-            ? { candidateId: group.id }
-            : { routePointId: group.routePointId! }),
-        });
-      }
-    }
+    points.push({
+      candidateId: group.id, label: group.label.trim(), latitude: group.latitude,
+      longitude: group.longitude, occurredAt: group.occurredAt, isStop: true,
+    });
   }
+  const attachments: RoutePointBatchApplyBody["attachments"] = assignments
+    .filter((value) => value.destination !== "unplaced")
+    .map((value) => ({
+      assetId: value.assetId, intentionalReuse: false as const,
+      ...(value.candidateId ? { candidateId: value.candidateId } : { routePointId: value.routePointId! }),
+    }));
   if (!points.length) return null;
   if (!/^[A-Za-z0-9._:-]{1,120}$/.test(operationId) || !attachments.length) {
     throw new RangeError("Invalid or empty Route Point batch operation");

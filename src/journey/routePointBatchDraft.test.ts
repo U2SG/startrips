@@ -7,7 +7,8 @@ import {
   createRoutePointBatchDraft,
   editRoutePointBatchDraft,
   reconcileRoutePointBatchDraft,
-} from "./routePointBatchReview";
+  resolveRoutePointBatchAssetAssignments,
+} from "./routePointBatchDraft";
 
 const journey: Journey = {
   id: "journey", atlasId: "atlas", title: "Journey", startedOn: "2026-09-01",
@@ -194,5 +195,36 @@ describe("Route Point batch review draft / #337", () => {
       { assetId: "c", candidateId: "new:1-2", intentionalReuse: false },
     ]);
     expect(() => buildRoutePointBatchApplyBody(value, ["a", "", "c", "d"], "batch-one")).toThrow(/incomplete/);
+  });
+
+  it("collapses deduplicated multipart assets only when their destinations agree", () => {
+    const value = draft();
+    const assignments = resolveRoutePointBatchAssetAssignments(value, ["a", "duplicate", "duplicate", "d"]);
+    expect(assignments).toHaveLength(3);
+    const request = buildRoutePointBatchApplyBody(value, ["a", "duplicate", "duplicate", "d"], "batch-one");
+    expect(request?.attachments).toEqual([
+      { assetId: "a", routePointId: "point", intentionalReuse: false },
+      { assetId: "duplicate", candidateId: "new:1-2", intentionalReuse: false },
+    ]);
+    // One physical asset must not silently be assigned both to an existing
+    // point and a new candidate. The UI retains uploaded ids for reconciliation.
+    expect(() => buildRoutePointBatchApplyBody(
+      value, ["duplicate", "duplicate", "c", "d"], "batch-one",
+    )).toThrow(/同一上传媒体被分配到不同地点/);
+  });
+
+  it("clears explicit capture time on both split subsets, not just the removed file", () => {
+    const value = draft();
+    const retimed = editRoutePointBatchDraft(value, {
+      type: "retime", id: "new:1-2", value: "2026-09-02T12:00:00+08:00",
+    }, journey);
+    expect(retimed.groups[1].occurredAt).toBe("2026-09-02T04:00:00.000Z");
+    const split = editRoutePointBatchDraft(retimed, {
+      type: "split", id: "new:1-2", fileIndex: 1,
+    }, journey);
+    expect(split.groups[1].fileIndexes).toEqual([2]);
+    expect(split.groups[2].fileIndexes).toEqual([1]);
+    expect(split.groups[1].occurredAt).toBeNull();
+    expect(split.groups[2].occurredAt).toBeNull();
   });
 });

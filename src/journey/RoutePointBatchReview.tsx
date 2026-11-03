@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Journey } from "./types";
-import type { RoutePointBatchDraft, RoutePointReviewAction, RoutePointReviewGroup } from "./routePointBatchReview";
-import { canAutoOrganizeRoutePointBatch } from "./routePointBatchReview";
+import type { RoutePointBatchDraft, RoutePointReviewAction, RoutePointReviewGroup } from "./routePointBatchDraft";
+import { canAutoOrganizeRoutePointBatch } from "./routePointBatchDraft";
 import "../styles/route-point-batch-review.css";
 
 function coordinateLabel(group: RoutePointReviewGroup) {

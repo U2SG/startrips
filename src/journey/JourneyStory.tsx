@@ -163,9 +163,10 @@ import {
   buildRoutePointBatchApplyBody,
   createRoutePointBatchDraft,
   editRoutePointBatchDraft,
+  resolveRoutePointBatchAssetAssignments,
   type RoutePointBatchDraft,
   type RoutePointReviewAction,
-} from "./routePointBatchReview";
+} from "./routePointBatchDraft";
 import { createPlacementAnalysisAuthority, placementAnalysisScope, runPlacementAnalysisBatch, type PlacementAnalysisIntent } from "./placementAnalysisAuthority";
 import { isModalFocusCandidate, useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import type { CommandBarStoryBridge } from "./ProposalCard";
@@ -893,13 +894,15 @@ export function JourneyStory({
   const [placementReview, setPlacementReview] = useState<PendingPlacementReview | null>(null);
   const [routePointBatchReview, setRoutePointBatchReview] = useState<{
     files: File[]; reads: MediaPlacementReadResult[]; draft: RoutePointBatchDraft;
+    /** Reuse already uploaded assets after dedupe conflict; never upload twice. */
+    uploadedAssetIds?: string[];
   } | null>(null);
   const [routePointBatchReceipt, setRoutePointBatchReceipt] = useState<RoutePointBatchOperation | null>(null);
   const [routePointBatchError, setRoutePointBatchError] = useState<string | null>(null);
   const [routePointBatchBusy, setRoutePointBatchBusy] = useState(false);
   const routePointBatchWriteOwnerRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!manageMedia || !journeyId) return;
+    if (!manageMedia?.readRoutePointBatch || !journeyId) return;
     let operationId: string | null = null;
     try { operationId = window.sessionStorage.getItem(routePointBatchReceiptStorageKey(journeyId)); }
     catch { /* Storage can be disabled by privacy settings. */ }
@@ -3674,7 +3677,8 @@ export function JourneyStory({
       // #337: multi-file placement is an editable, scoped proposal; a planner
       // result alone must never create a Route Point or lose GPS-less assets.
       // Keep the previous single-file placement flow unchanged.
-      if (files.length > 1) {
+      if (files.length > 1 && manageMedia?.applyRoutePointBatch
+        && manageMedia.readRoutePointBatch && manageMedia.undoRoutePointBatch) {
         const batchId = `route-batch:${crypto.randomUUID()}`;
         const proposal = planMediaPlacementProposals(
           reads.map((result, fileIndex) => ({
@@ -3748,39 +3752,45 @@ export function JourneyStory({
 
   async function confirmRoutePointBatchReview() {
     const review = routePointBatchReview;
-    if (!review || !manageMedia || routePointBatchBusy || routePointBatchWriteOwnerRef.current) return;
+    if (!review || !manageMedia?.applyRoutePointBatch || !manageMedia.readRoutePointBatch
+      || routePointBatchBusy || routePointBatchWriteOwnerRef.current) return;
     if (review.draft.scope.journeyId !== journey.id
       || review.draft.scope.routeRevision !== journey.revision) {
       setRoutePointBatchError("旅程路线版本已变化，原草案不能自动套用；请重新选择文件核对。");
       return;
     }
     const { files, reads, draft } = review;
+    let preserveDraftForReconciliation = false;
     routePointBatchWriteOwnerRef.current = draft.scope.batchId;
     setRoutePointBatchBusy(true);
     setRoutePointBatchError(null);
     setPlacementReview(null);
     setUploadState({
-      status: "uploading", fileName: "按草案上传媒体",
+      status: "uploading", fileName: review.uploadedAssetIds ? "核对已上传素材" : "按草案上传媒体",
       uploadedBytes: 0, totalBytes: files.reduce((size, file) => size + file.size, 0),
     });
     // A partially successful upload is *not* a whole new Route Point. Keep
     // every successful asset at Journey level and never repeat the whole batch.
     try {
-      const uploaded = await manageMedia.uploadJourneyMedia({
-        journeyId: journey.id, files,
-        recordedEvidenceByFile: reads.map((read) => recordedEvidenceForPlacementRead(read)),
-        onProgress: (progress) => setUploadState({ status: "uploading", ...progress }),
-      });
-      if (uploaded.mediaErrors.length || uploaded.assets.length !== files.length) {
-        if (uploaded.uploadedCount > 0) {
-          try { await onMediaAdded(journey.id); } catch { /* No second upload on refresh failure. */ }
-        }
-        const errors = uploaded.mediaErrors.length;
-        setUploadState({
-          status: "complete", tone: "error",
-          message: `已收到 ${uploaded.uploadedCount} 个媒体，${errors} 个上传失败或未获服务端资产ID。成功素材保留在整段 Journey；未创建新途径点。请先核对列表，不要重复上传整个批次。`,
+      let ids = review.uploadedAssetIds;
+      if (!ids) {
+        const uploaded = await manageMedia.uploadJourneyMedia({
+          journeyId: journey.id, files,
+          recordedEvidenceByFile: reads.map((read) => recordedEvidenceForPlacementRead(read)),
+          onProgress: (progress) => setUploadState({ status: "uploading", ...progress }),
         });
-        return;
+        if (uploaded.mediaErrors.length || uploaded.assets.length !== files.length) {
+          if (uploaded.uploadedCount > 0) {
+            try { await onMediaAdded(journey.id); } catch { /* No second upload on refresh failure. */ }
+          }
+          const errors = uploaded.mediaErrors.length;
+          setUploadState({
+            status: "complete", tone: "error",
+            message: `已收到 ${uploaded.uploadedCount} 个媒体，${errors} 个上传失败或未获服务端资产ID。成功素材保留在整段 Journey；未创建新途径点。请先核对列表，不要重复上传整个批次。`,
+          });
+          return;
+        }
+        ids = uploaded.assets.map((asset) => asset.id);
       }
 
       // Re-read authoritative server route revision after uploads but before
@@ -3793,7 +3803,22 @@ export function JourneyStory({
         });
         return;
       }
-      const ids = uploaded.assets.map((asset) => asset.id);
+      // Multipart dedupe can make several files refer to the SAME asset.
+      // A conflict is a draft-edit state, never an excuse for re-upload or
+      // a silent last-writer-wins placement.
+      let assignments: ReturnType<typeof resolveRoutePointBatchAssetAssignments>;
+      try {
+        assignments = resolveRoutePointBatchAssetAssignments(draft, ids);
+      } catch (cause) {
+        preserveDraftForReconciliation = true;
+        setRoutePointBatchReview({ ...review, uploadedAssetIds: ids });
+        setRoutePointBatchError(cause instanceof Error ? cause.message : "重复素材的目的地冲突");
+        setUploadState({
+          status: "complete", tone: "error",
+          message: "这些媒体已上传。请在保留的草案中为重复照片选择同一去向，然后再次确认；不会重新上传。",
+        });
+        return;
+      }
       const hasNewPoints = draft.groups.some((group) => group.destination === "new");
       if (hasNewPoints) {
         const request = buildRoutePointBatchApplyBody(draft, ids, draft.scope.batchId);
@@ -3830,10 +3855,15 @@ export function JourneyStory({
       // No new point: keep GPS-less media at Journey level, move only groups
       // explicitly assigned to existing points. Never fabricate a new point.
       let moved = 0;
-      for (const group of draft.groups) {
-        if (group.destination !== "existing" || !group.routePointId) continue;
-        const groupIds = group.fileIndexes.map((index) => ids[index]);
-        await manageMedia.moveJourneyMedia(journey.id, groupIds, group.routePointId);
+      const byRoutePoint = new Map<string, string[]>();
+      for (const entry of assignments) {
+        if (entry.destination !== "existing" || !entry.routePointId) continue;
+        const groupIds = byRoutePoint.get(entry.routePointId) ?? [];
+        groupIds.push(entry.assetId);
+        byRoutePoint.set(entry.routePointId, groupIds);
+      }
+      for (const [routePointId, groupIds] of byRoutePoint) {
+        await manageMedia.moveJourneyMedia(journey.id, groupIds, routePointId);
         moved += groupIds.length;
       }
       try { await onMediaAdded(journey.id); } catch { /* Explicit state below. */ }
@@ -3847,16 +3877,18 @@ export function JourneyStory({
         message: `本批保存未能确认：${error instanceof Error ? formatUploadError(error.message) : "服务器不可用"}。已成功上传的素材可能仍在 Journey；请先刷新读回，不要重复上传或重建。`,
       });
     } finally {
-      // Always consume the selected input once. Its upload may already have
-      // completed even when a later request failed or lost its response.
-      setRoutePointBatchReview(null);
+      // Keep the draft only for a proven pre-POST duplicate destination
+      // conflict, with already uploaded ids, so the user may reconcile safely.
+      // An unknown server write must consume it, never be blindly replayed.
+      if (!preserveDraftForReconciliation) setRoutePointBatchReview(null);
       setRoutePointBatchBusy(false);
       routePointBatchWriteOwnerRef.current = null;
     }
   }
 
   async function undoLastRoutePointBatch() {
-    if (!manageMedia || !routePointBatchReceipt || routePointBatchBusy) return;
+    if (!manageMedia?.readRoutePointBatch || !manageMedia.undoRoutePointBatch
+      || !routePointBatchReceipt || routePointBatchBusy) return;
     setRoutePointBatchBusy(true);
     setRoutePointBatchError(null);
     try {
