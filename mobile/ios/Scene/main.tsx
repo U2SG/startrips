@@ -15,9 +15,11 @@ import "../../../src/app.css";
 import "../../../src/styles/globe-time-scrubber.css";
 import "./scene.css";
 
-let pendingSnapshot: string | null = null;
+// The native page-world receiver exists before deferred module evaluation.
+// Carry any snapshot sent by WKNavigationDelegate.didFinish into React's first effect.
+let pendingSnapshot: string | null =
+  (window.atlasNative as { pending?: string | null } | undefined)?.pending ?? null;
 let deliverSnapshot: ((json: string) => void) | null = null;
-// Installed during module execution, before WKNavigationDelegate.didFinish.
 window.atlasNative = { receive(json) { pendingSnapshot = json; deliverSnapshot?.(json); } };
 
 function AtlasScene() {

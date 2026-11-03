@@ -1,0 +1,14 @@
+{
+  "id": "journey-one", "title": "山海之间", "note": "出发与归来", "revision": 7,
+  "coverMediaAssetId": "photo-one",
+  "routePoints": [
+    { "id": "point-one", "latitude": 30, "longitude": 120, "label": "第一站", "isStop": true, "note": "海边", "stayAnchorRoutePointId": null },
+    { "id": "point-via", "latitude": 31, "longitude": 121, "label": "途中", "isStop": false, "note": "路上的风", "stayAnchorRoutePointId": "point-one" },
+    { "id": "point-two", "latitude": 32, "longitude": 122, "label": "第二站", "isStop": true, "note": "山间", "stayAnchorRoutePointId": null }
+  ],
+  "media": [
+    { "id": "intro-photo", "journeyId": "journey-one", "routePointId": null, "fileName": "intro.jpg", "mimeType": "image/jpeg", "bytes": 100, "sortOrder": 0 },
+    { "id": "photo-one", "journeyId": "journey-one", "routePointId": "point-one", "fileName": "one.jpg", "mimeType": "image/jpeg", "bytes": 100, "sortOrder": 2 },
+    { "id": "video-two", "journeyId": "journey-one", "routePointId": "point-two", "fileName": "two.mp4", "mimeType": "video/mp4", "bytes": 1000, "sortOrder": 1 }
+  ]
+}
