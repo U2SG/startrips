@@ -22,7 +22,7 @@ const proposal: MediaPlacementProposalPlan = {
   algorithmVersion: "route-point-proposal-v1",
   scope: { batchId: "batch", journeyId: "journey", routeRevision: 1 },
   matchExisting: [{
-    kind: "match-existing", journeyId: "journey", routePointId: "point-1", fileIndexes: [0],
+    kind: "match-existing", journeyId: "journey", routePointId: "point-1", fileIndexes: [0, 3],
     basis: { reason: "existing-route-point-evidence", evidence: ["exif"], uncertainty: [] },
   }],
   suggestNew: [{
@@ -50,7 +50,12 @@ describe("RoutePointBatchReview accessible markup / #337", () => {
         capturedLocal: "2026-09-02T10:00:00", timezoneState: "local-only",
       } },
       { status: "no-evidence" },
-    ], 3);
+      { status: "signal", signal: {
+        latitude: 22.54, longitude: 114.06, spatialSource: "exif",
+        spatialGranularity: "coordinate", accuracyMeters: 12,
+        capturedAt: "2026-09-01T11:00:00+08:00", timezoneState: "offset-known",
+      } },
+    ], 4);
     const markup = renderToStaticMarkup(createElement(RoutePointBatchReview, {
       draft, journey, onEdit: () => {}, onCancel: () => {}, onConfirm: () => {},
     }));
