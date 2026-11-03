@@ -11,11 +11,23 @@ struct AtlasSceneView: UIViewRepresentable {
         return "window.atlasNative.receive(" + literal + ")"
     }
 
+    // Document-start delivery does not depend on a late WebKit message
+    // acknowledgement: the snapshot is buffered until the ES module is ready.
+    static let earlyReceiverScript = """
+    window.atlasNative = {
+      pending: null,
+      receive(json) { this.pending = json; }
+    };
+    """
+
     func makeCoordinator() -> Coordinator { Coordinator(router: router) }
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
+        configuration.userContentController.addUserScript(
+            WKUserScript(source: Self.earlyReceiverScript, injectionTime: .atDocumentStart,
+                         forMainFrameOnly: true))
         configuration.userContentController.add(context.coordinator, name: "atlas")
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.isOpaque = false; view.scrollView.isScrollEnabled = false
@@ -38,7 +50,6 @@ struct AtlasSceneView: UIViewRepresentable {
         var server: BundledSceneServer?
         var localURL: URL?
         var loaded = false
-        var scriptReady = false
         var restarts = 0
         var lastJSON: String?
         init(router: AppRouter) { self.router = router }
@@ -65,7 +76,7 @@ struct AtlasSceneView: UIViewRepresentable {
         func publish() {
             let encoder = JSONEncoder()
             encoder.outputFormatting = .sortedKeys
-            guard loaded, scriptReady, let data = try? encoder.encode(router.snapshot), let json = String(data: data, encoding: .utf8) else { return }
+            guard loaded, let data = try? encoder.encode(router.snapshot), let json = String(data: data, encoding: .utf8) else { return }
             guard json != lastJSON, let script = try? AtlasSceneView.receiveScript(json) else { return }
             lastJSON = json
             // This page-world API does not link the missing iOS 18.5 simulator Swift overlay.
@@ -75,20 +86,18 @@ struct AtlasSceneView: UIViewRepresentable {
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard message.frameInfo.isMainFrame, message.frameInfo.request.url?.host == "127.0.0.1",
-                  message.frameInfo.request.url?.port == localURL?.port,
-                  let body = message.body as? String, body.utf8.count <= 8192 else { return }
-            if body == "atlas-script-ready" {
-                scriptReady = true
-                publish()
-                return
-            }
-            guard let event = try? JSONDecoder().decode(SceneEvent.self, from: Data(body.utf8)) else { return }
+            // The authenticated frame origin is stable even if WebKit omits
+            // frameInfo.request.url from script messages.
+            let origin = message.frameInfo.securityOrigin
+            guard message.frameInfo.isMainFrame, origin.protocol == "http",
+                  origin.host == "127.0.0.1", origin.port == localURL?.port,
+                  let body = message.body as? String, body.utf8.count <= 8192,
+                  let event = try? JSONDecoder().decode(SceneEvent.self, from: Data(body.utf8)) else { return }
             router.receive(event)
         }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-            loaded = false; scriptReady = false; lastJSON = nil
+            loaded = false; lastJSON = nil
         }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded = true; lastJSON = nil; publish() }
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
@@ -98,7 +107,7 @@ struct AtlasSceneView: UIViewRepresentable {
                             && url?.path == "/index.html" ? .allow : .cancel)
         }
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-            loaded = false; scriptReady = false; lastJSON = nil; router.sceneRestarted(); restarts += 1
+            loaded = false; lastJSON = nil; router.sceneRestarted(); restarts += 1
             guard restarts <= 2, let localURL else { router.error = "地球已暂停，请刷新重试。"; return }
             webView.load(URLRequest(url: localURL))
         }
