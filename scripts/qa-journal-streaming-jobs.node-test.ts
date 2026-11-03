@@ -27,7 +27,7 @@ const actors: Actor[] = [];
 let owner: Actor, other: Actor;
 const target = (actor: Actor) => ({ userId: actor.userId, email: actor.email, atlasId: actor.atlasId, journeyId: actor.journeyId });
 const input = () => ({ ...qaInput, provider: { baseUrl: qaModel.baseUrl, model: qaModel.model } });
-const original = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel };
+const original = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel, journalModel: serverConfig.journalModel, journalTimeoutMs: serverConfig.journalTimeoutMs };
 async function createActor() {
   await pool.query('DELETE FROM rate_limit');
   const id = randomUUID(), email = `qa-stream-${id}@example.test`, password = 'qa-synthetic-password-123';
@@ -47,7 +47,7 @@ async function createActor() {
 }
 before(async () => {
   owner = await createActor(); other = await createActor();
-  Object.assign(serverConfig, { intentDriver: 'http-model', intentBaseUrl: qaModel.baseUrl, intentModel: qaModel.model, intentApiKey: 'synthetic-key-only' });
+  Object.assign(serverConfig, { intentDriver: 'http-model', intentBaseUrl: qaModel.baseUrl, intentModel: "simple-mock", journalModel: qaModel.model, intentApiKey: 'synthetic-key-only' });
 });
 after(async () => {
   journalImportDependencies.fetcher = undefined; Object.assign(serverConfig, original);
@@ -189,7 +189,7 @@ test('CLI: submit exits while queued; later status/export resume that same job w
   journalImportDependencies.fetcher = async () => { calls++; return qaResponse(qaSse(qaDraft())); };
   const cli = (args: string[], input?: unknown) => new Promise<{ code: number | null; out: string; err: string }>((resolveResult, reject) => {
     const child = spawn(process.execPath, ['--import', 'tsx', resolve('server/admin/journal-import-cli.ts'), ...args], {
-      env: { ...process.env, INTENT_DRIVER: 'http-model', INTENT_BASE_URL: qaModel.baseUrl, INTENT_MODEL: qaModel.model, INTENT_API_KEY: 'synthetic-key-only' },
+      env: { ...process.env, INTENT_DRIVER: 'http-model', INTENT_BASE_URL: qaModel.baseUrl, INTENT_MODEL: 'simple-mock', JOURNAL_MODEL: qaModel.model, INTENT_API_KEY: 'synthetic-key-only' },
     });
     let out = '', err = ''; child.stdout.on('data', data => out += data); child.stderr.on('data', data => err += data);
     child.on('error', reject); child.on('close', code => resolveResult({ code, out, err })); child.stdin.end(input === undefined ? '' : JSON.stringify(input));

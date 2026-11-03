@@ -1,3 +1,5 @@
+import { mockChapter, toolResponse } from "../itinerary/journal-import-test-fixtures";
+import { readJournalImportSnapshot } from "../../src/journey/journalImportApi";
 import { submitJournalJob, runJournalJob, readJournalJob, cancelJournalJob, jobView } from "../itinerary/journal-import-jobs";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
@@ -81,19 +83,20 @@ async function createAuthenticatedAtlas(label: string) {
 let owner: Awaited<ReturnType<typeof createAuthenticatedAtlas>>, other: typeof owner;
 let journeyId: string, mediaId: string;
 const source = "2028年6月3日\n- 23:30 实际：她在虚构城入住星桥酒店。\n- 07:30 取消：原计划入住山谷酒店。";
-const prior = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel };
+const prior = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel, journalModel: serverConfig.journalModel, journalTimeoutMs: serverConfig.journalTimeoutMs };
 const provider = { baseUrl: "https://model.example.test/v1", model: "mock" };
 const model = { ...provider, apiKey: "mock-only", timeoutMs: 1000, fetcher: vi.fn(async (_url: unknown, init?: RequestInit) => {
-  const body = JSON.parse(init!.body as string), name = body.tool_choice.function.name, data = JSON.parse(body.messages[1].content);
+  const body = JSON.parse(init!.body as string), name = body.tool_choice.function.name, data = JSON.parse(body.messages.filter((m: any) => m.role === "user").at(-1).content);
+  expect(body.model).toBe("mock");
   let args;
-  if (name === "stage_journal_import") args = { chapters: [{ firstLine: 0, lastLine: 2, date: "2028-06-03", dateEnd: null, dateEvidence: "2028年6月3日",
-    events: source.split("\n").slice(1).map((evidence, i) => ({ line: i + 1, evidence, status: i ? "cancelled" : "actual", localDate: null, dateEvidence: null,
+  if (name === "stage_journal_import") args = { chapters: [{ firstLine: 0, lastLine: 2, headingEvidence: "2028年6月3日", dateStatus: "single", questions: [], date: "2028-06-03", dateEnd: null, dateEvidence: "2028年6月3日",
+    events: source.split("\n").slice(1).map((evidence, i) => ({ line: i + 1, evidence, status: i ? "cancelled" : "actual", dateStatus: "absent", localDate: null, dateEvidence: null,
       time: i ? "07:30" : "23:30", timeEnd: null, timeEvidence: i ? "07:30" : "23:30", reading: evidence, questions: [] })) }] };
   else if (name === "search_hotels") {
     const event = data.flatMap((c: any) => c.events).find((e: any) => e.source.includes("入住星桥酒店"));
     args = { stays: [{ eventId: event.id ?? event.eventId, evidence: "在虚构城入住星桥酒店", name: "星桥酒店", area: "虚构城" }], questions: [] };
   } else { expect(name).toBe("stage_hotel_links"); args = { matches: data.map((e: any) => ({ eventId: e.eventId, candidateId: e.candidates[0].candidateId })) }; }
-  return Response.json({ choices: [{ message: { tool_calls: [{ type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
+  return Response.json({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ id: `mock-${randomUUID()}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
 }) };
 const point = { id: "provider-hotel", label: "星桥酒店", context: "虚构城，中心路", latitude: 10, longitude: 20, countryCode: "ZZ" };
 const search: LocationSearch = { driver: "mock", attribution: null, search: vi.fn(async () => [point]), reverse: vi.fn() };
@@ -103,7 +106,7 @@ beforeAll(async () => {
   const [media] = await db.insert(mediaAssets).values({ journeyId, storageDriver: "disabled", storageKey: randomUUID(), fileName: "fiction.jpg", mimeType: "image/jpeg", bytes: 1, uploadedByUserId: owner.userId }).returning(); mediaId = media.id;
   const chapters = previewJournalImport("2028-05-01\n实际：旧记事", "2028-05-01"); chapters[0].events[0].text = "private edited reading"; chapters[0].events[0].edited = true; chapters[0].events[0].mediaIds = [mediaId];
   await writeDailyJournal(journeyId, owner.atlasId, 0, chapters);
-  Object.assign(serverConfig, { intentDriver: "http-model", intentBaseUrl: provider.baseUrl, intentModel: provider.model, intentApiKey: "mock-only" });
+  Object.assign(serverConfig, { intentDriver: "http-model", intentBaseUrl: provider.baseUrl, intentModel: "simple-mock", journalModel: provider.model, intentApiKey: "mock-only" });
   journalImportDependencies.fetcher = model.fetcher;
 });
 afterAll(async () => {
@@ -117,10 +120,21 @@ afterAll(async () => {
 });
 let envelope: Envelope;
 const request = (cookie = owner.cookie, consent: unknown = provider) => app.request(`${TEST_ORIGIN}/api/intents/journal-import`, { method: "POST", headers: authHeaders(cookie), body: JSON.stringify({ journeyId, source, sentence: "导入原稿并关联已入住酒店", fallbackDate: "2028-06-01", provider: consent }) });
+it("refuses missing journal configuration and simple-model consent before any provider call", async () => {
+  const calls = model.fetcher.mock.calls.length;
+  try {
+    Object.assign(serverConfig, { journalModel: null });
+    expect((await request()).status).toBe(503);
+    Object.assign(serverConfig, { journalModel: provider.model });
+    expect((await request(owner.cookie, { ...provider, model: serverConfig.intentModel })).status).toBe(400);
+    expect(model.fetcher.mock.calls.length).toBe(calls);
+  } finally { Object.assign(serverConfig, { journalModel: provider.model }); }
+});
 it("one-sentence API authenticates target/provider before sending source and shares the admin plan", async () => {
   expect((await request("")).status).toBe(401); expect((await request(other.cookie)).status).toBe(404);
   expect((await request(owner.cookie, { ...provider, model: "different" })).status).toBe(400); expect(model.fetcher).not.toHaveBeenCalled();
   const response = await request(); expect(response.status).toBe(200); envelope = (await response.json()).envelope;
+  expect(envelope.plan.provider).toEqual({ baseUrl: expect.stringMatching(/^provider:[a-f0-9]{64}$/), model: "mock" });
   const legacy = { ...envelope.plan, version: 1 };
   expect(() => validateEnvelope({ plan: legacy, signature: createHmac("sha256", serverConfig.authSecret).update(JSON.stringify(legacy)).digest("hex") })).toThrow("INVALID_PLAN");
   expect((await readDailyJournal(journeyId, owner.atlasId))!.revision).toBe(1);
@@ -133,7 +147,7 @@ it.each([
   ["body-disconnect", "INTENT_UNREACHABLE", "transport", 502],
   ["unreachable", "INTENT_UNREACHABLE", "transport", 502],
   ["http", "INTENT_FAILED", "transport", 502],
-  ["schema", "JOURNAL_IMPORT_MALFORMED", "schema", 502],
+  ["schema", "INTENT_TOOL_PROTOCOL_INVALID", "protocol", 502],
 ] as const)("actual CLI preserves %s diagnosis without private output or writes", async (mode, code, kind, status) => {
   let calls = 0;
   const server = createServer(async (request, response) => {
@@ -156,7 +170,7 @@ it.each([
   try {
     const result = await new Promise<{ code: number | null; out: string; err: string }>((done, reject) => {
       const child = spawn(process.execPath, ["--import", "tsx", process.env.JOURNAL_ADMIN_TEST_ENTRY ?? resolve("server/admin/journal-import-cli.ts"), "llm-preview", path],
-        { env: { ...process.env, INTENT_DRIVER: "http-model", INTENT_BASE_URL: baseUrl, INTENT_MODEL: "mock", INTENT_API_KEY: "mock-only", INTENT_TIMEOUT_MS: "1000" } });
+        { env: { ...process.env, INTENT_DRIVER: "http-model", INTENT_BASE_URL: baseUrl, INTENT_MODEL: "simple-mock", JOURNAL_MODEL: "mock", INTENT_API_KEY: "mock-only", INTENT_TIMEOUT_MS: "1000", JOURNAL_TIMEOUT_MS: "1000" } });
       let out = "", err = ""; child.stdout.on("data", d => out += d); child.stderr.on("data", d => err += d);
       child.on("error", reject); child.on("close", code => done({ code, out, err }));
       child.stdin.end(JSON.stringify({ target: { userId: owner.userId, email: authUserEmails[0], atlasId: owner.atlasId, journeyId }, sentence: "导入并关联酒店", source, fallbackDate: "2028-06-01", provider: { baseUrl, model: "mock" } }));
@@ -179,7 +193,7 @@ it("actual admin CLI uses the same model use-case through a local mock provider"
   try {
     const result = await new Promise<{ code: number | null; out: string; err: string }>((done, reject) => {
       const child = spawn(process.execPath, ["--import", "tsx", process.env.JOURNAL_ADMIN_TEST_ENTRY ?? resolve("server/admin/journal-import-cli.ts"), "llm-preview", path],
-        { env: { ...process.env, INTENT_DRIVER: "http-model", INTENT_BASE_URL: baseUrl, INTENT_MODEL: "mock", INTENT_API_KEY: "mock-only" } });
+        { env: { ...process.env, INTENT_DRIVER: "http-model", INTENT_BASE_URL: baseUrl, INTENT_MODEL: "simple-mock", JOURNAL_MODEL: "mock", INTENT_API_KEY: "mock-only" } });
       let out = "", err = ""; child.stdout.on("data", d => out += d); child.stderr.on("data", d => err += d);
       child.on("error", reject); child.on("close", code => done({ code, out, err }));
       child.stdin.end(JSON.stringify({ target: { userId: owner.userId, email: authUserEmails[0], atlasId: owner.atlasId, journeyId },
@@ -289,4 +303,194 @@ it('provider discovery returns only an opaque identity and safe hostname, never 
     const synchronous=await request(owner.cookie,{baseUrl:data.baseUrl,model:data.model});expect(synchronous.status).toBe(200);
     const output=JSON.stringify({data,result:await synchronous.json()});for(const secret of ['private-password','private-path-secret','private-query','mock-only'])expect(output).not.toContain(secret);
   }finally{Object.assign(serverConfig,{intentBaseUrl:previous});}
+});
+
+it.each(["queued", "running"])("stops a %s job after a journal-model change without fallback or replay", async phase => {
+  await db.update(member).set({ role: "owner" }).where(eq(member.userId, owner.userId));
+  const target = { ...owner, email: authUserEmails[0], journeyId };
+  const before = await readDailyJournal(journeyId, owner.atlasId), id = randomUUID();
+  const calls = vi.fn(async () => {
+    Object.assign(serverConfig, { journalModel: "different-journal-model" });
+    // A malformed argument answer would normally be correctable. Configuration
+    // changes must stop the next call, not send that source to either model again.
+    const call = { index: 0, id: "changed-model-call", type: "function", function: { name: "stage_journal_import", arguments: "{}" } };
+    return new Response(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [call] }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+  });
+  journalImportDependencies.fetcher = calls;
+  try {
+    await submitJournalJob(target, id, { source, sentence: "导入合成记录", fallbackDate: "2028-06-01", provider });
+    if (phase === "queued") Object.assign(serverConfig, { journalModel: "different-journal-model" });
+    await runJournalJob();
+    const row = await readJournalJob(target, id);
+    expect(row.status).toBe("failed");
+    expect(row.error.error).toBe("JOURNAL_PROVIDER_CONFIRMATION_REQUIRED");
+    expect(row.envelope).toBeNull();
+    expect(calls).toHaveBeenCalledTimes(phase === "queued" ? 0 : 1);
+    Object.assign(serverConfig, { journalModel: provider.model });
+    await runJournalJob();
+    expect(calls).toHaveBeenCalledTimes(phase === "queued" ? 0 : 1);
+    expect(await readDailyJournal(journeyId, owner.atlasId)).toEqual(before);
+  } finally {
+    Object.assign(serverConfig, { journalModel: provider.model });
+    journalImportDependencies.fetcher = model.fetcher;
+  }
+});
+
+for (const path of ["sync", "job"] as const) {
+  it.each([
+    "chapter-unknown-with-value", "event-unknown-with-value", "range", "unresolved",
+    "incomplete-left-chapter-unknown-with-value", "incomplete-left-event-unknown-with-value",
+    "incomplete-right-chapter-unknown-with-value", "incomplete-right-event-unknown-with-value",
+    "incomplete-left-unresolved", "incomplete-right-unresolved", "quantity-chapter", "quantity-event",
+  ] as const)(`${path} date evidence: %s cannot bypass validation or change existing data`, async scenario => {
+    const j = await createJourneyForAtlas(owner.atlasId, owner.userId, { title: "date evidence fixture", startedOn: "2028-06-01", endedOn: "2028-06-09", note: "keep", lightColor: "#ffffff", routePoints: [{ label: "旧点", latitude: 1, longitude: 2, isStop: true, occurredAt: null }] });
+    const target = { ...owner, email: authUserEmails[0], journeyId: j!.id };
+    const manual = previewJournalImport("2028-05-01\n实际：手工内容。", "2028-05-01");
+    manual[0].events[0].text = "edited prior text"; manual[0].events[0].edited = true;
+    await writeDailyJournal(j!.id, owner.atlasId, 0, manual);
+    const before = await readDailyJournal(j!.id, owner.atlasId), journeyBefore = await getJourneyForAtlas(j!.id, owner.atlasId);
+    expect(journeyBefore).toBeDefined(); expect(journeyBefore!.routePoints).toHaveLength(1);
+    const incomplete = scenario.startsWith("incomplete-"), quantity = scenario.startsWith("quantity-");
+    const evidence = incomplete
+      ? scenario.startsWith("incomplete-left-") ? "（2028年6月？日）到（2028年6月5日）" : "（2028年6月5日）到（2028年？月5日）"
+      : "（2028年6月3日）到（2028年6月5日）";
+    const text = quantity ? "她于2028年6月3日到（3.5公里外的酒店）入住。" : `记录：${evidence}。她沿湖步行。`;
+    const singleDate = quantity ? "2028-06-03" : "2028-06-05";
+    const singleQuote = quantity ? "2028年6月3日" : "2028年6月5日";
+    const chapterHasValue = scenario.endsWith("chapter-unknown-with-value") || scenario === "quantity-chapter";
+    const eventHasValue = scenario.endsWith("event-unknown-with-value") || scenario === "quantity-event";
+    const payload = { chapters: [{ firstLine: 0, lastLine: 0, headingEvidence: null,
+      dateStatus: quantity ? chapterHasValue ? "single" : "absent" : scenario === "range" ? "range" : "unknown",
+      questions: quantity ? [] : ["日期范围待确认"],
+      date: chapterHasValue ? singleDate : scenario === "range" ? "2028-06-03" : null,
+      dateEnd: scenario === "range" ? "2028-06-05" : null,
+      dateEvidence: quantity ? chapterHasValue ? singleQuote : null : evidence,
+      events: [{ line: 0, evidence: text, status: "actual", dateStatus: quantity ? eventHasValue ? "single" : "absent" : "unknown", localDate: eventHasValue ? singleDate : null,
+        dateEvidence: quantity ? eventHasValue ? singleQuote : null : evidence, time: null, timeEnd: null, timeEvidence: null, reading: text, questions: quantity ? [] : ["日期范围待确认"] }] }] };
+    let calls = 0;
+    journalImportDependencies.fetcher = async (_url, init) => {
+      calls++;
+      const fn = { name: "stage_journal_import", arguments: JSON.stringify(payload) };
+      if (!JSON.parse(init!.body as string).stream) return Response.json({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ id: `mock-${randomUUID()}`, type: "function", function: fn }] } }] });
+      const chunk = { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: `date-fixture-${calls}`, type: "function", function: fn }] }, finish_reason: "tool_calls" }] };
+      return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+    };
+    try {
+      const input = { source: text, sentence: "导入合成日期记录", fallbackDate: "2028-06-01", provider };
+      const invalid = scenario.endsWith("unknown-with-value"); let result: Envelope | null = null;
+      if (path === "sync") {
+        const response = await app.request(`${TEST_ORIGIN}/api/intents/journal-import`, { method: "POST", headers: authHeaders(owner.cookie), body: JSON.stringify({ ...input, journeyId: j!.id }) });
+        expect(response.status).toBe(invalid ? 422 : 200);
+        const body = await response.json();
+        if (invalid) { expect(body.error).toBe("JOURNAL_IMPORT_MALFORMED"); expect(body.envelope).toBeUndefined(); }
+        else result = body.envelope;
+      } else {
+        const id = randomUUID(); await submitJournalJob(target, id, input); await runJournalJob();
+        const row = await readJournalJob(target, id);
+        expect(row.status).toBe(invalid ? "failed" : "completed");
+        if (invalid) { expect(row.error).toMatchObject({ error: "JOURNAL_IMPORT_MALFORMED" }); expect(row.envelope).toBeNull(); }
+        else result = row.envelope;
+      }
+      if (!invalid) {
+        const plan = validateEnvelope(result).plan;
+        expect(plan.after.chapters[0]).toEqual(before!.chapters[0]);
+        const added = plan.after.chapters[1]; expect(added.source).toBe(text);
+        expect(added.events[0].localDate).toBe(eventHasValue ? singleDate : null);
+        if (quantity) {
+          expect(added.date).toBe(chapterHasValue ? singleDate : "2028-06-01");
+          expect(added.suggestions[0].questions.join()).not.toMatch(/日期范围|日期区间/);
+        } else expect(added.suggestions[0].questions.join()).toContain(scenario === "range" ? "2028-06-03 至 2028-06-05" : "日期范围待确认");
+      }
+      expect(calls).toBe(invalid ? 2 : 1);
+      expect(await readDailyJournal(j!.id, owner.atlasId)).toEqual(before);
+      expect(await getJourneyForAtlas(j!.id, owner.atlasId)).toEqual(journeyBefore);
+    } finally { journalImportDependencies.fetcher = model.fetcher; }
+  });
+}
+
+for (const mode of ["sync", "job"] as const) {
+  it.each(["correct", "version", "permission", ...(mode === "job" ? ["cancel"] : [])])(`${mode}: argument correction respects %s state`, async change => {
+    const j = await createJourneyForAtlas(owner.atlasId, owner.userId, { title: "correction fixture", startedOn: "2028-06-01", endedOn: "2028-06-09", note: "", lightColor: "#ffffff", routePoints: [{ label: "合成起点", latitude: 1, longitude: 2, isStop: true, occurredAt: null }] });
+    const target = { ...owner, email: authUserEmails[0], journeyId: j!.id }, jobId = randomUUID();
+    const input = { source, sentence: "导入合成记录", fallbackDate: "2028-06-01", provider };
+    let calls = 0;
+    journalImportDependencies.fetcher = async (url, init) => {
+      calls++;
+      const body = JSON.parse(String(init?.body)), payload = await (await model.fetcher(url, init)).json();
+      const call = payload.choices[0].message.tool_calls[0];
+      if (calls === 1) {
+        const args = JSON.parse(call.function.arguments); args.chapters[0].date = "2028-02-30"; call.function.arguments = JSON.stringify(args);
+        if (change === "version") await writeDailyJournal(j!.id, owner.atlasId, 0, previewJournalImport("她后来手工记录。", "2028-06-01"));
+        if (change === "permission") await db.update(member).set({ role: "viewer" }).where(eq(member.userId, owner.userId));
+        if (change === "cancel") await cancelJournalJob(target, jobId);
+      } else {
+        expect(body.messages.at(-1).role).toBe("tool");
+        expect(body.messages.at(-1).tool_call_id).toBe(body.messages.at(-2).tool_calls[0].id);
+        expect(JSON.parse(body.messages.at(-1).content).error.code).toBe("CALENDAR_DATE");
+      }
+      if (!body.stream) return Response.json(payload);
+      return new Response(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, ...call }] }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+    };
+    try {
+      if (mode === "sync") {
+        const response = await app.request(`${TEST_ORIGIN}/api/intents/journal-import`, { method: "POST", headers: authHeaders(owner.cookie), body: JSON.stringify({ ...input, journeyId: j!.id }) });
+        const output = await response.json();
+        if (change === "correct") { expect(response.status).toBe(200); expect(output.envelope).toBeDefined(); }
+        else { expect(response.status).toBe(change === "version" ? 409 : 404); expect(output.envelope).toBeUndefined(); expect(output.error).toBe(change === "version" ? "JOURNAL_CHANGED" : "JOURNEY_NOT_FOUND"); }
+      } else {
+        await submitJournalJob(target, jobId, input); await runJournalJob();
+        if (change === "permission") await db.update(member).set({ role: "owner" }).where(eq(member.userId, owner.userId));
+        const row = await readJournalJob(target, jobId);
+        expect(row.status).toBe(change === "correct" ? "completed" : change === "cancel" ? "cancelled" : "failed");
+        if (change === "version" || change === "permission") expect(row.error.error).toBe(change === "version" ? "JOURNAL_CHANGED" : "TARGET_PERMISSION_DENIED");
+        if (change !== "correct") expect(row.envelope).toBeNull();
+      }
+      expect(calls).toBe(change === "correct" ? 2 : 1);
+      const saved = await readDailyJournal(j!.id, owner.atlasId);
+      expect(saved!.revision).toBe(change === "version" ? 1 : 0);
+      if (change === "version") expect(saved!.chapters[0].source).toBe("她后来手工记录。");
+    } finally {
+      journalImportDependencies.fetcher = model.fetcher;
+      await db.update(member).set({ role: "owner" }).where(eq(member.userId, owner.userId));
+    }
+  });
+}
+
+it.each(["sync", "job"] as const)("%s preserves repeated source through correction, preview, signed save and replay", async mode => {
+  const j = await createJourneyForAtlas(owner.atlasId, owner.userId, { title: "repeated source fixture", startedOn: "2028-06-01", endedOn: "2028-06-09", note: "", lightColor: "#ffffff", routePoints: [{ label: "合成起点", latitude: 1, longitude: 2, isStop: true, occurredAt: null }] });
+  const target = { ...owner, email: authUserEmails[0], journeyId: j!.id }, jobId = randomUUID();
+  const text = "她在湖边散步。", repeated = `${text}\n${text}`, input = { source: repeated, sentence: "导入合成记录", fallbackDate: "2028-06-01", provider };
+  let calls = 0;
+  journalImportDependencies.fetcher = async (_url, init) => {
+    calls++;
+    const request = JSON.parse(String(init?.body)), first = mockChapter(text), second = mockChapter(text);
+    second.firstLine = second.lastLine = second.events[0].line = 1;
+    if (calls === 2) expect(JSON.parse(request.messages.at(-1).content).error.code).toBe("DUPLICATE_CHAPTER_SOURCE");
+    const response = toolResponse("stage_journal_import", { chapters: calls === 1 ? [first, second] : [mockChapter(repeated)] });
+    if (!request.stream) return response;
+    const call = (await response.json()).choices[0].message.tool_calls[0];
+    return new Response(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, ...call }] }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+  };
+  try {
+    let result: Envelope;
+    if (mode === "sync") {
+      const response = await app.request(`${TEST_ORIGIN}/api/intents/journal-import`, { method: "POST", headers: authHeaders(owner.cookie), body: JSON.stringify({ ...input, journeyId: j!.id }) });
+      expect(response.status).toBe(200); result = (await response.json()).envelope;
+    } else {
+      await submitJournalJob(target, jobId, input); await runJournalJob();
+      const row = await readJournalJob(target, jobId); expect(row.status).toBe("completed"); result = row.envelope;
+    }
+    const checked = validateEnvelope(result);
+    expect(calls).toBe(2); expect(checked.plan.importedChapterIds).toHaveLength(1);
+    expect(checked.plan.after.chapters.map(c => c.source).join("\n")).toBe(repeated);
+    expect(checked.plan.after.chapters[0].events.map(e => e.source)).toEqual([text, text]);
+    expect(readJournalImportSnapshot({ jobId, status: "completed", envelope: checked, planDigest: hash(checked) }, jobId,
+      { journeyId: j!.id, atlasId: owner.atlasId, ...input })).toEqual({ status: "completed", draft: { revision: 0, chapters: checked.plan.after.chapters } });
+    expect((await readDailyJournal(j!.id, owner.atlasId))!.revision).toBe(0);
+    const backup = vi.fn(async () => {});
+    expect((await applyImport(checked, hash(checked), backup)).state).toBe("applied");
+    expect((await applyImport(checked, hash(checked), backup)).state).toBe("already-applied");
+    expect(backup).toHaveBeenCalledTimes(1);
+    expect((await readDailyJournal(j!.id, owner.atlasId))!.chapters[0].events.map(e => e.source)).toEqual([text, text]);
+  } finally { journalImportDependencies.fetcher = model.fetcher; }
 });

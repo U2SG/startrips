@@ -12,9 +12,9 @@ import { serverConfig } from "../config";
 import { journalImportDependencies, prepareAuthorizedJournalImport, journalProviderInfo } from "../itinerary/journal-import-service";
 import { submitJournalJob, runJournalJob, readJournalJob } from "../itinerary/journal-import-jobs";
 const provider = { baseUrl: "https://synthetic-model.example.test/v1", model: "synthetic" };
-const prior = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel };
+const prior = { intentDriver: serverConfig.intentDriver, intentBaseUrl: serverConfig.intentBaseUrl, intentApiKey: serverConfig.intentApiKey, intentModel: serverConfig.intentModel, journalModel: serverConfig.journalModel, journalTimeoutMs: serverConfig.journalTimeoutMs };
 const inputSource = "2028-06-02\n实际：她继续记录。";
-const answer = () => Response.json({ choices: [{ message: { tool_calls: [{ type: "function", function: { name: "stage_journal_import", arguments: JSON.stringify({ chapters: [{ firstLine: 0, lastLine: 1, date: "2028-06-02", dateEnd: null, dateEvidence: "2028-06-02", events: [{ line: 1, evidence: "实际：她继续记录。", status: "actual", localDate: null, dateEvidence: null, time: null, timeEnd: null, timeEvidence: null, reading: "她继续记录。", questions: [] }] }] }) } }] } }] });
+const answer = () => Response.json({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ id: `mock-${randomUUID()}`, type: "function", function: { name: "stage_journal_import", arguments: JSON.stringify({ chapters: [{ firstLine: 0, lastLine: 1, headingEvidence: "2028-06-02", dateStatus: "single", questions: [], date: "2028-06-02", dateEnd: null, dateEvidence: "2028-06-02", events: [{ line: 1, evidence: "实际：她继续记录。", status: "actual", dateStatus: "absent", localDate: null, dateEvidence: null, time: null, timeEnd: null, timeEvidence: null, reading: "她继续记录。", questions: [] }] }] }) } }] } }] });
 async function modelAnswer(mode: "sync" | "job") {
   const response = answer();
   if (mode === "sync") return response;
@@ -27,7 +27,7 @@ const userId = randomUUID(), org = randomUUID(), email = `${userId}@example.test
 let atlasId: string;
 const source = "2028-06-01\n实际：她在虚构花园散步。";
 beforeAll(async () => {
-  Object.assign(serverConfig, { intentDriver: "http-model", intentBaseUrl: provider.baseUrl, intentApiKey: "mock-only", intentModel: provider.model });
+  Object.assign(serverConfig, { intentDriver: "http-model", intentBaseUrl: provider.baseUrl, intentApiKey: "mock-only", intentModel: "simple-mock", journalModel: provider.model });
   await db.insert(user).values({ id: userId, name: "Synthetic", email });
   await db.insert(organization).values({ id: org, name: "Synthetic", slug: org, createdAt: new Date() });
   await db.insert(member).values({ id: randomUUID(), userId, organizationId: org, role: "owner", createdAt: new Date() });

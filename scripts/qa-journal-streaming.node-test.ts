@@ -37,24 +37,24 @@ test('evidence: one invalid final event rejects the entire result without mutati
   assert.deepEqual(replay.importedChapterIds, first.importedChapterIds);
 });
 
-for (const fault of ['omitted-event', 'overlap', 'gap', 'duplicate-event', 'invented-date', 'cropped-meridiem', 'truncated-range'] as const) {
+for (const fault of ['omitted-event', 'overlap', 'gap', 'duplicate-event', 'invalid-date', 'unquoted-clock', 'end-without-start'] as const) {
   test(`evidence: reject ${fault}`, async () => {
     const payload = qaDraft();
     if (fault === 'omitted-event') payload.chapters[1].events.pop();
     if (fault === 'overlap') payload.chapters[1].firstLine = 5;
     if (fault === 'gap') payload.chapters[1].firstLine = 7;
     if (fault === 'duplicate-event') payload.chapters[0].events[1] = payload.chapters[0].events[0];
-    if (fault === 'invented-date') payload.chapters[1].date = '2028-06-07';
-    if (fault === 'cropped-meridiem') Object.assign(payload.chapters[1].events[0], { time: '11:30', timeEnd: null, timeEvidence: '11:30' });
-    if (fault === 'truncated-range') Object.assign(payload.chapters[0].events[3], { timeEnd: null, timeEvidence: '10:30' });
+    if (fault === 'invalid-date') payload.chapters[1].date = '2028-02-30';
+    if (fault === 'unquoted-clock') Object.assign(payload.chapters[1].events[0], { time: '11:30', timeEnd: null, timeEvidence: 'fabricated' });
+    if (fault === 'end-without-start') Object.assign(payload.chapters[0].events[3], { time: null, timeEnd: '13:30', timeEvidence: '10:30–13:30' });
     await assert.rejects(prepare(payload), { code: 'JOURNAL_IMPORT_MALFORMED' });
   });
 }
 
-test('evidence: a markdown date heading containing a hotel stay cannot hide that event', async () => {
+test('evidence: first-line omission requires an explicit whole heading reference', async () => {
   const source = '### 2028年6月3日 实际：她在虚构城入住星桥酒店。\n计划：次日离开。';
-  const payload = { chapters: [{ firstLine: 0, lastLine: 1, date: '2028-06-03', dateEnd: null, dateEvidence: '2028年6月3日', events: [
-    { line: 1, evidence: '计划：次日离开。', status: 'planned', localDate: null, dateEvidence: null, time: null, timeEnd: null, timeEvidence: null, reading: '', questions: [] },
+  const payload = { chapters: [{ firstLine: 0, lastLine: 1, headingEvidence: null, dateStatus: 'single', questions: [], date: '2028-06-03', dateEnd: null, dateEvidence: '2028年6月3日', events: [
+    { line: 1, evidence: '计划：次日离开。', status: 'planned', dateStatus: 'absent', localDate: null, dateEvidence: null, time: null, timeEnd: null, timeEvidence: null, reading: '', questions: [] },
   ] }] };
   await assert.rejects(prepareJournalImport({ ...qaInput, source }, empty(), { ...qaModel, fetcher: qaAnswer(payload) }), { code: 'JOURNAL_IMPORT_MALFORMED' });
 });

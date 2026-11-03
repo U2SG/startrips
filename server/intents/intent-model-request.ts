@@ -18,7 +18,15 @@ export type IntentModelOptions = {
   timeoutMs: number;
   fetcher?: typeof fetch;
   stream?: ModelStreamOptions;
+  signal?: AbortSignal;
+  /** Recheck authorized scope/version before another staging call. Never retried. */
+  checkCurrent?: () => Promise<void>;
 };
+
+export type ModelToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
+export type ModelMessage = { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: null; tool_calls: ModelToolCall[] }
+  | { role: "tool"; tool_call_id: string; content: string };
 
 export function isDashScope(baseUrl: string) {
   try {
@@ -37,6 +45,8 @@ export async function requestIntentModelAnswer(
     schema: object;
     /** Optional single whitelisted function; never executes arbitrary model calls. */
     toolName?: string;
+    messages?: ModelMessage[];
+    captureToolCall?: boolean;
     /** Names the provider in error messages, e.g. "share intent provider". */
     providerName: string;
     /** Builds the stage error the caller's route maps to `{ error, message }`. */
@@ -44,16 +54,24 @@ export async function requestIntentModelAnswer(
   },
 ): Promise<unknown> {
   const { baseUrl, apiKey, model, timeoutMs } = options;
+  // Qwen3.8 Max on Ali's compatible endpoint reports completed forced tool
+  // calls as "stop" (verified for sync and SSE). All call/ID/size checks still
+  // apply; never accept length/content_filter or broaden other providers.
+  const aliQwenMax = isDashScope(baseUrl) && /^qwen3\.8-max(?:-|$)/.test(model);
   const fetcher = options.fetcher ?? fetch;
   const body = {
           model,
-          messages: [
+          messages: request.messages ?? [
             { role: "system", content: request.systemPrompt },
             { role: "user", content: request.userContent },
           ],
           // DashScope's own switch; strict OpenAI-compatible services
           // reject unknown request fields, so only DashScope receives it.
           ...(isDashScope(baseUrl) ? { enable_thinking: false } : {}),
+          // Ali Qwen Max buffers complex array/object tool arguments unless
+          // tool_stream is enabled; stream alone only enables the SSE envelope.
+          // Keep this provider extension off sync, non-tool and other-model calls.
+          ...(options.stream && request.toolName && aliQwenMax ? { tool_stream: true } : {}),
           ...(request.toolName ? {
             tools: [{ type: "function", function: { name: request.toolName, description: request.systemPrompt, strict: true, parameters: request.schema } }],
             tool_choice: { type: "function", function: { name: request.toolName } },
@@ -67,13 +85,24 @@ export async function requestIntentModelAnswer(
             },
           } }),
         };
-  if (options.stream) return requestModelStream(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, apiKey, body, request.toolName, options.stream, fetcher, request.fail);
+  if (options.stream) return requestModelStream(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, apiKey, body, request.toolName, { ...options.stream, signal: options.signal ?? options.stream.signal }, fetcher, request.fail, request.captureToolCall, aliQwenMax);
   const controller = new AbortController();
+  const cancel = () => controller.abort();
+  options.signal?.addEventListener("abort", cancel, { once: true });
+  if (options.signal?.aborted) cancel();
+  const abortable = <T>(promise: Promise<T>) => new Promise<T>((resolve, reject) => {
+    const aborted = () => { cleanup(); reject(new Error("MODEL_ABORTED")); };
+    const cleanup = () => controller.signal.removeEventListener("abort", aborted);
+    controller.signal.addEventListener("abort", aborted, { once: true });
+    if (controller.signal.aborted) aborted();
+    promise.then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
+  });
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    if (controller.signal.aborted) throw new Error("CANCELLED");
     let response: Response;
     try {
-      response = await fetcher(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+      response = await abortable(fetcher(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -81,7 +110,7 @@ export async function requestIntentModelAnswer(
         },
         body: JSON.stringify(body),
         signal: controller.signal,
-      });
+      }).then(response => { if (controller.signal.aborted) void response.body?.cancel().catch(() => undefined); return response; }));
     } catch (error) {
       if (controller.signal.aborted) throw error;
       throw request.fail(
@@ -95,16 +124,25 @@ export async function requestIntentModelAnswer(
         `The ${request.providerName} answered ${response.status}`,
       );
     }
-    const payload = await response.json().catch((error: unknown) => {
+    const payload = await abortable(response.json()).catch((error: unknown) => {
       // A response header is not a completed response: preserve abort/network
       // failures while reading the body instead of misreporting schema failure.
       if (controller.signal.aborted) throw error;
       if (error instanceof SyntaxError) return null;
       throw request.fail("INTENT_UNREACHABLE", `The ${request.providerName} response could not be read`);
     }) as {
-      choices?: Array<{ message?: { content?: unknown; tool_calls?: Array<{ type?: string; function?: { name?: string; arguments?: unknown } }> } }>;
+      choices?: Array<{ finish_reason?: string; message?: { content?: unknown; tool_calls?: Array<{ type?: string; function?: { name?: string; arguments?: unknown } }> } }>;
     } | null;
     const message = payload?.choices?.[0]?.message;
+    if (request.captureToolCall) {
+      const call = message?.tool_calls?.[0] as ModelToolCall | undefined;
+      const finish = payload?.choices?.[0]?.finish_reason;
+      if (!Array.isArray(payload?.choices) || payload.choices.length !== 1 || !(finish === "tool_calls" || aliQwenMax && finish === "stop") || !Array.isArray(message?.tool_calls) || message.tool_calls.length !== 1 || call?.type !== "function" || call.function?.name !== request.toolName
+        || typeof call.id !== "string" || !call.id.trim() || call.id.length > 256 || typeof call.function.arguments !== "string"
+        || Buffer.byteLength(call.function.arguments) > 1_000_000)
+        throw request.fail("INTENT_TOOL_PROTOCOL_INVALID", "Invalid tool call identity or envelope", 502);
+      return { id: call.id, type: "function", function: { name: call.function.name, arguments: call.function.arguments } } satisfies ModelToolCall;
+    }
     if (request.toolName && (message?.tool_calls?.length !== 1 || message.tool_calls[0].type !== "function" || message.tool_calls[0].function?.name !== request.toolName)) return null;
     const content = request.toolName ? message?.tool_calls?.[0]?.function?.arguments : message?.content;
     if (typeof content !== "string") return null;
@@ -115,6 +153,7 @@ export async function requestIntentModelAnswer(
     }
   } catch (error) {
     if (controller.signal.aborted) {
+      if (options.signal?.aborted) throw request.fail("INTENT_CANCELLED", "The model request was cancelled", 499);
       throw request.fail(
         "INTENT_TIMEOUT",
         `The ${request.providerName} did not answer within ${timeoutMs}ms`,
@@ -124,5 +163,6 @@ export async function requestIntentModelAnswer(
     throw error;
   } finally {
     clearTimeout(timer);
+    options.signal?.removeEventListener("abort", cancel);
   }
 }

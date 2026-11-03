@@ -143,6 +143,30 @@ at startup. `INTENT_TIMEOUT_MS` (default 30000, 1000-300000) bounds one call;
 a slow provider is reported as `INTENT_TIMEOUT` (504), an unconfigured one as
 `INTENT_UNAVAILABLE` (503).
 
+Journal import, journal reading and hotel tools require an explicit `JOURNAL_MODEL`
+on that same endpoint and key. This lets complex journal work use a more capable
+model without changing `INTENT_MODEL` for simple commands or `INTENT_VISION_MODEL`
+for photos. An empty journal model disables only journal AI; it never falls back
+to the simple model. Select a tool-capable model available in the existing account
+and region; do not infer availability from a public model name. `JOURNAL_TIMEOUT_MS`
+(default 120000, 1000–300000) bounds synchronous journal/hotel calls; durable imports
+retain their separate streaming connection, first-byte and idle deadlines.
+Provider/transport failure does not trigger fallback or automatic replay. Argument
+correction can make additional billed calls within the existing staging budget.
+
+Journal consent, queued/running jobs and signed journal plans bind the journal
+model identity. Switching the journal model invalidates pending generation and old
+provider consent; completed signed previews retain their provenance and normal
+explicit-save/version checks. Newly generated hotel preview tokens also carry
+model provenance; existing signed hotel tokens remain valid until expiry. Configuration
+updates require recreating the API container through the normal deployment process.
+No credential change or database migration is needed for scenario selection.
+Qwen3.8 Max on Ali's compatible endpoint uses `stop` for completed forced tool
+calls in both sync and streaming responses. The adapter accepts that model-specific
+finish marker while retaining exact function/ID, single-call, size, schema and
+stream completion checks. Other providers/models and truncated/filtered responses
+do not gain this compatibility exception.
+
 `POST /api/intents/route` reads a sentence in two stages, one provider call
 each, with one sentence per Atlas at a time on an API process (a second
 answers `INTENT_ROUTE_BUSY`, 409). The sentence is at most 500 characters,
