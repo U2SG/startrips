@@ -317,7 +317,7 @@ export function recoverUploadedRoutePointBatchSubset(
     assets: readonly { id: string }[];
   },
 ): { draft: RoutePointBatchDraft; assetIds: string[] } | null {
-  if (!Number.isSafeInteger(fileCount) || fileCount < 1 || uploaded.mediaErrors.length < 1) return null;
+  if (!Number.isSafeInteger(fileCount) || fileCount < 1) return null;
   const failed = new Set(uploaded.mediaErrors.map((error) => error.fileIndex));
   if (failed.size !== uploaded.mediaErrors.length
     || [...failed].some((index) => !Number.isSafeInteger(index) || index < 0 || index >= fileCount)) return null;
@@ -339,7 +339,7 @@ export function recoverUploadedRoutePointBatchSubset(
         ? indexMap.get(group.representativeFileIndex!)!
         : fileIndexes[0],
     };
-    if (group.destination === "new" && !representativeSurvived) {
+    if (group.destination === "new" && !representativeSurvived && group.spatialSource !== "manual") {
       // Never borrow EXIF coordinates or timestamp from a FAILED file.
       Object.assign(next, {
         destination: "unplaced", routePointId: null, label: "位置待重新确认",

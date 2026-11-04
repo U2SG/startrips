@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { Journey } from "./types";
 import type { MediaPlacementProposalPlan, MediaPlacementReadResult } from "./mediaPlacement";
 import {
+  createRoutePointBatchRecovery, parseRoutePointBatchRecovery, recoverRoutePointBatchReview,
+  updateRoutePointBatchRecoveryDraft,
+} from "./routePointBatchRecovery";
+import {
   buildRoutePointBatchApplyBody,
   canAutoOrganizeRoutePointBatch,
   createRoutePointBatchDraft,
@@ -64,6 +68,75 @@ const reads: MediaPlacementReadResult[] = [
 ];
 
 const draft = () => createRoutePointBatchDraft(plan(), journey, reads, 4);
+
+describe("session-only upload recovery / #337", () => {
+  const asset = (id: string) => ({ id, journeyId: journey.id, routePointId: null,
+    fileName: "same-name.jpg", mimeType: "image/jpeg", bytes: 1, sortOrder: 0, createdAt: journey.createdAt });
+  function saved() {
+    const edited = editRoutePointBatchDraft(draft(), { type: "rename", id: "new:1-2", value: "Reviewed new point" }, journey);
+    const value = createRoutePointBatchRecovery({ ...edited, autoOrganize: true }, journey, 4);
+    value.confirmed = [{ fileIndex: 2, assetId: "asset-2" }, { fileIndex: 1, assetId: "asset-1" }];
+    return value;
+  }
+  const readback = () => ({ ...journey, media: [asset("asset-2"), asset("asset-1")] });
+
+  it("restores only indexed confirmations with reviewed NEW choices, not readback order or consent", () => {
+    const raw = JSON.stringify(saved());
+    expect(raw).not.toMatch(/autoOrganize|recordedEvidence|accuracyMeters|capturedLocal|spatialSource|basis/);
+    const restored = recoverRoutePointBatchReview(parseRoutePointBatchRecovery(raw, journey.id)!, readback());
+    expect(restored.originalFileIndexes).toEqual([1, 2]);
+    expect(restored.assetIds).toEqual(["asset-1", "asset-2"]);
+    expect(restored.draft.groups).toHaveLength(1);
+    expect(restored.draft.groups[0]).toMatchObject({ destination: "new", label: "Reviewed new point", fileIndexes: [0, 1] });
+    expect(restored.draft.autoOrganize).toBe(false);
+    const request = buildRoutePointBatchApplyBody(restored.draft, restored.assetIds, restored.draft.scope.batchId)!;
+    expect(request.operationId).toBe("batch-one");
+    expect(request.attachments.map((item) => item.assetId)).toEqual(["asset-1", "asset-2"]);
+  });
+
+  it("preserves edits after a second exit without assigning unknown indexes", () => {
+    const value = saved();
+    const restored = recoverRoutePointBatchReview(value, readback());
+    const edited = editRoutePointBatchDraft(restored.draft, { type: "rename", id: "new:1-2", value: "Edited again" }, journey);
+    const next = updateRoutePointBatchRecoveryDraft(value, edited, restored.originalFileIndexes, journey);
+    const reopened = recoverRoutePointBatchReview(parseRoutePointBatchRecovery(JSON.stringify(next), journey.id)!, readback());
+    expect(reopened.draft.groups[0].label).toBe("Edited again");
+    expect(reopened.originalFileIndexes).toEqual([1, 2]);
+    expect(next.groups.flatMap((group) => group.fileIndexes).sort()).toEqual([0, 1, 2, 3]);
+  });
+
+  it("fails closed for stale revision, scope, missing/reassigned/duplicate readback IDs and unknown POST", () => {
+    for (const current of [
+      { ...readback(), revision: 8 }, { ...readback(), atlasId: "other" },
+      { ...readback(), media: [asset("asset-1")] },
+      { ...readback(), media: [asset("asset-1"), asset("asset-1"), asset("asset-2")] },
+      { ...readback(), media: [asset("asset-1"), { ...asset("asset-2"), routePointId: "point" }] },
+    ]) expect(() => recoverRoutePointBatchReview(saved(), current)).toThrow();
+    expect(() => recoverRoutePointBatchReview({ ...saved(), phase: "applying" }, readback())).toThrow();
+    expect(() => recoverRoutePointBatchReview({ ...saved(), confirmed: [] }, readback())).toThrow();
+  });
+
+  it("dedupes identical destinations, refuses conflicting deduped IDs and malformed indexes", () => {
+    const value = saved();
+    value.confirmed = [{ fileIndex: 1, assetId: "same" }, { fileIndex: 2, assetId: "same" }];
+    const restored = recoverRoutePointBatchReview(value, { ...journey, media: [asset("same")] });
+    expect(buildRoutePointBatchApplyBody(restored.draft, restored.assetIds, "batch-one")!.attachments).toHaveLength(1);
+    value.confirmed = [{ fileIndex: 0, assetId: "same" }, { fileIndex: 1, assetId: "same" }];
+    expect(() => recoverRoutePointBatchReview(value, { ...journey, media: [asset("same")] })).toThrow();
+    value.confirmed = [{ fileIndex: 1, assetId: "same" }, { fileIndex: 1, assetId: "other" }];
+    expect(parseRoutePointBatchRecovery(JSON.stringify(value), journey.id)).toBeNull();
+    expect(parseRoutePointBatchRecovery("x".repeat(256_001), journey.id)).toBeNull();
+    expect(parseRoutePointBatchRecovery(JSON.stringify(saved()), "other")).toBeNull();
+  });
+
+  it("does not borrow a failed representative's GPS but retains explicitly reviewed coordinates", () => {
+    const value = saved();
+    value.confirmed = [{ fileIndex: 2, assetId: "asset-2" }];
+    expect(recoverRoutePointBatchReview(value, readback()).draft.groups[0].destination).toBe("unplaced");
+    value.groups[1].manualCoordinate = true;
+    expect(recoverRoutePointBatchReview(value, readback()).draft.groups[0].destination).toBe("new");
+  });
+});
 
 describe("Route Point batch review draft / #337", () => {
   it("renders every input exactly once with separate new/existing/unplaced, without borrowed GPS", () => {

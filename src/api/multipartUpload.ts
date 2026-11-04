@@ -23,6 +23,7 @@ type MultipartUploadOptions = {
   concurrency?: number;
   signal?: AbortSignal;
   onProgress?: (progress: { uploadedBytes: number; totalBytes: number }) => void;
+  onAssetConfirmed?: (asset: UploadedMediaAsset) => void;
   fetcher?: Fetcher;
   preparePreview?: (file: Blob) => Promise<PreparedMediaPreview>;
 };
@@ -229,6 +230,7 @@ export async function uploadMediaInParts({
   concurrency = 3,
   signal,
   onProgress,
+  onAssetConfirmed,
   fetcher = fetch,
   preparePreview = prepareMediaPreview,
 }: MultipartUploadOptions): Promise<UploadedMediaAsset> {
@@ -294,6 +296,7 @@ export async function uploadMediaInParts({
   }
 
   let completionError: unknown;
+  let confirmedAsset: UploadedMediaAsset | undefined;
   for (let attempt = 0; attempt < 9; attempt += 1) {
     try {
       const result = await apiJson<{ asset: UploadedMediaAsset }>(
@@ -305,19 +308,23 @@ export async function uploadMediaInParts({
           signal,
         },
       );
-      await uploadAssetPreviewBestEffort({
-        fetcher,
-        file,
-        asset: result.asset,
-        signal,
-        preparePreview,
-      });
-      return result.asset;
+      confirmedAsset = result.asset;
+      break;
     } catch (error) {
       completionError = error;
       if (signal?.aborted) throw abortError();
       if (attempt < 8) await waitBeforeCompletionRetry(attempt, signal);
     }
+  }
+
+  if (confirmedAsset) {
+    // Outside the POST retry catch: an observer failure must never replay a
+    // completed write. Persist confirmation before any optional preview work.
+    onAssetConfirmed?.(confirmedAsset);
+    if (!signal?.aborted) await uploadAssetPreviewBestEffort({
+      fetcher, file, asset: confirmedAsset, signal, preparePreview,
+    });
+    return confirmedAsset;
   }
 
   // Completion can be ambiguous after a network timeout. Preserve the server

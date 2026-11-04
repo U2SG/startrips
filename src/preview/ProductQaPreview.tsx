@@ -1,3 +1,4 @@
+import { uploadJourneyMedia } from "../journey/journeyMediaUpload";
 import storyScrollEdgeFixtures from "./storyScrollEdgeFixtures.json";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StartripsRecoverySurface } from "../brand/StartripsRecoverySurface";
@@ -1031,7 +1032,8 @@ function JourneyStoryRouteBatchQaPreview() {
     previous: Journey;
   }>());
   const nextAssetId = useRef(0);
-  const metricsRef = useRef({ uploads: 0, applies: 0, reads: 0, undos: 0, rejected: 0 });
+  const deferredUpload = useRef<(() => void) | null>(null);
+  const metricsRef = useRef({ uploads: 0, fileStarts: 0, completions: 0, applies: 0, reads: 0, undos: 0, rejected: 0 });
   const [metrics, setMetrics] = useState(metricsRef.current);
   const mark = (name: keyof typeof metricsRef.current) => {
     metricsRef.current = { ...metricsRef.current, [name]: metricsRef.current[name] + 1 };
@@ -1049,29 +1051,34 @@ function JourneyStoryRouteBatchQaPreview() {
       }),
       mutations: {
         ...mutations,
-        uploadJourneyMedia: async ({ journeyId, files, onProgress }) => {
+        uploadJourneyMedia: async (options) => {
           mark("uploads");
-          const existing = liveJourney.current;
-          if (journeyId !== existing.id) throw new Error("QA foreign Journey");
-          const acceptedFiles = scenario === "partial-media" ? files.slice(0, 1) : files;
-          const added = acceptedFiles.map((file) => ({
-            id: `qa-batch-asset-${++nextAssetId.current}`,
-            journeyId, routePointId: null, fileName: file.name, mimeType: file.type,
-            bytes: file.size, sortOrder: existing.media.length + nextAssetId.current,
-            createdAt: "2026-11-03T00:00:00Z",
-          }));
-          const next = { ...existing, media: [...existing.media, ...added] };
-          liveJourney.current = next;
-          setJourney(next);
-          onProgress?.({ fileName: files[files.length - 1]?.name ?? "", uploadedBytes: files.reduce((total, file) => total + file.size, 0),
-            totalBytes: files.reduce((total, file) => total + file.size, 0) });
-          return {
-            uploadedCount: added.length,
-            mediaErrors: scenario === "partial-media"
-              ? [{ fileIndex: 1, fileName: files[1].name, message: "QA deterministic second-file upload failure" }]
-              : [],
-            assets: added,
-          };
+          let fileIndex = 0;
+          // Real sequential helper, including signal and per-asset callbacks.
+          // Only the server boundary is deterministic in this preview.
+          return uploadJourneyMedia({ ...options, upload: async ({ file, fileName, journeyId }) => {
+            const index = fileIndex++;
+            mark("fileStarts");
+            if (journeyId !== liveJourney.current.id) throw new Error("QA foreign Journey");
+            if (scenario === "partial-media" && index === 0) throw new Error("QA first file failed");
+            if (scenario === "mid-upload" && index === 1) {
+              // Simulate a request already accepted by the server: aborting the
+              // client cannot undo it. Resolve ONLY when QA explicitly releases.
+              await new Promise<void>((resolve) => { deferredUpload.current = resolve; });
+              deferredUpload.current = null;
+            }
+            const existing = liveJourney.current;
+            const asset = {
+              id: `qa-batch-asset-${++nextAssetId.current}`, journeyId, routePointId: null,
+              fileName, mimeType: file.type, bytes: file.size,
+              sortOrder: existing.media.length, createdAt: "2026-11-03T00:00:00Z",
+            };
+            const next = { ...existing, media: [...existing.media, asset] };
+            liveJourney.current = next;
+            setJourney(next);
+            mark("completions");
+            return asset;
+          } });
         },
         moveJourneyMedia: async (journeyId, assetIds, targetRoutePointId) => {
           const previous = liveJourney.current;
@@ -1183,6 +1190,8 @@ function JourneyStoryRouteBatchQaPreview() {
     <AtlasViewProvider value={atlasView}>
       <main className="living-atlas">
         <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
+        <button type="button" data-qa-story-interrupt onClick={() => setOpen(false)}>模拟后台卸载</button>
+        <button type="button" data-qa-upload-release onClick={() => deferredUpload.current?.()}>完成待处理上传</button>
         <button type="button" data-qa-story-reopen onClick={() => setOpen(true)}>重新打开旅程</button>
         <output data-qa-route-batch-state={JSON.stringify(state)} hidden />
         {open ? (

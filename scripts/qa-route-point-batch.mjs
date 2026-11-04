@@ -123,7 +123,7 @@ async function assignExistingWithKeyboard(page, review) {
 export async function verifyRoutePointBatchJourneyStory() {
 const browser = await launchQaBrowser({ headless: true });
 try {
-  for (const scenario of ["manual", "auto", "partial", "partial-media", "mobile-keyboard"]) {
+  for (const scenario of ["manual", "auto", "partial", "partial-media", "mid-upload", "mobile-keyboard"]) {
     const mobile = scenario === "mobile-keyboard";
     const context = await browser.newContext({ viewport: mobile
       ? { width: 390, height: 844 } : { width: 1280, height: 850 },
@@ -137,7 +137,11 @@ try {
       await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
       const input = page.locator('.journey-story__media-add input[type="file"]');
       await input.waitFor({ state: "attached" });
-      const files = scenario === "auto" ? [
+      const recovering = scenario === "partial-media" || scenario === "mid-upload";
+      const gpsFile = { name: "gps-new.jpg", mimeType: "image/jpeg", buffer: exifImage() };
+      const files = scenario === "partial-media" ? [noGpsFiles[0], gpsFile]
+        : scenario === "mid-upload" ? [gpsFile, ...noGpsFiles]
+        : scenario === "auto" ? [
         { name: "gps-a.jpg", mimeType: "image/jpeg", buffer: exifImage() },
         { name: "gps-b.jpg", mimeType: "image/jpeg", buffer: exifImage() },
       ] : noGpsFiles;
@@ -173,6 +177,15 @@ try {
           assert(layout.left >= -1 && layout.right <= layout.width + 1,
             "Mobile batch editor must fit the viewport without clipping its action controls");
           await assignExistingWithKeyboard(page, review);
+        } else if (recovering) {
+          // GPS input traverses the actual metadata reader. Deliberate user
+          // changes turn its existing match into a reviewed NEW point.
+          const gpsGroup = review.locator(".route-batch__group").filter({ has: review.page().getByText("匹配已有地点", { exact: false }) });
+          await gpsGroup.getByRole("button", { name: "使用手动坐标作为新站草案" }).click();
+          await gpsGroup.getByRole("textbox", { name: "途径点名称" }).fill("审阅后的新站");
+          await gpsGroup.getByRole("textbox", { name: "时间（新站草案，含时区；未知可留空）" }).fill("2026-08-30T06:20:00Z");
+          await gpsGroup.getByRole("button", { name: "使用此时间" }).click();
+          await review.getByRole("button", { name: "确认这些分组并上传" }).click();
         } else {
           await chooseExistingTargets(review, scenario === "partial"
             ? ["00000000-0000-4000-8000-000000000004", "qa-route-point-b"]
@@ -181,29 +194,78 @@ try {
         }
       }
 
-      if (scenario === "partial-media") {
-        await page.getByText("部分上传已停止", { exact: false }).waitFor({ state: "visible" });
+      if (recovering) {
+        if (scenario === "partial-media") {
+          await page.getByText("部分上传已停止", { exact: false }).waitFor({ state: "visible" });
+          assert(await review.getByRole("checkbox", { name: "仅本批允许自动整理" }).isChecked() === false,
+            "Partial upload must revoke per-batch consent");
+        } else {
+          await page.waitForFunction(() => {
+            const state = JSON.parse(document.querySelector("[data-qa-route-batch-state]").dataset.qaRouteBatchState);
+            return state.fileStarts === 2 && state.completions === 1;
+          });
+        }
         state = await stateOf(page);
         assert(state.uploads === 1 && state.applies === 0 && state.media.length === 1
-          && state.media[0].routePointId === null,
-          "Partial media upload must retain only confirmed assets without posting a placement");
-        assert(await review.getByRole("checkbox", { name: "仅本批允许自动整理" }).isChecked() === false,
-          "Partial upload must revoke per-batch auto-organize consent");
+          && state.media[0].routePointId === null, "Only confirmed assets may enter recovery before placement");
         assert(await page.locator('section[aria-label="最近一次批量途径点回执"]').count() === 0,
           "Partial media upload cannot manufacture an apply/undo receipt");
-        await page.getByRole("button", { name: "退出旅程故事" }).click();
+        const savedBefore = await page.evaluate(() => JSON.parse(sessionStorage.getItem(
+          Object.keys(sessionStorage).find((key) => key.startsWith("startrips:route-point-batch-partial:")))));
+        const originalIndex = scenario === "partial-media" ? 1 : 0;
+        assert(savedBefore.confirmed.length === 1 && savedBefore.confirmed[0].fileIndex === originalIndex,
+          "Persist the server confirmation at its ORIGINAL index before the next upload settles");
+        assert(savedBefore.phase === (scenario === "mid-upload" ? "uploading" : "review"),
+          "A real pending upload must have an in-flight marker");
+        assert(!("autoOrganize" in savedBefore) && !JSON.stringify(savedBefore).includes("recordedEvidence"),
+          "Recovery must not persist source evidence or consent");
+        if (scenario === "mid-upload") await page.locator("[data-qa-story-interrupt]").evaluate((button) => button.click());
+        else await page.getByRole("button", { name: "退出旅程故事" }).click();
         await page.locator(".journey-story").waitFor({ state: "detached" });
         await page.locator("[data-qa-story-reopen]").click();
         const recovery = page.locator('section[aria-label="部分上传恢复"]');
         await recovery.waitFor({ state: "visible" });
+        if (scenario === "mid-upload") {
+          await page.locator("[data-qa-upload-release]").evaluate((button) => button.click());
+          await page.waitForFunction(() => JSON.parse(document.querySelector("[data-qa-route-batch-state]").dataset.qaRouteBatchState).completions === 2);
+          state = await stateOf(page);
+          assert(state.fileStarts === 2 && state.applies === 0,
+            "An old completion after unmount must not start the third file or apply");
+        }
         assert((await recovery.textContent())?.includes("1 个服务端媒体ID"),
-          "Reopened Story must read back the confirmed uploaded subset and its exact count");
-        await recovery.getByRole("button", { name: "选择已上传媒体并打开批量移动" }).click();
-        assert(await page.locator('.journey-story__media-select-toggle[aria-pressed="true"]').count() === 1,
-          "Recovered existing asset must enter the real batch-move UI, not another upload");
+          "Late old-owner completion cannot change the recovered confirmation set");
+        await recovery.getByRole("button", { name: "读回成功媒体并继续草案" }).click();
+        await review.waitFor({ state: "visible" });
+        assert(await review.locator(".route-batch__group").count() === 1,
+          "Recovered review includes only the confirmed GPS subset");
+        assert(await review.getByRole("textbox", { name: "途径点名称" }).inputValue() === "审阅后的新站",
+          "Remount must preserve the user's reviewed NEW point name");
+        assert(await review.getByRole("textbox", { name: "时间（新站草案，含时区；未知可留空）" }).inputValue() === "2026-08-30T06:20:00.000Z",
+          "Remount must preserve the user's edited time");
+        assert(!(await review.getByRole("checkbox", { name: "仅本批允许自动整理" }).isChecked()),
+          "A remount never restores consent");
+        await review.getByRole("button", { name: "确认这些分组并上传" }).click();
+        const receipt = page.locator('section[aria-label="最近一次批量途径点回执"]');
+        await receipt.waitFor({ state: "visible" });
         state = await stateOf(page);
-        assert(state.uploads === 1 && state.applies === 0 && state.media.length === 1,
-          "Exit, reopen and recover must never re-upload a confirmed asset or replay an apply");
+        assert(state.uploads === 1 && state.applies === 1 && state.routePointLabels.includes("审阅后的新站"),
+          "Explicit confirmation creates the reviewed NEW point once, with no upload replay");
+        assert(state.media.filter((asset) => asset.routePointId !== null).length === 1
+          && state.media[0].id === savedBefore.confirmed[0].assetId && state.media[0].routePointId !== null,
+          "Only the original confirmed ID may be attached; pending completion is never guessed");
+        const savedAfter = await page.evaluate(() => JSON.parse(sessionStorage.getItem(
+          Object.keys(sessionStorage).find((key) => key.startsWith("startrips:route-point-batch-partial:")))));
+        assert(savedAfter.scope.batchId === savedBefore.scope.batchId && savedAfter.phase === "applying",
+          "Continuation must consume the same stable operation identity");
+        await page.getByRole("button", { name: "退出旅程故事" }).click();
+        await page.locator("[data-qa-story-reopen]").click();
+        await receipt.waitFor({ state: "visible" });
+        await receipt.getByRole("button", { name: "撤销本批整理" }).click();
+        await page.getByText("已按服务端回执撤销本批整理", { exact: false }).waitFor({ state: "visible" });
+        state = await stateOf(page);
+        assert(state.reads >= 2 && state.undos === 1 && state.applies === 1 && state.uploads === 1
+          && state.media.every((asset) => asset.routePointId === null) && state.routePointIds.length === 2,
+          "Same-operation readback and undo restore all media without duplicate upload/apply");
       } else if (scenario === "partial") {
         await page.getByText("媒体已上传，但途径点提交结果未知。", { exact: false }).waitFor({ state: "visible" });
         state = await stateOf(page);
@@ -216,7 +278,13 @@ try {
           "Failure cannot manufacture a successful receipt");
       } else {
         const receipt = page.locator('section[aria-label="最近一次批量途径点回执"]');
-        await receipt.waitFor({ state: "visible" });
+        try {
+          await receipt.waitFor({ state: "visible" });
+        } catch (error) {
+          const storyText = await page.locator(".journey-story").textContent().catch(() => "Story unmounted");
+          console.error(JSON.stringify({ scenario, state: await stateOf(page), storyText: storyText?.slice(-1500) }));
+          throw error;
+        }
         state = await stateOf(page);
         assert(state.uploads === 1 && state.applies === 1 && state.media.length === files.length,
           "One upload and one atomic apply must account for every file");
