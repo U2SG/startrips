@@ -125,5 +125,9 @@ test("Core JourneyStory acceptance stays on a pinned FFmpeg-compatible runner", 
   assert.match(core, /pnpm exec playwright-core install ffmpeg/);
   assert.match(core, /node scripts\/ci-browser-runtime\.mjs/);
   assert.match(core, /RUN_ST116_CORE_UPLOAD_QA: '1'/);
-  assert.match(core, /vitest run src\/journey\/JourneyStory\.batch\.integration\.test\.mjs/);
+  assert.match(core, /node --test src\/journey\/JourneyStory\.batch\.integration\.node-test\.mjs/);
+  const integration = readFileSync(new URL("../src/journey/JourneyStory.batch.integration.node-test.mjs", import.meta.url), "utf8");
+  assert.match(integration, /from "node:test"/);
+  assert.match(integration, /await verifyRoutePointBatchJourneyStory\(\)/);
+  assert.match(integration, /RUN_ST116_CORE_UPLOAD_QA, "1"/);
 });
