@@ -12,10 +12,34 @@ from urllib.parse import urlencode
 
 
 class EvidenceUnknown(RuntimeError):
-    pass
+    def __init__(self, message, *, category='evidence', retryable=False):
+        super().__init__(message)
+        self.category = category
+        self.retryable = retryable
+
+    def details(self):
+        return {'category': self.category, 'retryable': self.retryable,
+                'message': str(self)}
 
 
 GH_EXE = r'C:\Program Files\GitHub CLI\gh.exe' if os.name == 'nt' else 'gh'
+
+
+def query_failure(endpoint, detail):
+    # Rate limiting can use HTTP 403; classify it before authorization failures.
+    if re.search(r'HTTP 429|rate limit|secondary rate', detail, re.I):
+        category, retryable = 'rate_limit', True
+    elif re.search(r'HTTP (401|403)|bad credentials|resource not accessible|permission denied', detail, re.I):
+        category, retryable = 'authorization', False
+    elif re.search(r'certificate verify failed|x509:|certificate signed by unknown', detail, re.I):
+        category, retryable = 'runtime', False
+    elif re.search(r'HTTP (500|502|503|504)|(^|[ :])EOF($|[ .])|TLS|connection reset|timed? out|timeout|no such host', detail, re.I):
+        category, retryable = 'transport', True
+    else:
+        category, retryable = 'remote', False
+    suffix = (': ' + detail) if detail else ''
+    return EvidenceUnknown('GitHub query failed: ' + endpoint.split('?')[0] + suffix,
+                           category=category, retryable=retryable)
 
 
 def api(endpoint: str, fields: dict | None = None):
@@ -31,23 +55,28 @@ def api(endpoint: str, fields: dict | None = None):
         except subprocess.TimeoutExpired as exc:
             if attempt == 0:
                 continue
-            raise EvidenceUnknown('GitHub transport unavailable: TimeoutExpired') from exc
+            raise EvidenceUnknown('GitHub transport unavailable: TimeoutExpired',
+                                  category='transport', retryable=True) from exc
         except OSError as exc:
-            raise EvidenceUnknown('GitHub transport unavailable: ' + type(exc).__name__) from exc
+            category = 'authorization' if isinstance(exc, PermissionError) else 'runtime'
+            raise EvidenceUnknown('GitHub transport unavailable: ' + type(exc).__name__,
+                                  category=category) from exc
         if not result.returncode:
             break
         detail = (result.stderr or '').strip().replace('\r', ' ').replace('\n', ' ')[:500]
-        transient = re.search(r'(^|[ :])EOF($|[ .])|TLS|connection reset|timed? out|timeout', detail, re.I)
-        if attempt == 0 and transient:
+        failure = query_failure(endpoint, detail)
+        # Only read-transport failures get one immediate retry. A rate limit
+        # waits for a later observation; permission and response failures do not.
+        if attempt == 0 and failure.category == 'transport':
             continue
-        suffix = (': ' + detail) if detail else ''
-        raise EvidenceUnknown('GitHub query failed: ' + endpoint.split('?')[0] + suffix)
+        raise failure
     try:
         data = json.loads(result.stdout)
     except ValueError as exc:
-        raise EvidenceUnknown('Invalid GitHub response') from exc
+        raise EvidenceUnknown('Invalid GitHub response', category='response') from exc
     if isinstance(data, dict) and data.get('errors'):
-        raise EvidenceUnknown('GraphQL returned errors; partial data is not acceptance')
+        raise EvidenceUnknown('GraphQL returned errors; partial data is not acceptance',
+                              category='response')
     return data
 
 

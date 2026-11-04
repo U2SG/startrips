@@ -478,10 +478,30 @@ def record_source_review(path, fid, repo, review_file):
         raise StoreConflict('Delivery-unit scope changed during independent review')
     if source_relation(repo, number)['source_sha'] != sha:
         raise EvidenceUnknown('Source changed while recording independent review')
-    data.update(reviewer_role='hourly-review', completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
     output = receipt_path(root, fid, sha)
-    write_json(output, data)
-    return {'action': 'SOURCE_REVIEW_RECORDED', 'source_sha': sha, 'receipt': str(output), 'verdict': data['verdict']}
+    result = {'action': 'SOURCE_REVIEW_RECORDED', 'source_sha': sha,
+              'receipt': str(output), 'verdict': data['verdict']}
+    metadata = {'reviewer_role', 'completed_at'}
+    payload = {key: value for key, value in data.items() if key not in metadata}
+    try:
+        existing = json.loads(output.read_bytes())
+    except FileNotFoundError:
+        existing = {}
+    except ValueError as exc:
+        raise EvidenceUnknown('Existing Source review receipt is unreadable') from exc
+    if not isinstance(existing, dict):
+        raise EvidenceUnknown('Existing Source review receipt is not an object')
+    recorded = {key: value for key, value in existing.items() if key not in metadata}
+    if recorded == payload:
+        # Fresh Source, scope and coverage checks above still run on replay.
+        # Validate the stored authority before retaining its original bytes.
+        if source_review(root, fid, number, sha, package) != data['verdict']:
+            raise StoreConflict('Source review changed during receipt replay')
+        return {**result, 'changed': False}
+    payload.update(reviewer_role='hourly-review',
+                   completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+    write_json(output, payload)
+    return {**result, 'changed': True}
 
 
 def main():
@@ -497,7 +517,17 @@ def main():
         else: result = handoff(args.path, args.feature, args.repo) if args.handoff else plan(args.path, args.feature, args.repo, record_failures=args.record_failures)
         print(result['action'] if args.action_only else json.dumps(result)); return 0
     except (StoreConflict, EvidenceUnknown, OSError, ValueError, KeyError) as exc:
-        print('ACTION_UNKNOWN: ' + str(exc), file=sys.stderr); return 6
+        if isinstance(exc, EvidenceUnknown):
+            failure = exc.details()
+        else:
+            category = ('state_conflict' if isinstance(exc, StoreConflict) else
+                        'authorization' if isinstance(exc, PermissionError) else 'runtime')
+            failure = {'category': category, 'retryable': False, 'message': str(exc)}
+        operation = 'record-review' if args.record_review else 'handoff' if args.handoff else 'plan'
+        print('ACTION_UNKNOWN: ' + str(exc), file=sys.stderr)
+        print('ACTION_FAILURE: ' + json.dumps({'feature': args.feature, 'operation': operation,
+                                              'failure': failure}), file=sys.stderr)
+        return 6
 
 
 if __name__ == '__main__':
