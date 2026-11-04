@@ -1,3 +1,4 @@
+import { uploadJourneyMedia } from "../journey/journeyMediaUpload";
 import storyScrollEdgeFixtures from "./storyScrollEdgeFixtures.json";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StartripsRecoverySurface } from "../brand/StartripsRecoverySurface";
@@ -10,6 +11,8 @@ import type { CommandBarComposerBridge } from "../journey/ProposalCard";
 import { readCommandRouterIntents, type CommandIntent } from "../journey/journeyApi";
 import { useCompactMobileLayout } from "../journey/mobileLayout";
 import { JourneyStory } from "../journey/JourneyStory";
+import { AtlasViewProvider, createOwnerAtlasView, type AtlasView } from "../journey/atlasView";
+import type { RoutePointBatchOperation } from "../journey/journeyApi";
 import { MobileClassicViewMenuEntry } from "../journey/MobileClassicViewMenuEntry";
 import { JourneyBook3d } from "../journey/JourneyBook3d";
 import { JourneyPlaybackOverlay } from "../journey/JourneyPlaybackOverlay";
@@ -999,6 +1002,211 @@ function JourneyStoryQaPreview() {
   );
 }
 
+
+/**
+ * #337 acceptance QA: mount the production JourneyStory file input and review
+ * against a deterministic, stateful ST-115 owner API. The server integration
+ * suite owns database atomicity; this exercises the missing entry-to-receipt
+ * contract without replacing Story with draft helpers.
+ */
+function JourneyStoryRouteBatchQaPreview() {
+  const scenario = new URLSearchParams(window.location.search).get("qaBatchScenario");
+  const [journey, setJourney] = useState<Journey>(() => ({
+    ...storyQaJourney,
+    title: "QA · Batch route placement",
+    revision: 4,
+    routePoints: [
+      { ...storyQaJourney.routePoints[0], label: "已有站点 A", latitude: scenario === "split-representative" ? 60 : 22.2783194,
+        longitude: scenario === "split-representative" ? 0 : 114.17469, occurredAt: "2026-08-30T06:15:00Z" },
+      { ...storyQaJourney.routePoints[0], id: "qa-route-point-b", label: "已有站点 B",
+        sortOrder: 1, latitude: scenario === "split-representative" ? 61 : 23.1291,
+        longitude: scenario === "split-representative" ? 1 : 113.2644,
+        occurredAt: "2026-08-31T06:15:00Z" },
+    ],
+    media: [],
+  }));
+  const [open, setOpen] = useState(true);
+  const liveJourney = useRef(journey);
+  liveJourney.current = journey;
+  const operations = useRef(new Map<string, {
+    operation: RoutePointBatchOperation;
+    previous: Journey;
+  }>());
+  const nextAssetId = useRef(0);
+  const deferredUpload = useRef<(() => void) | null>(null);
+  const metricsRef = useRef({ uploads: 0, fileStarts: 0, completions: 0, applies: 0, reads: 0, undos: 0, rejected: 0 });
+  const [metrics, setMetrics] = useState(metricsRef.current);
+  const mark = (name: keyof typeof metricsRef.current) => {
+    metricsRef.current = { ...metricsRef.current, [name]: metricsRef.current[name] + 1 };
+    setMetrics(metricsRef.current);
+  };
+  const atlasView = useMemo<AtlasView>(() => {
+    const owner = createOwnerAtlasView();
+    const mutations = owner.mutations!;
+    return {
+      ...owner,
+      listJourneys: async () => [liveJourney.current],
+      readMedia: async () => ({
+        url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
+        expiresAt: "2027-01-01T00:00:00Z",
+      }),
+      mutations: {
+        ...mutations,
+        uploadJourneyMedia: async (options) => {
+          mark("uploads");
+          let fileIndex = 0;
+          // Real sequential helper, including signal and per-asset callbacks.
+          // Only the server boundary is deterministic in this preview.
+          return uploadJourneyMedia({ ...options, upload: async ({ file, fileName, journeyId }) => {
+            const index = fileIndex++;
+            mark("fileStarts");
+            if (journeyId !== liveJourney.current.id) throw new Error("QA foreign Journey");
+            if (scenario === "partial-media" && index === 0) throw new Error("QA first file failed");
+            if ((scenario === "mid-upload" && index === 1)
+              || (scenario === "split-representative" && index === 0)) {
+              // Simulate a request already accepted by the server: aborting the
+              // client cannot undo it. Resolve ONLY when QA explicitly releases.
+              await new Promise<void>((resolve) => { deferredUpload.current = resolve; });
+              deferredUpload.current = null;
+            }
+            const existing = liveJourney.current;
+            const asset = {
+              id: `qa-batch-asset-${++nextAssetId.current}`, journeyId, routePointId: null,
+              fileName, mimeType: file.type, bytes: file.size,
+              sortOrder: existing.media.length, createdAt: "2026-11-03T00:00:00Z",
+            };
+            const next = { ...existing, media: [...existing.media, asset] };
+            liveJourney.current = next;
+            setJourney(next);
+            mark("completions");
+            return asset;
+          } });
+        },
+        moveJourneyMedia: async (journeyId, assetIds, targetRoutePointId) => {
+          const previous = liveJourney.current;
+          if (journeyId !== previous.id || (targetRoutePointId !== null
+            && !previous.routePoints.some((point) => point.id === targetRoutePointId)))
+            throw new Error("QA invalid move");
+          const next: Journey = {
+            ...previous, revision: previous.revision + 1,
+            media: previous.media.map((asset) => assetIds.includes(asset.id)
+              ? { ...asset, routePointId: targetRoutePointId } : asset),
+          };
+          liveJourney.current = next;
+          setJourney(next);
+          return next;
+        },
+        applyRoutePointBatch: async (journeyId, request) => {
+          mark("applies");
+          const previous = liveJourney.current;
+          if (journeyId !== previous.id || request.baseRevision !== previous.revision)
+            throw new Error("QA stale or foreign route revision");
+          if (operations.current.has(request.operationId)) throw new Error("QA duplicate POST");
+          if (request.attachments.length < 1) throw new Error("QA empty batch");
+          for (const item of request.attachments) {
+            if (!previous.media.some((asset) => asset.id === item.assetId)) throw new Error("QA unknown asset");
+          }
+          // The second assignment fails BEFORE the transaction updates any
+          // record. Verify that no successful first assignment leaks out.
+          if (scenario === "partial" && request.attachments.length >= 2) {
+            mark("rejected");
+            throw new Error("QA rejected second placement atomically");
+          }
+          const created = request.points.map((point, index) => ({
+            id: `qa-created-point-${index}`, journeyId, sortOrder: previous.routePoints.length + index,
+            latitude: point.latitude, longitude: point.longitude, label: point.label,
+            occurredAt: point.occurredAt, isStop: point.isStop,
+            createdAt: "2026-11-03T00:00:00Z",
+          }));
+          const pointMappings = request.points.map((point, index) => ({
+            candidateId: point.candidateId, routePointId: created[index].id,
+          }));
+          const placements = request.attachments.map((item) => {
+            const prior = previous.media.find((asset) => asset.id === item.assetId)!;
+            const target = item.routePointId
+              ?? pointMappings.find((point) => point.candidateId === item.candidateId)?.routePointId;
+            if (!target || ![...previous.routePoints, ...created].some((point) => point.id === target)) {
+              throw new Error("QA unknown destination");
+            }
+            return { assetId: item.assetId, previousRoutePointId: prior.routePointId,
+              previousSortOrder: prior.sortOrder, targetRoutePointId: target };
+          });
+          const next: Journey = {
+            ...previous, revision: previous.revision + 1,
+            routePoints: [...previous.routePoints, ...created],
+            media: previous.media.map((asset) => ({
+              ...asset, routePointId: placements.find((item) => item.assetId === asset.id)?.targetRoutePointId
+                ?? asset.routePointId,
+            })),
+          };
+          const operation: RoutePointBatchOperation = {
+            operationId: request.operationId, status: "applied",
+            baseRevision: request.baseRevision, appliedRevision: next.revision,
+            receipt: { pointMappings, createdPoints: created.map((point) => ({ id: point.id, sortOrder: point.sortOrder })),
+              placements, appliedRevision: next.revision },
+            outcome: { status: "applied" },
+            undo: { eligible: true, expiresAt: "2027-01-01T00:00:00Z", reason: null },
+          };
+          operations.current.set(request.operationId, { operation, previous });
+          liveJourney.current = next;
+          setJourney(next);
+          return operation;
+        },
+        readRoutePointBatch: async (_journeyId, operationId) => {
+          mark("reads");
+          const stored = operations.current.get(operationId);
+          if (!stored) throw new Error("QA operation not committed");
+          return stored.operation;
+        },
+        undoRoutePointBatch: async (_journeyId, operationId) => {
+          mark("undos");
+          const stored = operations.current.get(operationId);
+          if (!stored || !stored.operation.undo.eligible) throw new Error("QA cannot undo");
+          const current = liveJourney.current;
+          const next: Journey = { ...current, revision: current.revision + 1,
+            routePoints: stored.previous.routePoints,
+            media: current.media.map((asset) => ({
+              ...asset,
+              routePointId: stored.previous.media.find((original) => original.id === asset.id)?.routePointId ?? null,
+            })),
+          };
+          const operation: RoutePointBatchOperation = {
+            ...stored.operation, status: "undone",
+            undo: { eligible: false, expiresAt: null, reason: "already undone" },
+          };
+          operations.current.set(operationId, { ...stored, operation });
+          liveJourney.current = next;
+          setJourney(next);
+          return operation;
+        },
+      },
+    };
+  }, [scenario]);
+  const state = {
+    ...metrics, revision: journey.revision,
+    media: journey.media.map((asset) => ({ id: asset.id, routePointId: asset.routePointId })),
+    routePointIds: journey.routePoints.map((point) => point.id),
+    routePointLabels: journey.routePoints.map((point) => point.label),
+  };
+  return (
+    <AtlasViewProvider value={atlasView}>
+      <main className="living-atlas">
+        <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
+        <button type="button" data-qa-story-interrupt onClick={() => setOpen(false)}>模拟后台卸载</button>
+        <button type="button" data-qa-upload-release onClick={() => deferredUpload.current?.()}>完成待处理上传</button>
+        <button type="button" data-qa-story-reopen onClick={() => setOpen(true)}>重新打开旅程</button>
+        <output data-qa-route-batch-state={JSON.stringify(state)} hidden />
+        {open ? (
+          <JourneyStory editorSession journeys={[journey]} journeyId={journey.id}
+            onClose={() => setOpen(false)} onNavigate={() => undefined}
+            onEdit={() => undefined}
+            onMediaAdded={async () => liveJourney.current} />
+        ) : null}
+      </main>
+    </AtlasViewProvider>
+  );
+}
+
 const playbackQaJourneyId = "00000000-0000-4000-8000-000000000011";
 const playbackQaJourney: Journey = {
   ...storyQaJourney,
@@ -1566,7 +1774,8 @@ function JourneyBook3dQaPreview() {
 const Experience = qaState === "journey-composer"
   ? JourneyComposerQaPreview
   : qaState === "journey-story"
-    ? JourneyStoryQaPreview
+    ? (new URLSearchParams(window.location.search).get("qaMode") === "route-point-batch"
+      ? JourneyStoryRouteBatchQaPreview : JourneyStoryQaPreview)
   : qaState === "journey-book-3d"
     ? JourneyBook3dQaPreview
   : qaState === "journey-playback"

@@ -64,6 +64,7 @@ describe("owner and guest atlas views", () => {
     expect(Object.keys(view.mutations ?? {}).sort()).toEqual([
       // #200 phase E: creating, listing and revoking a share are owner calls,
       // so they belong to the same client every other owner write goes through.
+      "applyRoutePointBatch",
       "confirmHomeBasePeriod",
       "createShare",
       "deleteJourney",
@@ -74,6 +75,7 @@ describe("owner and guest atlas views", () => {
       "proposeShareIntent",
       "proposeShareMedia",
       "readMediaEvidence",
+      "readRoutePointBatch",
       "readShareIntentCapability",
       "readShareMediaPreview",
       "recordHomeBaseDismissal",
@@ -82,6 +84,7 @@ describe("owner and guest atlas views", () => {
       "revokeShare",
       "setJourneyCover",
       "undoJourneyMediaMove",
+      "undoRoutePointBatch",
       "updateJourneyNotes",
       "uploadJourneyMedia",
       "writeMediaDisplayState",

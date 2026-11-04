@@ -174,6 +174,79 @@ export async function getJourney(id: string, signal: AbortSignal, fetcher: Fetch
   return payload.journey;
 }
 
+/**
+ * #337 / ST-116: owner-only ST-115 batch API. A lost POST response must be
+ * reconciled with GET using the same operationId, never a fresh create id.
+ */
+export type RoutePointBatchOperation = {
+  operationId: string;
+  status: "applied" | "staged" | "undone" | "partial" | string;
+  baseRevision: number;
+  appliedRevision: number | null;
+  receipt: {
+    pointMappings: Array<{ candidateId: string; routePointId: string }>;
+    createdPoints: Array<{ id: string; sortOrder: number }>;
+    placements: Array<{
+      assetId: string;
+      previousRoutePointId: string | null;
+      previousSortOrder: number;
+      targetRoutePointId: string;
+    }>;
+    appliedRevision: number;
+  } | null;
+  outcome: { status: string; mounted?: boolean; reason?: string } | null;
+  undo: { eligible: boolean; expiresAt: string | null; reason: string | null };
+};
+
+export type RoutePointBatchRequest = {
+  operationId: string;
+  baseRevision: number;
+  points: Array<{
+    candidateId: string; latitude: number; longitude: number;
+    label: string; isStop: boolean; occurredAt: string | null;
+  }>;
+  attachments: Array<{
+    assetId: string; routePointId?: string; candidateId?: string;
+    intentionalReuse: boolean;
+  }>;
+};
+
+export async function applyRoutePointBatch(
+  journeyId: string,
+  input: RoutePointBatchRequest,
+  fetcher: Fetcher = fetch,
+): Promise<RoutePointBatchOperation> {
+  const payload = await requestJson<{ operation: RoutePointBatchOperation }>(
+    `/api/journeys/${encodeURIComponent(journeyId)}/route-point-batches`,
+    { method: "POST", body: JSON.stringify(input) }, fetcher,
+  );
+  return payload.operation;
+}
+
+export async function readRoutePointBatch(
+  journeyId: string,
+  operationId: string,
+  fetcher: Fetcher = fetch,
+): Promise<RoutePointBatchOperation> {
+  const payload = await requestJson<{ operation: RoutePointBatchOperation }>(
+    `/api/journeys/${encodeURIComponent(journeyId)}/route-point-batches/${encodeURIComponent(operationId)}`,
+    { cache: "no-store" }, fetcher,
+  );
+  return payload.operation;
+}
+
+export async function undoRoutePointBatch(
+  journeyId: string,
+  operationId: string,
+  fetcher: Fetcher = fetch,
+): Promise<RoutePointBatchOperation> {
+  const payload = await requestJson<{ operation: RoutePointBatchOperation }>(
+    `/api/journeys/${encodeURIComponent(journeyId)}/route-point-batches/${encodeURIComponent(operationId)}/undo`,
+    { method: "POST" }, fetcher,
+  );
+  return payload.operation;
+}
+
 export type SignedRouteCandidate ={ candidate: RouteCandidate; confirmationToken: string };
 
 function routeSegmentPath(journeyId: string, fromId: string, toId: string) {

@@ -8,15 +8,16 @@ const reproduction = read(".github/workflows/story-autoplay-reproduction.yml");
 const matrix = JSON.parse(read(".github/browser-matrix.json")).include;
 const job = (name) => ci.split(`\n  ${name}:\n`)[1]?.split(/\n  [a-z][a-z-]*:\n/)[0];
 
-test("all 42 suite commands are retained exactly once across at most eight shards", () => {
+test("all 43 suite commands are retained exactly once across at most eight shards", () => {
   const browser = job("browser-qa");
   assert.match(browser, /matrix: \$\{\{ fromJSON\(needs.quick-checks.outputs.browser_matrix\) \}\}/);
   const names = matrix.map((row) => row.name);
   assert.ok(names.length <= 8);
   assert.equal(new Set(names).size, names.length);
   const rows = matrix.flatMap((row) => row.commands.split("\n").map((command) => command.match(/^([a-z0-9-]+)::(.+)$/)));
-  assert.equal(rows.length, 42);
-  assert.equal(new Set(rows.map((m) => m[1])).size, 42);
+  assert.equal(rows.length, 43);
+  assert.equal(new Set(rows.map((m) => m[1])).size, 43);
+  assert.equal(rows.filter((m) => m[1] === "route-point-batch").length, 1);
   assert.equal(rows.filter((m) => m[1] === "journal-hotels").length, 1);
   assert.equal(rows.filter((m) => m[1] === "journal-streaming").length, 1);
   assert.equal(JSON.parse(read("package.json")).scripts["qa:journal-streaming"], "node scripts/qa-journal-streaming-ui.mjs");

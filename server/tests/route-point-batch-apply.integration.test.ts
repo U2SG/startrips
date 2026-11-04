@@ -24,6 +24,10 @@ import {
 import { writeRouteSegment } from "../repositories/route-segment-repository";
 import { moveJourneyMediaForAtlas, undoJourneyMediaMoveForAtlas } from "../services/journey-media";
 import { routeSegmentSourceKey } from "../../src/journey/journeyModel";
+import { buildRoutePointBatchApplyBody, canAutoOrganizeRoutePointBatch, createRoutePointBatchDraft,
+  editRoutePointBatchDraft, shouldAutoSubmitRoutePointBatch } from "../../src/journey/routePointBatchDraft";
+import type { MediaPlacementProposalPlan, MediaPlacementReadResult } from "../../src/journey/mediaPlacement";
+import type { Journey } from "../../src/journey/types";
 
 const atlasIds: string[] = [];
 let atlasA = "";
@@ -64,6 +68,25 @@ async function journey(atlasId: string, title: string) {
   });
   if (!result) throw new Error("Journey fixture was not created");
   return result;
+}
+
+/** Server records carry Date instances; Story receives serialized owner JSON.
+ * Keep real Journey/Route Point identities and revision while constructing
+ * the exact browser-facing contract used by the upload draft. */
+function asStoryJourney(record: Awaited<ReturnType<typeof journey>>): Journey {
+  return {
+    id: record.id, atlasId: record.atlasId, title: record.title,
+    startedOn: "2026-09-01", endedOn: null, note: "", lightColor: "#6c8fb7",
+    revision: record.revision, createdByUserId: `user-${record.atlasId}`,
+    createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z",
+    media: [],
+    routePoints: record.routePoints.map((point) => ({
+      id: point.id, journeyId: record.id, sortOrder: point.sortOrder,
+      latitude: point.latitude, longitude: point.longitude, label: point.label,
+      isStop: point.isStop, occurredAt: point.occurredAt?.toISOString() ?? null,
+      createdAt: point.createdAt.toISOString(),
+    })),
+  };
 }
 
 async function asset(options: {
@@ -203,6 +226,117 @@ describe("Route Point batch apply and undo", () => {
     expect(stagedPointCount.value).toBe(2);
   });
 
+  it("atomically handles existing-point-only batches with replay, readback and undo", async () => {
+    const owned = await journey(atlasA, "Move-only batch");
+    const first = await asset({ journeyId: owned.id, sortOrder: 0 });
+    const second = await asset({ journeyId: owned.id, sortOrder: 1 });
+    const targetOne = owned.routePoints[0].id;
+    const targetTwo = owned.routePoints[1].id;
+    const request = {
+      operationId: "move-only-receipt", baseRevision: owned.revision, points: [],
+      attachments: [
+        { assetId: first.id, routePointId: targetOne, intentionalReuse: false },
+        { assetId: second.id, routePointId: targetTwo, intentionalReuse: false },
+      ],
+    };
+    // A bad second target must fail the whole transaction; the first attachment is never committed.
+    await expect(applyJourneyRoutePointBatchForAtlas(owned.id, atlasA, {
+      ...request, attachments: [request.attachments[0], { ...request.attachments[1], assetId: randomUUID() }],
+    })).rejects.toMatchObject({ code: "ROUTE_POINT_BATCH_MEDIA_NOT_FOUND" });
+    const afterFailed = await getJourneyForAtlas(owned.id, atlasA);
+    expect(afterFailed?.media.map(({ routePointId }) => routePointId)).toEqual([null, null]);
+    expect(afterFailed?.revision).toBe(owned.revision);
+
+    const applied = await applyJourneyRoutePointBatchForAtlas(owned.id, atlasA, request);
+    expect(applied).toMatchObject({ status: "applied", receipt: { createdPoints: [], placements: [
+      { assetId: first.id, targetRoutePointId: targetOne, previousRoutePointId: null },
+      { assetId: second.id, targetRoutePointId: targetTwo, previousRoutePointId: null },
+    ] } });
+    const readback = await getJourneyRoutePointBatchForAtlas(owned.id, atlasA, request.operationId);
+    const replay = await applyJourneyRoutePointBatchForAtlas(owned.id, atlasA, request);
+    expect(readback?.receipt).toEqual(applied?.receipt);
+    expect(replay?.receipt).toEqual(applied?.receipt);
+    expect((await getJourneyForAtlas(owned.id, atlasA))?.routePoints).toHaveLength(2);
+    expect((await getJourneyForAtlas(owned.id, atlasA))?.media.map(({ routePointId }) => routePointId))
+      .toEqual([targetOne, targetTwo]);
+    const undone = await undoJourneyRoutePointBatchForAtlas(owned.id, atlasA, request.operationId);
+    expect(undone?.status).toBe("undone");
+    expect((await getJourneyRoutePointBatchForAtlas(owned.id, atlasA, request.operationId))?.status).toBe("undone");
+    expect((await getJourneyForAtlas(owned.id, atlasA))?.media.map(({ routePointId }) => routePointId))
+      .toEqual([null, null]);
+  });
+  it("connects the standard Story upload proposal to manual and authorized auto receipts", async () => {
+    const owner = await journey(atlasA, "Story upload and review");
+    const storyOwner = asStoryJourney(owner);
+    const first = await asset({ journeyId: owner.id, sortOrder: 0 });
+    const second = await asset({ journeyId: owner.id, sortOrder: 1 });
+    const noGps = await asset({ journeyId: owner.id, sortOrder: 2 });
+    const proposal: MediaPlacementProposalPlan = {
+      algorithmVersion: "route-point-proposal-v1",
+      scope: { batchId: "story-manual", journeyId: owner.id, routeRevision: owner.revision },
+      matchExisting: [{ kind: "match-existing", journeyId: owner.id,
+        routePointId: owner.routePoints[0].id, fileIndexes: [0],
+        basis: { reason: "existing-route-point-evidence", evidence: ["gps"], uncertainty: [] } }],
+      suggestNew: [{ kind: "suggest-new", candidateId: "new:one", fileIndexes: [1],
+        representative: { fileIndex: 1, latitude: 25.03, longitude: 121.56 },
+        basis: { reason: "spatiotemporal-cluster", evidence: ["gps", "time"], uncertainty: [] } }],
+      pendingConfirmation: [{ kind: "pending-confirmation", fileIndexes: [2],
+        basis: { reason: "missing-coordinate-evidence", evidence: [], uncertainty: ["unknown-location"] } }],
+    };
+    const reads: MediaPlacementReadResult[] = [
+      { status: "signal", signal: { latitude: 22.54, longitude: 114.06, spatialSource: "exif",
+        spatialGranularity: "coordinate", accuracyMeters: 12,
+        capturedAt: "2026-09-01T10:00:00+08:00", timezoneState: "offset-known" } },
+      { status: "signal", signal: { latitude: 25.03, longitude: 121.56, spatialSource: "exif",
+        spatialGranularity: "coordinate", accuracyMeters: 15,
+        capturedAt: "2026-09-02T10:00:00+08:00", timezoneState: "offset-known" } },
+      { status: "no-evidence" },
+    ];
+    const draft = createRoutePointBatchDraft(proposal, storyOwner, reads, 3);
+    expect(draft.groups.flatMap((group) => group.fileIndexes).sort()).toEqual([0, 1, 2]);
+    expect(draft.autoOrganize).toBe(false);
+    const optedButUnsafe = editRoutePointBatchDraft(draft, { type: "auto-organize", enabled: true }, storyOwner);
+    expect(shouldAutoSubmitRoutePointBatch(optedButUnsafe, { type: "auto-organize", enabled: true })).toBe(false);
+    const edited = editRoutePointBatchDraft(draft, { type: "rename", id: "new:one", value: "台北已核实" }, storyOwner);
+    const request = buildRoutePointBatchApplyBody(edited, [first.id, second.id, noGps.id], "story-manual");
+    expect(request?.attachments.map(({ assetId }) => assetId)).toEqual([first.id, second.id]);
+    if (!request) throw new Error("Story manual batch request missing");
+    const applied = await applyJourneyRoutePointBatchForAtlas(owner.id, atlasA, {
+      ...request, points: request.points.map((point) => ({ ...point, occurredAt: point.occurredAt ? new Date(point.occurredAt) : null })),
+    });
+    expect(applied?.status).toBe("applied");
+    expect((await getJourneyRoutePointBatchForAtlas(owner.id, atlasA, request.operationId))?.receipt)
+      .toEqual(applied?.receipt);
+    const after = await getJourneyForAtlas(owner.id, atlasA);
+    expect(after?.routePoints).toHaveLength(owner.routePoints.length + 1);
+    expect(after?.media.find((media) => media.id === noGps.id)?.routePointId).toBeNull();
+    expect((await undoJourneyRoutePointBatchForAtlas(owner.id, atlasA, request.operationId))?.status).toBe("undone");
+    expect((await getJourneyForAtlas(owner.id, atlasA))?.routePoints).toHaveLength(owner.routePoints.length);
+
+    const automatic = await journey(atlasA, "Story authorized auto");
+    const storyAutomatic = asStoryJourney(automatic);
+    const autoA = await asset({ journeyId: automatic.id, sortOrder: 0 });
+    const autoB = await asset({ journeyId: automatic.id, sortOrder: 1 });
+    const safePlan: MediaPlacementProposalPlan = {
+      ...proposal, scope: { batchId: "story-auto", journeyId: automatic.id, routeRevision: automatic.revision },
+      matchExisting: [{ ...proposal.matchExisting[0], journeyId: automatic.id, routePointId: automatic.routePoints[0].id }],
+      pendingConfirmation: [],
+    };
+    const safeDraft = createRoutePointBatchDraft(safePlan, storyAutomatic, reads.slice(0, 2), 2);
+    expect(canAutoOrganizeRoutePointBatch(safeDraft)).toBe(false);
+    const opted = editRoutePointBatchDraft(safeDraft, { type: "auto-organize", enabled: true }, storyAutomatic);
+    expect(shouldAutoSubmitRoutePointBatch(opted, { type: "auto-organize", enabled: true })).toBe(true);
+    const autoRequest = buildRoutePointBatchApplyBody(opted, [autoA.id, autoB.id], "story-auto");
+    if (!autoRequest) throw new Error("Story authorized auto request missing");
+    const autoApplied = await applyJourneyRoutePointBatchForAtlas(automatic.id, atlasA, {
+      ...autoRequest, points: autoRequest.points.map((point) => ({ ...point,
+        occurredAt: point.occurredAt ? new Date(point.occurredAt) : null })),
+    });
+    expect(autoApplied?.status).toBe("applied");
+    expect((await getJourneyRoutePointBatchForAtlas(automatic.id, atlasA, "story-auto"))?.receipt)
+      .toEqual(autoApplied?.receipt);
+    expect((await undoJourneyRoutePointBatchForAtlas(automatic.id, atlasA, "story-auto"))?.status).toBe("undone");
+  });
   it("uses verified identity and remains compatible with the canonical Journey update", async () => {
     const owned = await journey(atlasA, "Verified identity");
     const hash = "a".repeat(64);

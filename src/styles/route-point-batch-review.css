@@ -1,0 +1,45 @@
+.route-batch {
+  margin-block: 1.1rem;
+  padding: clamp(1rem, 3vw, 1.6rem);
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-radius: 1.1rem;
+  background: color-mix(in srgb, var(--color-surface, #1a2533) 94%, transparent);
+  color: inherit;
+}
+.route-batch__header h3 { margin: .2rem 0 .4rem; font-size: clamp(1.2rem, 3vw, 1.7rem); }
+.route-batch__header p { margin: .2rem 0; line-height: 1.55; }
+.route-batch__eyebrow { font-size: .68rem; letter-spacing: .16em; opacity: .6; }
+.route-batch__groups { display: grid; gap: .95rem; padding: 0; list-style: none; }
+.route-batch__group { padding: 1rem 0; border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent); }
+.route-batch__group-heading { display: flex; gap: .8rem; align-items: start; }
+.route-batch__group-heading > div:nth-child(2) { flex: 1; min-width: 0; }
+.route-batch__group-heading p { margin: .2rem 0 0; font-size: .85rem; opacity: .75; }
+.route-batch__number { font-variant-numeric: tabular-nums; font-size: 1.1rem; opacity: .65; }
+.route-batch__reorder, .route-batch__actions, .route-batch__group-footer { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.route-batch__evidence, .route-batch__uncertain { font-size: .83rem; line-height: 1.6; opacity: .8; }
+.route-batch__uncertain { color: var(--color-warning, #e7b776); }
+.route-batch__fields { display: grid; gap: .65rem; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; }
+.route-batch__fields label { display: grid; gap: .3rem; min-width: 0; font-size: .8rem; }
+.route-batch input[type="text"], .route-batch input[type="number"], .route-batch select {
+  color: inherit; background: transparent; min-height: 2.35rem; width: 100%; min-width: 0;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: .55rem;
+  padding: .4rem .6rem; font: inherit;
+}
+.route-batch button { min-height: 2.35rem; border-radius: .6rem; cursor: pointer; }
+.route-batch button:focus-visible, .route-batch input:focus-visible, .route-batch select:focus-visible {
+  outline: 2px solid currentColor; outline-offset: 2px;
+}
+.route-batch button:disabled { opacity: .45; cursor: not-allowed; }
+.route-batch__group-footer { margin-top: 1rem; }
+.route-batch__group-footer > span { margin-right: auto; font-size: .78rem; opacity: .75; }
+.route-batch__opt { display: inline-flex; align-items: center; gap: .6rem; font-weight: 550; }
+.route-batch__fine-print { font-size: .82rem; opacity: .75; line-height: 1.5; }
+.route-batch__actions { margin-top: 1rem; }
+@media (max-width: 520px) {
+  .route-batch { border-radius: .85rem; padding: .85rem; }
+  .route-batch__fields { grid-template-columns: minmax(0, 1fr); }
+  .route-batch__group-heading { align-items: center; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .route-batch *, .route-batch *::before, .route-batch *::after { transition: none !important; animation: none !important; }
+}

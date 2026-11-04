@@ -46,7 +46,7 @@ test("narrow mapped mixed change runs affected actual matrix commands only", () 
   assert.match(selected[0].commands, /entry-boundaries::pnpm qa:entry-boundaries/);
   const ordinary = browserMatrix(classifyPaths(["src/journey/JourneyTimeline.tsx"]));
   assert.equal(ordinary.include.length, 8);
-  assert.equal(ordinary.include.flatMap((row) => row.commands.split("\n")).length, 42);
+  assert.equal(ordinary.include.flatMap((row) => row.commands.split("\n")).length, 43);
 });
 
 test("whole PR diff includes earlier shared commits and both rename paths; push uses entire range", (t) => {
