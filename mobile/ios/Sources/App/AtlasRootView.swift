@@ -40,16 +40,9 @@ struct AtlasRootView: View {
             }
             .navigationTitle(router.snapshot.access == .guest ? "分享图谱" : "图谱")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if connected {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("切换") { session.disconnect(); router.clear(); connected = false }
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("刷新") { sceneIdentity = UUID(); refresh() }.disabled(session.busy)
-                    }
-                }
-            }
+            // Web Mobile V2 draws its own compact brand/header in the local scene.
+            // Story keeps native navigation, while the Atlas has only one header.
+            .toolbar(connected && router.path.isEmpty ? .hidden : .visible, for: .navigationBar)
             .navigationDestination(for: StoryHandoff.self) { target in
                 StoryDestination(target: target, router: router, session: session).id(target.requestId)
             }
@@ -92,6 +85,12 @@ struct AtlasRootView: View {
         } message: { Text(router.error ?? "") }
         .task {
             router.onInvalidation = { refresh() }
+            router.onSwitchAccess = {
+                session.disconnect()
+                router.clear()
+                sceneIdentity = UUID()
+                connected = false
+            }
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-atlas-fixture") {
                 fixtureMode = true
