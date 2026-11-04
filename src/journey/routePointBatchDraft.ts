@@ -191,6 +191,9 @@ export function editRoutePointBatchDraft(
       throw new RangeError("Split must select one member of a multi-file group");
     }
     group.fileIndexes = group.fileIndexes.filter((value) => value !== action.fileIndex);
+    // Splitting invalidates the original representative for the retained subset.
+    // A removed representative must never survive into the recovery journal.
+    group.representativeFileIndex = null;
     // The representative GPS may belong to the removed file. Both halves must
     // be explicitly assigned; never copy one photo's location to another.
     group.destination = "unplaced";
@@ -273,7 +276,17 @@ export function reconcileRoutePointBatchDraft(
   const protectedIndexes = new Set(pinned.flatMap((group) => group.fileIndexes));
   const untouched = refreshed.groups.flatMap((group) => {
     const allowed = group.fileIndexes.filter((index) => !protectedIndexes.has(index));
-    return allowed.length ? [{ ...group, fileIndexes: allowed }] : [];
+    if (!allowed.length) return [];
+    if (group.representativeFileIndex !== null && !allowed.includes(group.representativeFileIndex)) {
+      // Re-planning must not attach a removed representative's EXIF coordinates
+      // or time to the surviving files, nor emit an invalid recovery journal.
+      return [{ ...group, fileIndexes: allowed, destination: "unplaced" as const,
+        routePointId: null, label: "待指定地点", latitude: null, longitude: null,
+        occurredAt: null, spatialSource: "unknown", accuracyMeters: null,
+        representativeFileIndex: null,
+        basis: { reason: "representative-removed", evidence: [], uncertainty: ["requires-review"] } }];
+    }
+    return [{ ...group, fileIndexes: allowed }];
   });
   const groups = [...pinned, ...untouched];
   const indexes = [...prior.groups.flatMap((group) => group.fileIndexes)];

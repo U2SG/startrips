@@ -1016,10 +1016,11 @@ function JourneyStoryRouteBatchQaPreview() {
     title: "QA · Batch route placement",
     revision: 4,
     routePoints: [
-      { ...storyQaJourney.routePoints[0], label: "已有站点 A", latitude: 22.2783194,
-        longitude: 114.17469, occurredAt: "2026-08-30T06:15:00Z" },
+      { ...storyQaJourney.routePoints[0], label: "已有站点 A", latitude: scenario === "split-representative" ? 60 : 22.2783194,
+        longitude: scenario === "split-representative" ? 0 : 114.17469, occurredAt: "2026-08-30T06:15:00Z" },
       { ...storyQaJourney.routePoints[0], id: "qa-route-point-b", label: "已有站点 B",
-        sortOrder: 1, latitude: 23.1291, longitude: 113.2644,
+        sortOrder: 1, latitude: scenario === "split-representative" ? 61 : 23.1291,
+        longitude: scenario === "split-representative" ? 1 : 113.2644,
         occurredAt: "2026-08-31T06:15:00Z" },
     ],
     media: [],
@@ -1061,7 +1062,8 @@ function JourneyStoryRouteBatchQaPreview() {
             mark("fileStarts");
             if (journeyId !== liveJourney.current.id) throw new Error("QA foreign Journey");
             if (scenario === "partial-media" && index === 0) throw new Error("QA first file failed");
-            if (scenario === "mid-upload" && index === 1) {
+            if ((scenario === "mid-upload" && index === 1)
+              || (scenario === "split-representative" && index === 0)) {
               // Simulate a request already accepted by the server: aborting the
               // client cannot undo it. Resolve ONLY when QA explicitly releases.
               await new Promise<void>((resolve) => { deferredUpload.current = resolve; });

@@ -7,7 +7,7 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function exifImage() {
+function exifImage(accuracyNumerator = 15) {
   // A genuine JPEG APP1/TIFF coordinate + timezone + accuracy fixture:
   // 22.2783194 N, 114.17469 E, August 30 2026 at +08.
   const bytes = new Uint8Array(2 + 2 + 2 + 6 + 336 + 2);
@@ -64,7 +64,7 @@ function exifImage() {
   rationals(tiff + 268, [[114, 1], [10, 1], [28884, 1000]]);
   rationals(tiff + 292, [[1, 1], [2, 1], [3, 1]]);
   ascii(tiff + 316, "2026:09:01");
-  rationals(tiff + 327, [[15, 2]]);
+  rationals(tiff + 327, [[accuracyNumerator, 2]]);
   bytes[bytes.length - 2] = 0xff; bytes[bytes.length - 1] = 0xd9;
   return Buffer.from(bytes);
 }
@@ -123,7 +123,7 @@ async function assignExistingWithKeyboard(page, review) {
 export async function verifyRoutePointBatchJourneyStory() {
 const browser = await launchQaBrowser({ headless: true });
 try {
-  for (const scenario of ["manual", "auto", "partial", "partial-media", "mid-upload", "mobile-keyboard"]) {
+  for (const scenario of ["manual", "auto", "partial", "partial-media", "mid-upload", "mobile-keyboard", "split-representative"]) {
     const mobile = scenario === "mobile-keyboard";
     const context = await browser.newContext({ viewport: mobile
       ? { width: 390, height: 844 } : { width: 1280, height: 850 },
@@ -139,7 +139,10 @@ try {
       await input.waitFor({ state: "attached" });
       const recovering = scenario === "partial-media" || scenario === "mid-upload";
       const gpsFile = { name: "gps-new.jpg", mimeType: "image/jpeg", buffer: exifImage() };
-      const files = scenario === "partial-media" ? [noGpsFiles[0], gpsFile]
+      const files = scenario === "split-representative" ? [
+        { name: "cluster-a.jpg", mimeType: "image/jpeg", buffer: exifImage(30) },
+        { name: "cluster-b.jpg", mimeType: "image/jpeg", buffer: exifImage(2) },
+      ] : scenario === "partial-media" ? [noGpsFiles[0], gpsFile]
         : scenario === "mid-upload" ? [gpsFile, ...noGpsFiles]
         : scenario === "auto" ? [
         { name: "gps-a.jpg", mimeType: "image/jpeg", buffer: exifImage() },
@@ -177,6 +180,31 @@ try {
           assert(layout.left >= -1 && layout.right <= layout.width + 1,
             "Mobile batch editor must fit the viewport without clipping its action controls");
           await assignExistingWithKeyboard(page, review);
+        } else if (scenario === "split-representative") {
+          // The real ST-114 proposal uses file 2 as representative because
+          // its EXIF accuracy is better. GroupEditor's split removes that file.
+          const group = review.locator(".route-batch__group");
+          assert(await group.count() === 1
+            && (await group.first().textContent())?.includes("新途径点草案"),
+            "Two clustered EXIF files must form a genuine suggest-new group");
+          await group.first().getByRole("button", { name: "拆出最后一个媒体" }).click();
+          assert(await group.count() === 2,
+            "Splitting the last representative must preserve both review groups");
+          await chooseExistingTargets(review, ["00000000-0000-4000-8000-000000000004"]);
+          await review.getByRole("button", { name: "确认这些分组并上传" }).click();
+          await page.waitForFunction(() => {
+            const value = JSON.parse(document.querySelector("[data-qa-route-batch-state]").dataset.qaRouteBatchState);
+            return value.fileStarts === 1;
+          });
+          const saved = await page.evaluate(() => JSON.parse(sessionStorage.getItem(
+            Object.keys(sessionStorage).find((key) => key.startsWith("startrips:route-point-batch-partial:")))));
+          assert(saved.phase === "uploading" && saved.confirmed.length === 0
+            && saved.groups.length === 2 && saved.groups[0].fileIndexes.join(",") === "0"
+            && saved.groups[1].fileIndexes.join(",") === "1"
+            && saved.groups[0].representativeFileIndex === null
+            && saved.groups[1].representativeFileIndex === 1,
+            "The persisted journal must retain no removed representative or inferred GPS/time");
+          await page.locator("[data-qa-upload-release]").evaluate((button) => button.click());
         } else if (recovering) {
           // GPS input traverses the actual metadata reader. Deliberate user
           // changes turn its existing match into a reviewed NEW point.

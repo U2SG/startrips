@@ -188,6 +188,41 @@ describe("Route Point batch review draft / #337", () => {
     }, journey)).toThrow(/offset/);
   });
 
+  it("persists a split when the last file was the suggested representative", () => {
+    const suggested = plan();
+    suggested.suggestNew[0].representative.fileIndex = 2;
+    const original = createRoutePointBatchDraft(suggested, journey, reads, 4);
+    const id = original.groups[1].id;
+    expect(original.groups[1]).toMatchObject({
+      fileIndexes: [1, 2], representativeFileIndex: 2,
+      occurredAt: "2026-09-02T04:30:00Z",
+    });
+    const split = editRoutePointBatchDraft(original, { type: "split", id, fileIndex: 2 }, journey);
+    expect(split.groups[1]).toMatchObject({
+      fileIndexes: [1], representativeFileIndex: null,
+      destination: "unplaced", latitude: null, longitude: null, occurredAt: null,
+    });
+    expect(split.groups[2]).toMatchObject({
+      fileIndexes: [2], representativeFileIndex: 2,
+      destination: "unplaced", latitude: null, longitude: null, occurredAt: null,
+    });
+    const saved = createRoutePointBatchRecovery(split, journey, 4);
+    expect(parseRoutePointBatchRecovery(JSON.stringify(saved), journey.id)?.groups
+      .map((group) => group.representativeFileIndex)).toEqual([0, null, 2, 3]);
+    const assignedFirst = editRoutePointBatchDraft(split,
+      { type: "assign", id, routePointId: "point" }, journey);
+    const assignedBoth = editRoutePointBatchDraft(assignedFirst,
+      { type: "assign", id: split.groups[2].id, routePointId: "point" }, journey);
+    expect(parseRoutePointBatchRecovery(
+      JSON.stringify(createRoutePointBatchRecovery(assignedBoth, journey, 4)), journey.id,
+    )).not.toBeNull();
+    const request = buildRoutePointBatchApplyBody(assignedBoth, ["a", "b", "c", "d"], "batch-one");
+    expect(request?.points).toEqual([]);
+    expect(request?.attachments).toEqual(["a", "b", "c"].map((assetId) => ({
+      assetId, routePointId: "point", intentionalReuse: false,
+    })));
+  });
+
   it("splits and merges with no silently inherited location or media loss", () => {
     const value = draft();
     const id = value.groups[1].id;
@@ -268,6 +303,27 @@ describe("Route Point batch review draft / #337", () => {
     expect(() => reconcileRoutePointBatchDraft(edited, {
       ...refreshed, scope: { ...refreshed.scope, routeRevision: 8 },
     })).toThrow(/revision/);
+  });
+
+  it("does not revive a protected file's representative during planner reconciliation", () => {
+    const separated = plan();
+    separated.suggestNew = [
+      { ...separated.suggestNew[0], candidateId: "new:1", fileIndexes: [1] },
+      { ...separated.suggestNew[0], candidateId: "new:2", fileIndexes: [2],
+        representative: { ...separated.suggestNew[0].representative, fileIndex: 2 } },
+    ];
+    const before = createRoutePointBatchDraft(separated, journey, reads, 4);
+    const pinned = editRoutePointBatchDraft(before,
+      { type: "rename", id: "new:1", value: "人工决定" }, journey);
+    const refreshed = createRoutePointBatchDraft(plan(), journey, reads, 4);
+    const reconciled = reconcileRoutePointBatchDraft(pinned, refreshed);
+    expect(reconciled.groups.find((group) => group.id === "new:1")?.label).toBe("人工决定");
+    expect(reconciled.groups.find((group) => group.id === "new:1-2")).toMatchObject({
+      fileIndexes: [2], representativeFileIndex: null, destination: "unplaced",
+      latitude: null, longitude: null, occurredAt: null,
+    });
+    expect(parseRoutePointBatchRecovery(JSON.stringify(
+      createRoutePointBatchRecovery(reconciled, journey, 4)), journey.id)).not.toBeNull();
   });
 
   it("builds an idempotent #336 batch request excluding unplaced media and preventing partial assets", () => {
