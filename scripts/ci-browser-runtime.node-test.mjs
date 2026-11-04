@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import {
   assertHostedBrowserExecutable,
   assertRuntimeVersion,
@@ -114,4 +115,15 @@ test("a silent recorder fails within a bounded deadline without sleeping or retr
     path: () => { calls++; return new Promise(() => {}); },
   }, { timeoutMs: 1 }), /no first frame/);
   assert.equal(calls, 1);
+});
+
+test("Core JourneyStory acceptance stays on a pinned FFmpeg-compatible runner", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const core = workflow.match(/^  core:\r?\n([\s\S]*?)(?=^  [a-z][\w-]*:\s*$)/m)?.[1];
+  assert.ok(core, "Core job must exist separately from browser QA");
+  assert.match(core, /^    runs-on: ubuntu-24\.04$/m, "Playwright 1.55 FFmpeg requires supported Ubuntu, not ubuntu-latest");
+  assert.match(core, /pnpm exec playwright-core install ffmpeg/);
+  assert.match(core, /node scripts\/ci-browser-runtime\.mjs/);
+  assert.match(core, /RUN_ST116_CORE_UPLOAD_QA: '1'/);
+  assert.match(core, /vitest run src\/journey\/JourneyStory\.batch\.integration\.test\.mjs/);
 });
