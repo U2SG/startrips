@@ -184,7 +184,7 @@ try {
           await gpsGroup.getByRole("button", { name: "使用手动坐标作为新站草案" }).click();
           await gpsGroup.getByRole("textbox", { name: "途径点名称" }).fill("审阅后的新站");
           await gpsGroup.getByRole("textbox", { name: "时间（新站草案，含时区；未知可留空）" }).fill("2026-08-30T06:20:00Z");
-          await gpsGroup.getByRole("button", { name: "使用此时间" }).click();
+          await gpsGroup.getByRole("button", { name: "确认时间" }).click();
           await review.getByRole("button", { name: "确认这些分组并上传" }).click();
         } else {
           await chooseExistingTargets(review, scenario === "partial"

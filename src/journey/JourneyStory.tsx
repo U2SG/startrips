@@ -947,7 +947,11 @@ export function JourneyStory({
       window.removeEventListener("pagehide", suspend);
       window.removeEventListener("pageshow", resume);
     };
-  }, [journeyId, journey?.atlasId, journey?.revision]);
+    // A successful batch apply advances the Journey revision while the same
+    // operation is still resolving. Keep its lifetime alive long enough to
+    // record the authoritative receipt; current() checks revision before any
+    // write, so external stale-draft changes still fail closed.
+  }, [journeyId, journey?.atlasId]);
   useEffect(() => {
     if (!manageMedia?.readRoutePointBatch || !journeyId) return;
     let operationId: string | null = null;
