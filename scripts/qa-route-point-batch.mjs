@@ -184,9 +184,15 @@ try {
           // The real ST-114 proposal uses file 2 as representative because
           // its EXIF accuracy is better. GroupEditor's split removes that file.
           const group = review.locator(".route-batch__group");
+          // A controlled textbox's value is not part of element.textContent().
+          // Assert the actual proposal header, planner reason, reviewed label
+          // and the better-accuracy last file, rather than searching text nodes.
           assert(await group.count() === 1
-            && (await group.first().textContent())?.includes("新途径点草案"),
-            "Two clustered EXIF files must form a genuine suggest-new group");
+            && await group.first().getByText("新途径点 · 草案", { exact: true }).count() === 1
+            && await group.first().getByText("位置和时间构成独立分组", { exact: false }).count() === 1
+            && await group.first().getByRole("textbox", { name: "途径点名称" }).inputValue() === "新途径点草案"
+            && await group.first().getByText("约 ±1 米", { exact: false }).count() === 1,
+            "Two clustered EXIF files must form a genuine suggest-new group with the final file as representative");
           await group.first().getByRole("button", { name: "拆出最后一个媒体" }).click();
           assert(await group.count() === 2,
             "Splitting the last representative must preserve both review groups");
