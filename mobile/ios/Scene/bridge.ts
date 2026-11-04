@@ -8,7 +8,7 @@ export type SceneJourney = Pick<Journey, "id" | "title" | "startedOn" | "endedOn
 };
 export type Snapshot = { version: 1; scopeId: string; revision: number; access: "owner" | "guest";
   earthExperience: "default" | "particle-only"; journeys: SceneJourney[]; selection?: Selection | null; active: boolean };
-export type SceneEvent = { version: 1; kind: "ready" | "select" | "story" | "invalidate" | "cameraInterrupted" | "rendered";
+export type SceneEvent = { version: 1; kind: "ready" | "select" | "story" | "invalidate" | "cameraInterrupted" | "rendered" | "switchAccess";
   scopeId: string; revision: number; requestId: string; journeyId?: string; routePointId?: string; assetId?: string; focusRequestId?: string };
 
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);

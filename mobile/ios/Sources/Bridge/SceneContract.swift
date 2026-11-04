@@ -1,7 +1,7 @@
 import Foundation
 
 enum AtlasAccess: String, Codable { case owner, guest }
-enum SceneEventKind: String, Codable { case ready, select, story, invalidate, cameraInterrupted, rendered }
+enum SceneEventKind: String, Codable { case ready, select, story, invalidate, cameraInterrupted, rendered, switchAccess }
 
 struct SceneEvent: Codable, Equatable {
     let version: Int
