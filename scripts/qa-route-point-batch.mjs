@@ -102,10 +102,6 @@ async function assignExistingWithKeyboard(page, review) {
   const groups = review.locator(".route-batch__group");
   assert(await groups.count() === 2, "Mobile fixture must have both editable batch groups");
   const name = groups.first().getByRole("textbox", { name: "途径点名称" });
-  await tabTo(page, name, "first group name");
-  await page.keyboard.press("ControlOrMeta+A");
-  await page.keyboard.type("键盘核对的分组");
-  assert(await name.inputValue() === "键盘核对的分组", "Keyboard edit must update the actual draft");
   for (let index = 0; index < await groups.count(); index++) {
     const destination = groups.nth(index).getByRole("combobox", { name: "媒体去向" });
     await tabTo(page, destination, `group ${index + 1} destination`);
@@ -115,6 +111,10 @@ async function assignExistingWithKeyboard(page, review) {
     assert(await destination.inputValue() === "00000000-0000-4000-8000-000000000004",
       "Keyboard choice must assign the reviewed existing Route Point");
   }
+  assert(await name.isDisabled() && await name.inputValue() === "已有站点 A",
+    "After assigning an existing Route Point, its name must stay read-only rather than falsely promise a rename");
+  assert(await review.getByText("已有途径点名称不会随媒体归属修改", { exact: false }).count() > 0,
+    "Existing destination must explain its immutable name");
   const submit = review.getByRole("button", { name: "确认这些分组并上传" });
   await tabTo(page, submit, "review confirmation");
   await page.keyboard.press("Enter");
@@ -123,7 +123,7 @@ async function assignExistingWithKeyboard(page, review) {
 export async function verifyRoutePointBatchJourneyStory() {
 const browser = await launchQaBrowser({ headless: true });
 try {
-  for (const scenario of ["manual", "auto", "partial", "mobile-keyboard"]) {
+  for (const scenario of ["manual", "auto", "partial", "partial-media", "mobile-keyboard"]) {
     const mobile = scenario === "mobile-keyboard";
     const context = await browser.newContext({ viewport: mobile
       ? { width: 390, height: 844 } : { width: 1280, height: 850 },
@@ -181,7 +181,30 @@ try {
         }
       }
 
-      if (scenario === "partial") {
+      if (scenario === "partial-media") {
+        await page.getByText("部分上传已停止", { exact: false }).waitFor({ state: "visible" });
+        state = await stateOf(page);
+        assert(state.uploads === 1 && state.applies === 0 && state.media.length === 1
+          && state.media[0].routePointId === null,
+          "Partial media upload must retain only confirmed assets without posting a placement");
+        assert(await review.getByRole("checkbox", { name: "仅本批允许自动整理" }).isChecked() === false,
+          "Partial upload must revoke per-batch auto-organize consent");
+        assert(await page.locator('section[aria-label="最近一次批量途径点回执"]').count() === 0,
+          "Partial media upload cannot manufacture an apply/undo receipt");
+        await page.getByRole("button", { name: "退出旅程故事" }).click();
+        await page.locator(".journey-story").waitFor({ state: "detached" });
+        await page.locator("[data-qa-story-reopen]").click();
+        const recovery = page.locator('section[aria-label="部分上传恢复"]');
+        await recovery.waitFor({ state: "visible" });
+        assert((await recovery.textContent())?.includes("1 个服务端媒体ID"),
+          "Reopened Story must read back the confirmed uploaded subset and its exact count");
+        await recovery.getByRole("button", { name: "选择已上传媒体并打开批量移动" }).click();
+        assert(await page.locator('.journey-story__media-select-toggle[aria-pressed="true"]').count() === 1,
+          "Recovered existing asset must enter the real batch-move UI, not another upload");
+        state = await stateOf(page);
+        assert(state.uploads === 1 && state.applies === 0 && state.media.length === 1,
+          "Exit, reopen and recover must never re-upload a confirmed asset or replay an apply");
+      } else if (scenario === "partial") {
         await page.getByText("媒体已上传，但途径点提交结果未知。", { exact: false }).waitFor({ state: "visible" });
         state = await stateOf(page);
         assert(state.uploads === 1 && state.applies === 1 && state.rejected === 1,
@@ -199,6 +222,8 @@ try {
           "One upload and one atomic apply must account for every file");
         assert(state.media.every((media) => media.routePointId === "00000000-0000-4000-8000-000000000004"),
           "Every file must be assigned to its reviewed existing Route Point");
+        assert(state.routePointLabels[0] === "已有站点 A" && state.routePointLabels[1] === "已有站点 B",
+          "Move-only confirmation must preserve the original names of existing Route Points");
         const exit = page.getByRole("button", { name: "退出旅程故事" });
         if (mobile) {
           // The production mobile editor intentionally leaves Manage before

@@ -62,6 +62,8 @@ describe("RoutePointBatchReview accessible markup / #337", () => {
     expect(markup).toContain('aria-label="批量媒体途径点草案审阅"');
     expect(markup).toContain("草案尚未创建途径点");
     expect(markup).toContain("已有途径点");
+    expect(markup).toContain("已有途径点名称不会随媒体归属修改");
+    expect(markup).toMatch(/disabled="" value="福田"/);
     expect(markup).toContain("新途径点 · 草案");
     expect(markup).toContain("未归属媒体");
     expect(markup).toContain("位置待确认");

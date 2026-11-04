@@ -65,9 +65,10 @@ function GroupEditor({
       {group.basis.uncertainty.length > 0 ? <p className="route-batch__uncertain">需要确认：{group.basis.uncertainty.join(" · ")}</p> : null}
       <div className="route-batch__fields">
         <label>途径点名称
-          <input type="text" maxLength={120} disabled={disabled} value={group.label}
+          <input type="text" maxLength={120} disabled={disabled || group.destination !== "new"} value={group.label}
             onChange={(event) => onEdit({ type: "rename", id: group.id, value: event.target.value })} />
         </label>
+        {group.destination !== "new" ? <p className="route-batch__fine-print">已有途径点名称不会随媒体归属修改；如需改名请单独编辑途径点。新建草案才可命名。</p> : null}
         <label>媒体去向
           <select disabled={disabled} value={group.destination === "new" ? "__new" : group.routePointId ?? "__journey"}
             onChange={(event) => {
@@ -90,11 +91,11 @@ function GroupEditor({
             onChange={(event) => setLonInput(event.target.value)} />
         </label>
         <button type="button" disabled={disabled || !latInput.trim() || !lonInput.trim()} onClick={applyCoordinates}>使用手动坐标作为新站草案</button>
-        <label>时间（含时区；未知可留空）
-          <input type="text" disabled={disabled} value={timeInput} placeholder="2026-11-03T14:00:00+08:00"
+        <label>时间（新站草案，含时区；未知可留空）
+          <input type="text" disabled={disabled || group.destination !== "new"} value={timeInput} placeholder="2026-11-03T14:00:00+08:00"
             onChange={(event) => setTimeInput(event.target.value)} />
         </label>
-        <button type="button" disabled={disabled} onClick={() => onEdit({ type: "retime", id: group.id, value: timeInput })}>确认时间</button>
+        <button type="button" disabled={disabled || group.destination !== "new"} onClick={() => onEdit({ type: "retime", id: group.id, value: timeInput })}>确认时间</button>
       </div>
       <div className="route-batch__group-footer">
         <span>文件编号：{group.fileIndexes.map((idx) => idx + 1).join("、")}</span>

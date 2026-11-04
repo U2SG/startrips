@@ -1053,7 +1053,8 @@ function JourneyStoryRouteBatchQaPreview() {
           mark("uploads");
           const existing = liveJourney.current;
           if (journeyId !== existing.id) throw new Error("QA foreign Journey");
-          const added = files.map((file) => ({
+          const acceptedFiles = scenario === "partial-media" ? files.slice(0, 1) : files;
+          const added = acceptedFiles.map((file) => ({
             id: `qa-batch-asset-${++nextAssetId.current}`,
             journeyId, routePointId: null, fileName: file.name, mimeType: file.type,
             bytes: file.size, sortOrder: existing.media.length + nextAssetId.current,
@@ -1064,7 +1065,27 @@ function JourneyStoryRouteBatchQaPreview() {
           setJourney(next);
           onProgress?.({ fileName: files[files.length - 1]?.name ?? "", uploadedBytes: files.reduce((total, file) => total + file.size, 0),
             totalBytes: files.reduce((total, file) => total + file.size, 0) });
-          return { uploadedCount: added.length, mediaErrors: [], assets: added };
+          return {
+            uploadedCount: added.length,
+            mediaErrors: scenario === "partial-media"
+              ? [{ fileIndex: 1, fileName: files[1].name, message: "QA deterministic second-file upload failure" }]
+              : [],
+            assets: added,
+          };
+        },
+        moveJourneyMedia: async (journeyId, assetIds, targetRoutePointId) => {
+          const previous = liveJourney.current;
+          if (journeyId !== previous.id || (targetRoutePointId !== null
+            && !previous.routePoints.some((point) => point.id === targetRoutePointId)))
+            throw new Error("QA invalid move");
+          const next: Journey = {
+            ...previous, revision: previous.revision + 1,
+            media: previous.media.map((asset) => assetIds.includes(asset.id)
+              ? { ...asset, routePointId: targetRoutePointId } : asset),
+          };
+          liveJourney.current = next;
+          setJourney(next);
+          return next;
         },
         applyRoutePointBatch: async (journeyId, request) => {
           mark("applies");
@@ -1156,6 +1177,7 @@ function JourneyStoryRouteBatchQaPreview() {
     ...metrics, revision: journey.revision,
     media: journey.media.map((asset) => ({ id: asset.id, routePointId: asset.routePointId })),
     routePointIds: journey.routePoints.map((point) => point.id),
+    routePointLabels: journey.routePoints.map((point) => point.label),
   };
   return (
     <AtlasViewProvider value={atlasView}>

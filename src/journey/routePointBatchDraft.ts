@@ -152,8 +152,10 @@ export function editRoutePointBatchDraft(
     return { ...draft, groups };
   }
   if (action.type === "rename") {
+    if (group.destination !== "new") throw new RangeError("Only new Route Point drafts can be renamed; existing point labels are unchanged");
     group.label = action.value.slice(0, 120);
   } else if (action.type === "retime") {
+    if (group.destination !== "new") throw new RangeError("Only new Route Point drafts can change their time");
     if (action.value && !/^(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2}))$/.test(action.value)) {
       throw new RangeError("Time needs an explicit timezone offset");
     }
@@ -299,6 +301,63 @@ export type RoutePointBatchAssetAssignment = {
  * A repeated id with a single destination must become ONE attachment. A
  * repeated id with conflicting destinations must never pick a winner.
  */
+/**
+ * A partial upload is not a placement transaction. Map only server-confirmed
+ * assets to their ORIGINAL file indexes; the sequential upload client reports
+ * the successful assets in input order, omitting precisely the reported errors.
+ * Missing/unmatched asset IDs are ambiguous and must be recovered manually
+ * from the Journey readback, never assigned by a guessed file position.
+ */
+export function recoverUploadedRoutePointBatchSubset(
+  draft: RoutePointBatchDraft,
+  fileCount: number,
+  uploaded: {
+    uploadedCount: number;
+    mediaErrors: readonly { fileIndex: number }[];
+    assets: readonly { id: string }[];
+  },
+): { draft: RoutePointBatchDraft; assetIds: string[] } | null {
+  if (!Number.isSafeInteger(fileCount) || fileCount < 1 || uploaded.mediaErrors.length < 1) return null;
+  const failed = new Set(uploaded.mediaErrors.map((error) => error.fileIndex));
+  if (failed.size !== uploaded.mediaErrors.length
+    || [...failed].some((index) => !Number.isSafeInteger(index) || index < 0 || index >= fileCount)) return null;
+  const successful = Array.from({ length: fileCount }, (_, index) => index)
+    .filter((index) => !failed.has(index));
+  if (!successful.length || successful.length !== uploaded.uploadedCount
+    || successful.length !== uploaded.assets.length
+    || uploaded.assets.some((asset) => typeof asset.id !== "string" || !asset.id.trim())) return null;
+  const indexMap = new Map(successful.map((index, next) => [index, next]));
+  const groups = draft.groups.flatMap((group): RoutePointReviewGroup[] => {
+    const remaining = group.fileIndexes.filter((index) => indexMap.has(index));
+    if (!remaining.length) return [];
+    const fileIndexes = remaining.map((index) => indexMap.get(index)!);
+    const representativeSurvived = group.representativeFileIndex !== null
+      && indexMap.has(group.representativeFileIndex);
+    const next: RoutePointReviewGroup = {
+      ...group, fileIndexes,
+      representativeFileIndex: representativeSurvived
+        ? indexMap.get(group.representativeFileIndex!)!
+        : fileIndexes[0],
+    };
+    if (group.destination === "new" && !representativeSurvived) {
+      // Never borrow EXIF coordinates or timestamp from a FAILED file.
+      Object.assign(next, {
+        destination: "unplaced", routePointId: null, label: "位置待重新确认",
+        latitude: null, longitude: null, occurredAt: null, spatialSource: "unknown",
+        accuracyMeters: null, manual: true,
+        basis: { reason: "missing-coordinate-evidence", evidence: [], uncertainty: ["requires-review"] },
+      } satisfies Partial<RoutePointReviewGroup>);
+    }
+    return [next];
+  });
+  if (!groups.length) return null;
+  const recovered: RoutePointBatchDraft = {
+    ...draft, groups, autoOrganize: false, // opt-in never survives a failed upload
+  };
+  assertCoverage(recovered.groups, successful.length);
+  return { draft: recovered, assetIds: uploaded.assets.map((asset) => asset.id) };
+}
+
 export function resolveRoutePointBatchAssetAssignments(
   draft: RoutePointBatchDraft,
   assetIdsByFileIndex: readonly string[],

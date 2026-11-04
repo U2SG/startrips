@@ -6,6 +6,7 @@ import {
   canAutoOrganizeRoutePointBatch,
   createRoutePointBatchDraft,
   editRoutePointBatchDraft,
+  recoverUploadedRoutePointBatchSubset,
   reconcileRoutePointBatchDraft,
   resolveRoutePointBatchAssetAssignments,
   shouldAutoSubmitRoutePointBatch,
@@ -244,6 +245,49 @@ describe("Route Point batch review draft / #337", () => {
     expect(() => buildRoutePointBatchApplyBody(
       value, ["duplicate", "duplicate", "c", "d"], "batch-one",
     )).toThrow(/同一上传媒体被分配到不同地点/);
+  });
+
+  it("keeps existing-point name/time immutable: move-only must not silently promise edits", () => {
+    const original = draft();
+    const existing = original.groups[0];
+    expect(() => editRoutePointBatchDraft(original, {
+      type: "rename", id: existing.id, value: "伪保存的站名",
+    }, journey)).toThrow(/Only new Route Point drafts can be renamed/);
+    expect(() => editRoutePointBatchDraft(original, {
+      type: "retime", id: existing.id, value: "2026-09-03T10:00:00+08:00",
+    }, journey)).toThrow(/Only new Route Point drafts can change their time/);
+    const request = buildRoutePointBatchApplyBody(original, ["a", "b", "c", "d"], "move-only-readback");
+    expect(request?.points).toEqual([{ candidateId: "new:1-2", label: "新途径点草案",
+      latitude: 25.03, longitude: 121.56, occurredAt: null, isStop: true }]);
+    expect(request?.attachments?.[0]).toEqual({
+      assetId: "a", routePointId: "point", intentionalReuse: false,
+    });
+  });
+
+  it("maps ONLY confirmed partial-upload assets to their original file indexes", () => {
+    const value = editRoutePointBatchDraft(draft(), { type: "auto-organize", enabled: true }, journey);
+    const result = recoverUploadedRoutePointBatchSubset(value, 4, {
+      uploadedCount: 3, mediaErrors: [{ fileIndex: 1 }],
+      assets: [{ id: "asset-0" }, { id: "asset-2" }, { id: "asset-3" }],
+    });
+    expect(result).not.toBeNull();
+    expect(result?.assetIds).toEqual(["asset-0", "asset-2", "asset-3"]);
+    expect(result?.draft.autoOrganize).toBe(false);
+    expect(result?.draft.groups.flatMap((group) => group.fileIndexes).sort()).toEqual([0, 1, 2]);
+    expect(result?.draft.groups.find((group) => group.id === "new:1-2")).toMatchObject({
+      fileIndexes: [1], destination: "unplaced", latitude: null, longitude: null,
+      occurredAt: null, spatialSource: "unknown",
+    });
+    expect(buildRoutePointBatchApplyBody(result!.draft, result!.assetIds, "recover-one")?.attachments)
+      .toEqual([{ assetId: "asset-0", routePointId: "point", intentionalReuse: false }]);
+    expect(recoverUploadedRoutePointBatchSubset(value, 4, {
+      uploadedCount: 3, mediaErrors: [{ fileIndex: 1 }],
+      assets: [{ id: "asset-0" }, { id: "asset-3" }],
+    })).toBeNull(); // an asset ID is missing: no index guessing
+    expect(recoverUploadedRoutePointBatchSubset(value, 4, {
+      uploadedCount: 3, mediaErrors: [{ fileIndex: 1 }, { fileIndex: 1 }],
+      assets: [{ id: "a" }, { id: "b" }, { id: "c" }],
+    })).toBeNull(); // duplicated errors are ambiguous
   });
 
   it("clears explicit capture time on both split subsets, not just the removed file", () => {

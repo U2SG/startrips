@@ -164,6 +164,7 @@ import {
   canAutoOrganizeRoutePointBatch,
   createRoutePointBatchDraft,
   editRoutePointBatchDraft,
+  recoverUploadedRoutePointBatchSubset,
   resolveRoutePointBatchAssetAssignments,
   shouldAutoSubmitRoutePointBatch,
   type RoutePointBatchDraft,
@@ -337,6 +338,15 @@ type MediaUploadState =
       totalBytes: number;
     }
   | { status: "complete"; message: string; tone: "success" | "error"; firstMedia?: boolean };
+
+/** Minimal owner-local recovery pointer. Never persist selected File objects,
+ * raw EXIF, draft GPS or per-batch auto-organize consent. */
+type PartialRoutePointUploadRecovery = {
+  version: 1;
+  journeyId: string;
+  assetIds: string[];
+  failedCount: number;
+};
 
 function journeyRange(journey: Journey) {
   return journey.endedOn && journey.endedOn !== journey.startedOn
@@ -898,11 +908,32 @@ export function JourneyStory({
     files: File[]; reads: MediaPlacementReadResult[]; draft: RoutePointBatchDraft;
     /** Reuse already uploaded assets after dedupe conflict; never upload twice. */
     uploadedAssetIds?: string[];
+    /** Recovered successful subset; its File objects must NEVER be uploaded again. */
+    wasPartialUpload?: boolean;
   } | null>(null);
   const [routePointBatchReceipt, setRoutePointBatchReceipt] = useState<RoutePointBatchOperation | null>(null);
   const [routePointBatchError, setRoutePointBatchError] = useState<string | null>(null);
   const [routePointBatchBusy, setRoutePointBatchBusy] = useState(false);
   const routePointBatchWriteOwnerRef = useRef<string | null>(null);
+  const [routePointPartialRecovery, setRoutePointPartialRecovery] = useState<PartialRoutePointUploadRecovery | null>(null);
+  useEffect(() => {
+    // A remount can recover exact server asset IDs without replaying a file
+    // upload. This is a manual recovery pointer, never an auto-submit draft.
+    try {
+      const raw = window.sessionStorage.getItem(`startrips:route-point-batch-partial:${journeyId}`);
+      const value: unknown = raw ? JSON.parse(raw) : null;
+      const valid = value && typeof value === "object"
+        && (value as PartialRoutePointUploadRecovery).version === 1
+        && (value as PartialRoutePointUploadRecovery).journeyId === journeyId
+        && Number.isSafeInteger((value as PartialRoutePointUploadRecovery).failedCount)
+        && (value as PartialRoutePointUploadRecovery).failedCount > 0
+        && Array.isArray((value as PartialRoutePointUploadRecovery).assetIds)
+        && (value as PartialRoutePointUploadRecovery).assetIds.length > 0
+        && (value as PartialRoutePointUploadRecovery).assetIds.every(
+          (id) => typeof id === "string" && id.length > 0 && id.length < 256);
+      setRoutePointPartialRecovery(valid ? value as PartialRoutePointUploadRecovery : null);
+    } catch { setRoutePointPartialRecovery(null); }
+  }, [journeyId]);
   useEffect(() => {
     if (!manageMedia?.readRoutePointBatch || !journeyId) return;
     let operationId: string | null = null;
@@ -3741,6 +3772,26 @@ export function JourneyStory({
     catch { /* Restricted storage is optional; the server owns the receipt. */ }
   }
 
+  function forgetPartialRoutePointUpload() {
+    setRoutePointPartialRecovery(null);
+    try { window.sessionStorage.removeItem(`startrips:route-point-batch-partial:${journey.id}`); }
+    catch { /* Restricted storage never authorizes a re-upload. */ }
+  }
+
+  function rememberPartialRoutePointUpload(assets: readonly { id: string }[], failedCount: number) {
+    const freshIds = assets.map((asset) => asset.id)
+      .filter((id) => typeof id === "string" && id.length > 0 && id.length < 256);
+    if (!freshIds.length) return;
+    const value: PartialRoutePointUploadRecovery = {
+      version: 1, journeyId: journey.id,
+      assetIds: [...new Set([...(routePointPartialRecovery?.assetIds ?? []), ...freshIds])],
+      failedCount: (routePointPartialRecovery?.failedCount ?? 0) + Math.max(1, failedCount),
+    };
+    setRoutePointPartialRecovery(value);
+    try { window.sessionStorage.setItem(`startrips:route-point-batch-partial:${journey.id}`, JSON.stringify(value)); }
+    catch { /* In-page recovery remains visible; never retry uploaded files on storage failure. */ }
+  }
+
   function editPendingRoutePointBatch(action: RoutePointReviewAction) {
     if (!routePointBatchReview || !journey || routePointBatchBusy) return;
     try {
@@ -3793,12 +3844,28 @@ export function JourneyStory({
         });
         if (uploaded.mediaErrors.length || uploaded.assets.length !== files.length) {
           if (uploaded.uploadedCount > 0) {
-            try { await onMediaAdded(journey.id); } catch { /* No second upload on refresh failure. */ }
+            try { await onMediaAdded(journey.id); } catch { /* Never re-upload on refresh failure. */ }
           }
-          const errors = uploaded.mediaErrors.length;
+          const errors = uploaded.mediaErrors.length
+            || Math.max(0, files.length - uploaded.assets.length);
+          // Preserve exact confirmed server IDs even if indexes are ambiguous.
+          // Session recovery stores only IDs/counts (not EXIF, File, or opt-in).
+          rememberPartialRoutePointUpload(uploaded.assets, errors);
+          const recovered = recoverUploadedRoutePointBatchSubset(draft, files.length, uploaded);
+          if (recovered) {
+            preserveDraftForReconciliation = true;
+            setRoutePointBatchReview({
+              files: [], reads: [], draft: recovered.draft,
+              uploadedAssetIds: recovered.assetIds, wasPartialUpload: true,
+            });
+            setRoutePointBatchError(
+              `部分上传：${recovered.assetIds.length} 个服务端媒体已保留，${errors} 个失败。仅可手动确认成功的素材；失败的请单独选择重新上传，绝不重传本批成功项。`);
+          }
           setUploadState({
             status: "complete", tone: "error",
-            message: `已收到 ${uploaded.uploadedCount} 个媒体，${errors} 个上传失败或未获服务端资产ID。成功素材保留在整段 Journey；未创建新途径点。请先核对列表，不要重复上传整个批次。`,
+            message: recovered
+              ? `部分上传已停止，${errors} 个文件失败。保留成功媒体的草案，关闭故事后可从恢复提示手动整理。`
+              : `已有 ${uploaded.assets.length} 个已确认媒体，${errors} 个失败或缺少资产ID。索引不确定，不能自动分组；请从旅程读回后手动整理，不要重新上传已成功的媒体。`,
           });
           return;
         }
@@ -3838,6 +3905,7 @@ export function JourneyStory({
         // Persist the operation id *before* posting. An ambiguous response is
         // reconciled via GET, never via a newly generated operation id.
         rememberRoutePointBatchOperation(journey.id, request.operationId);
+        if (review.wasPartialUpload) forgetPartialRoutePointUpload();
         let operation: RoutePointBatchOperation;
         try {
           operation = await manageMedia.applyRoutePointBatch(journey.id, request);
@@ -5560,6 +5628,31 @@ export function JourneyStory({
                 onConfirm={() => void confirmRoutePointBatchReview()}
                 onCancel={() => { setRoutePointBatchReview(null); setRoutePointBatchError(null); }}
               /> : null}
+              {routePointPartialRecovery ? (
+                <section className="route-batch__receipt" aria-label="部分上传恢复" role="status">
+                  <strong>上次部分上传 · 请核对已成功的媒体</strong>
+                  <p>已记录 {routePointPartialRecovery.assetIds.length} 个服务端媒体ID；至少 {routePointPartialRecovery.failedCount} 个上传失败。未自动创建或重试途径点，请仅重新选择失败文件。</p>
+                  <ul>
+                    {routePointPartialRecovery.assetIds.map((id) => (
+                      <li key={id}>{journey.media.find((asset) => asset.id === id)?.fileName
+                        ?? "未在当前列表读回的媒体（请先刷新旅程）"}</li>
+                    ))}
+                  </ul>
+                  <p>原草案不会跨会话自动提交。如已退出审阅，可先读回这些媒体，再使用现有「批量移动」选择去向，不要重复上传成功素材。</p>
+                  <button type="button" disabled={mutationPending || routePointBatchBusy || routePointBatchReview !== null
+                    || !routePointPartialRecovery.assetIds.some((id) => journey.media.some((asset) => asset.id === id))}
+                    onClick={() => {
+                      const known = routePointPartialRecovery.assetIds
+                        .filter((id) => journey.media.some((asset) => asset.id === id));
+                      if (!known.length) return;
+                      setOverview(true);
+                      setMoveSelectMode(true);
+                      setMoveSelection(new Set(known));
+                    }}>选择已上传媒体并打开批量移动</button>
+                  <button type="button" disabled={mutationPending || routePointBatchBusy}
+                    onClick={forgetPartialRoutePointUpload}>已核对，关闭提醒</button>
+                </section>
+              ) : null}
               {routePointBatchReceipt ? (
                 <section className="route-batch__receipt" aria-label="最近一次批量途径点回执">
                   <strong>批量操作回执 · {routePointBatchReceipt.status}</strong>
