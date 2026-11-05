@@ -8,6 +8,7 @@ struct AtlasRootView: View {
     @State private var sceneIdentity = UUID()
     @State private var fixtureMode = false
     @State private var googleLoginFailed = false
+    @State private var sceneRecoveryRequired = false
 
     var body: some View {
         NavigationStack(path: $router.path) {
@@ -47,7 +48,17 @@ struct AtlasRootView: View {
                 StoryDestination(target: target, router: router, session: session).id(target.requestId)
             }
             .overlay(alignment: .top) {
-                if session.busy { ProgressView("正在读取图谱…").padding().background(.regularMaterial) }
+                if connected && router.path.isEmpty && sceneRecoveryRequired {
+                    // Independent of the local WKWebView: available even when
+                    // JavaScript and the loopback scene are no longer running.
+                    Button("重新加载地球") { restartScene() }
+                        .accessibilityIdentifier("atlas.native-scene-reload")
+                        .padding(10)
+                        .background(.regularMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                } else if session.busy {
+                    ProgressView("正在读取图谱…").padding().background(.regularMaterial)
+                }
                 #if DEBUG
                 if fixtureMode {
                     VStack {
@@ -80,14 +91,21 @@ struct AtlasRootView: View {
             }
         }
         .alert("图谱暂不可用", isPresented: Binding(get: { router.error != nil }, set: { if !$0 { router.error = nil } })) {
-            Button("重试") { refresh() }
+            Button("重新加载地球") { restartScene() }
             Button("关闭", role: .cancel) { router.error = nil }
         } message: { Text(router.error ?? "") }
+        .onChange(of: router.error) { _, error in
+            if connected && error != nil { sceneRecoveryRequired = true }
+        }
+        .onChange(of: router.rendered) { _, rendered in
+            if rendered { sceneRecoveryRequired = false }
+        }
         .task {
             router.onInvalidation = { refresh() }
             router.onSwitchAccess = {
                 session.disconnect()
                 router.clear()
+                sceneRecoveryRequired = false
                 sceneIdentity = UUID()
                 connected = false
             }
@@ -101,6 +119,11 @@ struct AtlasRootView: View {
                     try session.installFixture(data, scope: "synthetic-ci")
                     router.install(fixture.snapshot.journeys, identity: "synthetic-ci", access: .owner, earthExperience: "default")
                     connected = true
+                    if ProcessInfo.processInfo.arguments.contains("-atlas-scene-recovery-probe") {
+                        // Test-only failure path: WKWebView may be unusable while
+                        // native recovery controls still have to work.
+                        router.error = "地球已暂停，请刷新重试。"
+                    }
                 } catch { router.error = "测试图谱无法读取。" }
                 return
             }
@@ -127,6 +150,14 @@ struct AtlasRootView: View {
             try session.configureOwner(); router.clear(); connected = true; sceneIdentity = UUID()
             refresh()
         } catch { router.error = error.localizedDescription }
+    }
+    private func restartScene() {
+        // Recreates WKWebView AND its BundledSceneServer, unlike a data-only
+        // refresh, which cannot recover a crashed WebKit content process.
+        router.error = nil
+        sceneRecoveryRequired = false
+        sceneIdentity = UUID()
+        refresh()
     }
     private func refresh() {
         guard !fixtureMode else { return }

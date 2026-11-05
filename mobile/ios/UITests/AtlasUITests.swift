@@ -2,6 +2,22 @@ import XCTest
 
 final class AtlasUITests: XCTestCase {
     @MainActor
+    func testNativeSceneRecoveryDoesNotDependOnWebViewControls() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture", "-atlas-scene-recovery-probe"]
+        app.launch()
+        let dialog = app.alerts["图谱暂不可用"]
+        XCTAssertTrue(dialog.waitForExistence(timeout: 20))
+        let retry = dialog.buttons["重新加载地球"]
+        XCTAssertTrue(retry.exists)
+        retry.tap()
+        XCTAssertTrue(app.webViews.buttons[
+            "查看当前旅程详情：海岸旅程。左右滑动切换旅程"
+        ].waitForExistence(timeout: 30))
+        XCTAssertFalse(dialog.exists)
+    }
+
+    @MainActor
     func testMobileV2HeaderJourneySheetAndPicker() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture"]
