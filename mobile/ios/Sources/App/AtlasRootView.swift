@@ -117,7 +117,21 @@ struct AtlasRootView: View {
                     let data = try Data(contentsOf: url)
                     let fixture = try JSONDecoder().decode(BridgeFixture.self, from: data)
                     try session.installFixture(data, scope: "synthetic-ci")
-                    router.install(fixture.snapshot.journeys, identity: "synthetic-ci", access: .owner, earthExperience: "default")
+                    var fixtureJourneys = fixture.snapshot.journeys
+                    if ProcessInfo.processInfo.arguments.contains("-atlas-multi-journey-fixture") {
+                        // A second realistic Journey is needed for a real touch
+                        // swipe assertion; the normal Story fixture stays unchanged.
+                        fixtureJourneys.append(AtlasJourney(
+                            id: "journey-fixture-valley", title: "山谷旅程",
+                            startedOn: "2025-02-01", endedOn: "2025-02-03",
+                            note: "另一段旅程", lightColor: "#86d4c5",
+                            lightEffect: nil, routeSegments: nil, revision: 1,
+                            routePoints: [AtlasRoutePoint(
+                                id: "point-valley", latitude: 40.1, longitude: -105.2,
+                                label: "山谷", isStop: true, occurredAt: nil)],
+                            media: []))
+                    }
+                    router.install(fixtureJourneys, identity: "synthetic-ci", access: .owner, earthExperience: "default")
                     connected = true
                     if ProcessInfo.processInfo.arguments.contains("-atlas-scene-recovery-probe") {
                         // Test-only failure path: WKWebView may be unusable while
