@@ -16,6 +16,18 @@ extension AtlasUITests {
         let close = app.buttons["story.close"]
         XCTAssertTrue(close.waitForExistence(timeout: 10))
         XCTAssertEqual(app.staticTexts["story.title"].label, "海岸旅程")
+        XCTAssertEqual(app.buttons["story.previous"].label, "上一页")
+        XCTAssertEqual(app.buttons["story.next"].label, "下一页")
+        XCTAssertTrue(app.buttons["整理与导出"].exists)
+        // Collapsing the native Story must not render its current reflection twice.
+        let reflections = app.staticTexts.matching(
+            NSPredicate(format: "label == %@", "Synthetic bridge fixture"))
+        XCTAssertEqual(reflections.count, 1)
+        let expand = app.buttons["story.expand"]
+        XCTAssertTrue(expand.exists)
+        expand.tap()
+        XCTAssertEqual(reflections.count, 1)
+        expand.tap()
 
         let first = app.descendants(matching: .any).matching(identifier: "story.photo.media:asset-fixture").firstMatch
         let second = app.descendants(matching: .any).matching(identifier: "story.photo.media:asset-second").firstMatch

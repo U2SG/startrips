@@ -14,6 +14,56 @@ final class AtlasUITests: XCTestCase {
     }
 
     @MainActor
+    func testMobileWordmarkTriggersBrandInteraction() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture"]
+        app.launch()
+        let logo = app.webViews.buttons["播放 Startrips 动画"]
+        XCTAssertTrue(logo.waitForExistence(timeout: 20))
+        XCTAssertTrue(logo.isHittable)
+        logo.tap()
+        // The Web brand moment is an in-place interaction, not a dead label
+        // or a navigation away from the Atlas.
+        XCTAssertTrue(logo.exists)
+        XCTAssertTrue(app.webViews.buttons["切换账户或分享"].exists)
+    }
+
+    @MainActor
+    func testMobileJourneyChipSwipesBetweenRealJourneys() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture", "-atlas-multi-journey-fixture"]
+        app.launch()
+        let coast = app.webViews.buttons[
+            "查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
+        let valley = app.webViews.buttons[
+            "查看当前旅程详情：山谷旅程。左右滑动切换旅程"]
+        XCTAssertTrue(coast.waitForExistence(timeout: 30))
+
+        // Actual iPhone drag on the upper Journey row, not a synthetic
+        // React callback or the lower time-scrubber track.
+        coast.coordinate(withNormalizedOffset: CGVector(dx: 0.86, dy: 0.5))
+            .press(forDuration: 0.08,
+                   thenDragTo: coast.coordinate(withNormalizedOffset: CGVector(dx: 0.14, dy: 0.5)))
+        XCTAssertTrue(valley.waitForExistence(timeout: 15))
+        XCTAssertFalse(app.webViews.buttons["返回地球"].exists)
+
+        // Match Mobile V2 boundary behavior: don't wrap at the last Journey.
+        valley.coordinate(withNormalizedOffset: CGVector(dx: 0.86, dy: 0.5))
+            .press(forDuration: 0.08,
+                   thenDragTo: valley.coordinate(withNormalizedOffset: CGVector(dx: 0.14, dy: 0.5)))
+        XCTAssertTrue(valley.exists)
+
+        valley.coordinate(withNormalizedOffset: CGVector(dx: 0.14, dy: 0.5))
+            .press(forDuration: 0.08,
+                   thenDragTo: valley.coordinate(withNormalizedOffset: CGVector(dx: 0.86, dy: 0.5)))
+        XCTAssertTrue(coast.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.webViews.sliders["时间轴"].exists)
+
+        // A real tap after swiping must still open the details sheet.
+        coast.tap()
+        XCTAssertTrue(app.webViews.buttons["返回地球"].waitForExistence(timeout: 10))
+    }
+    @MainActor
     func testNativeSceneRecoveryDoesNotDependOnWebViewControls() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture", "-atlas-scene-recovery-probe"]
@@ -35,6 +85,10 @@ final class AtlasUITests: XCTestCase {
         app.launchArguments = ["-atlas-fixture"]
         app.launch()
         XCTAssertTrue(app.webViews.buttons["切换账户或分享"].waitForExistence(timeout: 20))
+        let logo = app.webViews.buttons["播放 Startrips 动画"]
+        XCTAssertTrue(logo.waitForExistence(timeout: 20))
+        logo.tap()
+        XCTAssertTrue(logo.exists)
         let picker = app.webViews.buttons["打开全部旅程"]
         XCTAssertTrue(picker.waitForExistence(timeout: 20))
         let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]

@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { IconArrowRight, IconRoute, IconTimeline, IconUserCircle, IconX } from "@tabler/icons-react";
-import { StartripsJourneyCue, StartripsWordmark } from "../../../src/brand/StartripsBrandMark";
+import { StartripsJourneyCue } from "../../../src/brand/StartripsBrandMark";
+import { StartripsWordmarkSignatureButton } from "../../../src/brand/StartripsSignatureMoment";
 import { GlobeTimeScrubber } from "../../../src/journey/GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "../../../src/journey/useGlobeTimeCursor";
 import { toJourneyRoutes } from "../../../src/journey/journeyModel";
 import { LivingAtlasGlobe, PersistentEarthProvider, usePersistentEarth } from "../../../src/scene/LivingAtlasGlobe";
-import { acceptsSnapshot, atlasSceneFocus, decodeSnapshot, renderJourneys, send, type Snapshot } from "./bridge";
+import { acceptsSnapshot, atlasSceneFocus, decodeSnapshot, journeySwipeDirection, nextJourneyIndex, renderJourneys, send, type JourneySwipePoint, type Snapshot } from "./bridge";
 import "../../../src/styles/tokens.css";
 import "../../../src/styles/controls.css";
 import "../../../src/styles/living-atlas.css";
@@ -37,7 +38,7 @@ function AtlasScene() {
   const pickerTrigger = useRef<HTMLButtonElement>(null);
   const sheet = useRef<HTMLElement>(null);
   const picker = useRef<HTMLElement>(null);
-  const swipeStart = useRef<number | null>(null);
+  const swipeStart = useRef<JourneySwipePoint | null>(null);
   const didSwipe = useRef(false);
   const sheetStart = useRef<number | null>(null);
   const lastCursorCommit = useRef<string | null>(null);
@@ -139,11 +140,24 @@ function AtlasScene() {
     setPickerOpen(false);
     requestAnimationFrame(() => pickerTrigger.current?.focus({ preventScroll: true }));
   };
-  const stepJourney = (step: number) => {
+  const stepJourney = (step: -1 | 1) => {
     if (!selected || !snapshot || journeys.length < 2) return;
     const index = journeys.findIndex((journey) => journey.id === selected.id);
-    const next = journeys[(index + step + journeys.length) % journeys.length];
+    const next = journeys[nextJourneyIndex(index, journeys.length, step)];
     if (next && next.id !== selected.id) select(next.id);
+  };
+  const finishJourneySwipe = (end: JourneySwipePoint) => {
+    const start = swipeStart.current;
+    swipeStart.current = null;
+    if (!start) return;
+    const direction = journeySwipeDirection(start, end);
+    if (direction) {
+      didSwipe.current = true;
+      stepJourney(direction);
+    } else if (Math.hypot(end.x - start.x, end.y - start.y) > 16) {
+      // A drag must never accidentally open the details sheet as a click.
+      didSwipe.current = true;
+    }
   };
   const onDialogKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === "Escape") {
@@ -189,7 +203,7 @@ function AtlasScene() {
     </div>
     <header className="mobile-v2__header native-atlas__header"
       inert={sheetOpen || pickerOpen || undefined}>
-      <div className="mobile-v2__brand"><StartripsWordmark size={27} /></div>
+      <div className="mobile-v2__brand"><StartripsWordmarkSignatureButton size={27} state="rest" /></div>
       <nav aria-label="移动端旅程操作">
         <button type="button" aria-label="切换账户或分享"
           onClick={() => send(snapshot, "switchAccess")}>
@@ -209,15 +223,38 @@ function AtlasScene() {
       <button ref={chip} type="button" className="mobile-v2__journey-chip"
         aria-label={"查看当前旅程详情：" + selected.title + "。左右滑动切换旅程"}
         aria-expanded={sheetOpen}
-        onPointerDown={(event) => { swipeStart.current = event.clientX; didSwipe.current = false; }}
-        onPointerUp={(event) => {
-          const from = swipeStart.current;
-          swipeStart.current = null;
-          if (from === null || Math.abs(event.clientX - from) < 34) return;
-          didSwipe.current = true;
-          stepJourney(event.clientX < from ? 1 : -1);
+        onTouchStart={(event) => {
+          if (event.touches.length !== 1) { swipeStart.current = null; return; }
+          const touch = event.touches[0];
+          swipeStart.current = { x: touch.clientX, y: touch.clientY };
+          didSwipe.current = false;
         }}
-        onPointerCancel={() => { swipeStart.current = null; didSwipe.current = false; }}
+        onTouchEnd={(event) => {
+          if (event.touches.length !== 0 || event.changedTouches.length !== 1) {
+            swipeStart.current = null; return;
+          }
+          const touch = event.changedTouches[0];
+          finishJourneySwipe({ x: touch.clientX, y: touch.clientY });
+        }}
+        onTouchCancel={() => { swipeStart.current = null; }}
+        onPointerDown={(event) => {
+          // iOS touch events are tracked separately; pointer capture keeps
+          // mouse/pen swipes alive when the pointer exits the 56px chip.
+          if (event.pointerType === "touch" || !event.isPrimary) return;
+          swipeStart.current = { x: event.clientX, y: event.clientY };
+          didSwipe.current = false;
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerUp={(event) => {
+          if (event.pointerType === "touch") return;
+          finishJourneySwipe({ x: event.clientX, y: event.clientY });
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+        }}
+        onPointerCancel={(event) => {
+          if (event.pointerType !== "touch") swipeStart.current = null;
+        }}
         onClick={() => {
           if (didSwipe.current) { didSwipe.current = false; return; }
           setSheetOpen(true);

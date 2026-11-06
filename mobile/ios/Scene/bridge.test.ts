@@ -3,7 +3,25 @@ import fixture from "../Fixtures/bridge.json";
 import { buildJourneyTimeline, resolveJourneyTimelineSelection } from "../../../src/journey/globeTimeline";
 import { toJourneyRoutes } from "../../../src/journey/journeyModel";
 import { GLOBE_IDLE_RESUME_DELAY_MS, getGlobeIdleRotationDelta, resolveGlobeFocusIntent } from "../../../src/scene/ParticleEarthScene";
-import { acceptsSnapshot, atlasSceneFocus, decodeSnapshot, renderJourneys } from "./bridge";
+import { acceptsSnapshot, atlasSceneFocus, decodeSnapshot, journeySwipeDirection, nextJourneyIndex, renderJourneys } from "./bridge";
+
+describe("native compact Journey chip gestures", () => {
+  it("switches only for a meaningful horizontal gesture, not taps or vertical swipes", () => {
+    const start = { x: 200, y: 40 };
+    expect(journeySwipeDirection(start, { x: 140, y: 45 })).toBe(1);
+    expect(journeySwipeDirection(start, { x: 265, y: 42 })).toBe(-1);
+    expect(journeySwipeDirection(start, { x: 161, y: 40 })).toBe(0);
+    expect(journeySwipeDirection(start, { x: 140, y: 125 })).toBe(0);
+  });
+  it("matches Mobile V2 boundaries rather than looping the final Journey", () => {
+    expect(nextJourneyIndex(0, 3, 1)).toBe(1);
+    expect(nextJourneyIndex(1, 3, 1)).toBe(2);
+    expect(nextJourneyIndex(2, 3, 1)).toBe(2);
+    expect(nextJourneyIndex(0, 3, -1)).toBe(0);
+    expect(nextJourneyIndex(1, 1, 1)).toBe(1);
+    expect(nextJourneyIndex(0, 1, -1)).toBe(0);
+  });
+});
 
 describe("the same redacted fixture as Swift", () => {
   it("decodes stable IDs and preserves server point order", () => {
