@@ -40,6 +40,10 @@ final class AtlasUITests: XCTestCase {
         let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
         XCTAssertTrue(chip.waitForExistence(timeout: 30))
         chip.tap()
+        let initialPoint = app.webViews.switches["起点"]
+        XCTAssertTrue(initialPoint.waitForExistence(timeout: 10))
+        initialPoint.tap()
+        chip.tap()
         XCTAssertTrue(app.webViews.buttons["打开故事：起点"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.webViews.switches["海岸"].waitForExistence(timeout: 10))
         let sheet = XCTAttachment(screenshot: app.screenshot())
@@ -67,6 +71,10 @@ final class AtlasUITests: XCTestCase {
         XCTAssertTrue(picker.waitForExistence(timeout: 20))
         let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
         XCTAssertTrue(chip.waitForExistence(timeout: 30))
+        chip.tap()
+        let entryPoint = app.webViews.switches["起点"]
+        XCTAssertTrue(entryPoint.waitForExistence(timeout: 10))
+        entryPoint.tap()
         chip.tap()
         let opening = app.webViews.buttons["打开故事：起点"]
         XCTAssertTrue(opening.waitForExistence(timeout: 10))
