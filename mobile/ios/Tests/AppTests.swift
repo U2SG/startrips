@@ -11,6 +11,18 @@ final class AppTests: XCTestCase {
         return try JSONDecoder().decode(BridgeFixture.self, from: Data(contentsOf: url))
     }
 
+    func testProductionServerIsAValidatedFirstPartyHTTPSOrigin() throws {
+        let origin = try AtlasSession.validatedOrigin(AtlasSession.productionOrigin)
+        XCTAssertEqual(AtlasSession.productionOrigin, "https://106.53.130.142")
+        XCTAssertTrue(AtlasSession.isProductionOrigin(origin))
+        XCTAssertTrue(AtlasSession.isProductionOrigin(try AtlasSession.validatedOrigin("https://106.53.130.142/")))
+        XCTAssertFalse(AtlasSession.isProductionOrigin(URL(string: "https://atlas.example")!))
+        XCTAssertFalse(AtlasSession.isProductionOrigin(URL(string: "https://106.53.130.142:8443")!))
+        #if !DEBUG
+        XCTAssertThrowsError(try AtlasSession.validatedOrigin("https://atlas.example"))
+        #endif
+    }
+
     func testSnapshotScriptTreatsTitlesAndNotesAsData() throws {
         let json = #"{"title":"海岸');throw Error('x')//","note":"\"quotes\"\nnew line"}"#
         let script = try AtlasSceneView.receiveScript(json)

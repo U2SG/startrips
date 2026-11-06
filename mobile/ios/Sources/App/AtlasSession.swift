@@ -8,7 +8,7 @@ enum SessionFailure: LocalizedError {
     case invalidOrigin, unavailable(Int), invalidPayload
     var errorDescription: String? {
         switch self {
-        case .invalidOrigin: return "请输入有效的 HTTPS Startrips 地址。"
+        case .invalidOrigin: return "Startrips 服务地址或分享链接无效，请检查后重试。"
         case .unavailable(401): return "请先登录并选择图谱，然后返回刷新。"
         case .unavailable(403), .unavailable(404): return "当前图谱或分享不可用，请重新打开。"
         case .unavailable: return "暂时无法读取图谱，请重试。"
@@ -19,7 +19,16 @@ enum SessionFailure: LocalizedError {
 
 @MainActor
 final class AtlasSession: ObservableObject {
-    @Published var originText = UserDefaults.standard.string(forKey: "atlas.origin") ?? ""
+    // Public, first-party deployment origin. Never ship a user-entered server or
+    // credentials; Release always connects to the deployed Startrips backend.
+    static let productionOrigin = "https://106.53.130.142"
+    #if DEBUG
+    @Published var originText = ProcessInfo.processInfo.arguments.contains("-allow-server-override")
+        ? (UserDefaults.standard.string(forKey: "atlas.debug.origin") ?? AtlasSession.productionOrigin)
+        : AtlasSession.productionOrigin
+    #else
+    @Published private(set) var originText = AtlasSession.productionOrigin
+    #endif
     @Published var shareText = ""
     @Published var busy = false
     @Published var loginPresented = false
@@ -30,6 +39,18 @@ final class AtlasSession: ObservableObject {
     private(set) var generation = UUID()
     private var refreshID = UUID()
     @Published private(set) var cookieStore = WKWebsiteDataStore.nonPersistent()
+
+    #if DEBUG
+    // Unit tests opt into a synthetic HTTPS site on this session instance only.
+    // The override cannot be persisted or compiled into a Release app.
+    private var testOriginOverride: URL?
+
+    func configureTestOrigin(_ url: URL) throws {
+        let value = try Self.validatedOrigin(url.absoluteString)
+        testOriginOverride = value
+        originText = value.absoluteString
+    }
+    #endif
 
     // HTTP cookies do not distinguish ports; a private store isolates each configured HTTPS origin.
     static func ownerStoreID(_ url: URL) -> UUID {
@@ -117,10 +138,24 @@ final class AtlasSession: ObservableObject {
         cookieStore = .nonPersistent()
     }
 
+    static func isProductionOrigin(_ url: URL) -> Bool {
+        guard let trusted = URL(string: productionOrigin) else { return false }
+        return url.scheme == "https"
+            && url.host?.lowercased() == trusted.host?.lowercased()
+            && (url.port ?? 443) == (trusted.port ?? 443)
+            && url.user == nil && url.password == nil
+            && url.query == nil && url.fragment == nil
+            && (url.path.isEmpty || url.path == "/")
+    }
+
     static func validatedOrigin(_ text: String) throws -> URL {
         guard let url = URL(string: text), url.scheme == "https", url.host != nil,
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
               url.path.isEmpty || url.path == "/" else { throw SessionFailure.invalidOrigin }
+        #if !DEBUG
+        // Shared links and restored settings must never move Release to another host.
+        guard isProductionOrigin(url) else { throw SessionFailure.invalidOrigin }
+        #endif
         return url
     }
 
@@ -135,14 +170,22 @@ final class AtlasSession: ObservableObject {
     }
 
     func configureOwner() throws {
-        let selected = try Self.validatedOrigin(originText)
+        #if DEBUG
+        let selected = try Self.validatedOrigin(
+            testOriginOverride?.absoluteString ?? (ProcessInfo.processInfo.arguments.contains("-allow-server-override") ? originText : Self.productionOrigin))
+        #else
+        let selected = try Self.validatedOrigin(Self.productionOrigin)
+        #endif
         let site = Self.ownerStoreID(selected)
         let storeID = storeRecord(for: site).active
         Task { await cleanUnusedStores(for: site) }
         if cookieStore.identifier != storeID { cookieStore = WKWebsiteDataStore(forIdentifier: storeID) }
         origin = selected
         guestToken = nil; generation = UUID()
-        UserDefaults.standard.set(origin?.absoluteString, forKey: "atlas.origin")
+        #if DEBUG
+        // Explicit debug-only overrides do not alter the Release server.
+        if testOriginOverride == nil && ProcessInfo.processInfo.arguments.contains("-allow-server-override") { UserDefaults.standard.set(selected.absoluteString, forKey: "atlas.debug.origin") }
+        #endif
     }
 
     private struct Login: Decodable {
