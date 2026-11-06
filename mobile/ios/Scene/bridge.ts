@@ -8,7 +8,7 @@ export type SceneJourney = Pick<Journey, "id" | "title" | "startedOn" | "endedOn
 };
 export type Snapshot = { version: 1; scopeId: string; revision: number; access: "owner" | "guest";
   earthExperience: "default" | "particle-only"; journeys: SceneJourney[]; selection?: Selection | null; active: boolean };
-export type SceneEvent = { version: 1; kind: "ready" | "select" | "story" | "invalidate" | "cameraInterrupted" | "rendered";
+export type SceneEvent = { version: 1; kind: "ready" | "select" | "story" | "invalidate" | "cameraInterrupted" | "rendered" | "switchAccess";
   scopeId: string; revision: number; requestId: string; journeyId?: string; routePointId?: string; assetId?: string; focusRequestId?: string };
 
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -71,6 +71,21 @@ export function atlasSceneFocus(point: { latitude: number; longitude: number } |
   return point
     ? { focusPoint: { lat: point.latitude, lon: point.longitude }, focusRoute: null }
     : { focusPoint: null, focusRoute: route ?? null };
+}
+
+// Horizontal gestures on the compact Journey row never replace vertical
+// drawer scrolling or the independent time-scrubber's horizontal gesture.
+export type JourneySwipePoint = { x: number; y: number };
+export function journeySwipeDirection(start: JourneySwipePoint, end: JourneySwipePoint): -1 | 0 | 1 {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (Math.abs(dx) < 42 || Math.abs(dx) < Math.abs(dy) * 1.25) return 0;
+  return dx < 0 ? 1 : -1;
+}
+
+export function nextJourneyIndex(index: number, total: number, direction: -1 | 0 | 1): number {
+  if (index < 0 || total < 2 || direction === 0) return index;
+  return Math.max(0, Math.min(total - 1, index + direction));
 }
 
 export function acceptsSnapshot(current: Snapshot | null, next: Snapshot) {

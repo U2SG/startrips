@@ -33,12 +33,10 @@ public struct NativeStoryDestination: View {
                 StoryPager(model: model)
                     .id(model.pageGeneration)
             }
-            if !model.expanded {
-                ScrollView { Text(model.activeText).frame(maxWidth: .infinity, alignment: .leading).padding(24) }
-                    .frame(maxHeight: 220)
-            }
+            // Each StoryPage already owns its caption/notes. A second,
+            // collapsed-mode text panel repeats the same reflection.
             HStack {
-                Button("上一项") { model.skip(-1) }.accessibilityIdentifier("story.previous")
+                Button("上一页") { model.skip(-1) }.accessibilityIdentifier("story.previous")
                 Spacer()
                 if model.playback == nil {
                     Button { model.playJourney() } label: { Image(systemName: "play.fill").frame(width: 44, height: 44) }.accessibilityLabel("播放旅程").accessibilityIdentifier("story.play")
@@ -51,10 +49,10 @@ public struct NativeStoryDestination: View {
                     }
                 }
                 Spacer()
-                Button("下一项") { model.skip(1) }.accessibilityIdentifier("story.next")
+                Button("下一页") { model.skip(1) }.accessibilityIdentifier("story.next")
             }.frame(minHeight: 44).padding(16)
             if model.session.access == .owner && (importer != nil || exporter != nil || moveModel != nil) {
-                Button("素材与影片") { model.setPaused(true); toolsPresented = true }.frame(minHeight: 44)
+                Button("整理与导出") { model.setPaused(true); toolsPresented = true }.frame(minHeight: 44)
             }
         }
         .foregroundStyle(Color(white: 0.98)).background(Color(white: 0.04))
@@ -69,7 +67,7 @@ public struct NativeStoryDestination: View {
                         if model.session.access == .owner, let moveModel { MediaMoveView(model: moveModel) }
                         if model.session.access == .owner, let exporter { FilmExportButton(model: exporter) }
                     }.padding(24)
-                }.navigationTitle("素材与影片")
+                }.navigationTitle("整理与导出")
                     .toolbar { Button("完成") { toolsPresented = false } }
             }
         }

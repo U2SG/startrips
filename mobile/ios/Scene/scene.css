@@ -1,20 +1,100 @@
 html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
 body { background: var(--archive-bg); color: var(--archive-ink); font-family: var(--archive-sans); }
-.native-atlas { position: relative; width: 100%; height: 100%; min-height: 0; }
-.native-atlas__timeline, .native-atlas__selection { pointer-events: auto; }
-.persistent-earth-host { bottom: var(--native-atlas-bottom, 0px); }
+
+/* The iPhone Atlas uses the same compact header / chip / sheet geometry and
+   tokens as src/journey/LivingAtlasApp.tsx (Mobile V2). Only native-specific
+   positioning and the privacy-preserving media placeholder belong here. */
+.living-atlas.native-atlas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  isolation: isolate;
+  --native-atlas-top: calc(env(safe-area-inset-top, 0px) + 62px);
+}
+.persistent-earth-host {
+  top: calc(env(safe-area-inset-top, 0px) + 62px);
+  bottom: var(--native-atlas-bottom, 0px);
+}
 .particle-earth-journey-connector { display: none; }
-.native-atlas__earth { position: absolute; inset: 0 0 var(--native-atlas-bottom, 0px); }
+.native-atlas__earth {
+  position: absolute;
+  inset: var(--native-atlas-top) 0 var(--native-atlas-bottom, 0px);
+}
 .living-atlas.native-atlas > .native-atlas__earth { pointer-events: none; }
 .native-atlas__earth > * { width: 100%; height: 100%; }
-.native-atlas__panel { position: absolute; inset: auto 0 0; display: flex; flex-direction: column; max-height: 48%; overflow: hidden; pointer-events: auto; }
-.native-atlas__panel .globe-time-scrubber { position: relative; inset: auto; transform: none; margin: 0 12px; flex: none; }
-.native-atlas__timeline { position: relative; flex: 0 1 auto; min-height: 0; overflow-y: auto; }
-.native-atlas__timeline .journey-timeline { position: relative; inset: auto; padding: 6px 16px; }
-.native-atlas__selection { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; flex: none; margin: 0 12px; padding: 4px 12px; border-radius: 16px; background: var(--atlas-panel); }
-.native-atlas__selection button { min-height: 44px; min-width: 44px; background: transparent; border: 0; color: inherit; }
-.native-atlas__selection > button { grid-column: 2; grid-row: 1; }
-.native-atlas__points { grid-column: 1 / -1; grid-row: 2; min-width: 0; display: flex; overflow-x: auto; gap: 8px; }
-.native-atlas__points button { flex-shrink: 0; }
-.native-atlas__points button[aria-pressed="true"] { text-decoration: underline; }
-.native-atlas__empty { margin: 8px 16px; }
+.native-atlas__header { background: linear-gradient(180deg, rgba(1, 8, 9, .78), rgba(1, 8, 9, 0)); }
+.native-atlas__header .startrips-wordmark { display: inline-flex; align-items: center; }
+.native-atlas__chrome { pointer-events: none; }
+.native-atlas__chrome > * { pointer-events: auto; }
+
+/* No signed owner media URL crosses the loopback bridge. Until the native
+   viewer supplies an authorized cover, retain the Web sheet's visual rhythm
+   with the existing Startrips brand mark, never a fake photograph. */
+.native-atlas__sheet-cover {
+  height: min(20svh, 156px);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  margin: 0 0 12px;
+  border: 1px solid color-mix(in srgb, var(--journey-color) 20%, rgba(118, 198, 188, .15));
+  border-radius: 15px;
+  background:
+    radial-gradient(circle at 50% 110%, color-mix(in srgb, var(--journey-color) 28%, transparent), transparent 64%),
+    linear-gradient(160deg, rgba(4, 23, 24, .95), rgba(2, 9, 11, .98));
+}
+.native-atlas__sheet-cover .startrips-journey-cue { opacity: .72; }
+.native-atlas__route-points {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  padding: 2px 2px 14px;
+  margin-bottom: 4px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+.native-atlas__route-points button {
+  min-width: 70px;
+  min-height: 44px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border: 1px solid rgba(118, 198, 188, .20);
+  border-radius: 999px;
+  background: rgba(4, 25, 24, .68);
+  color: rgba(218, 237, 230, .82);
+  font: 500 11px/1.2 var(--archive-sans);
+}
+.native-atlas__route-points button[aria-checked="true"] {
+  border-color: color-mix(in srgb, var(--journey-color) 60%, rgba(118, 198, 188, .30));
+  background: color-mix(in srgb, var(--journey-color) 16%, rgba(4, 25, 24, .88));
+  color: #edf7f2;
+}
+.native-atlas__sheet .mobile-v2__sheet-actions > button:not(.is-primary) { grid-column: 1 / -1; }
+.native-atlas__empty {
+  position: absolute;
+  top: 50%;
+  right: 20px;
+  left: 20px;
+  transform: translateY(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  color: rgba(226, 239, 233, .85);
+  text-align: center;
+  pointer-events: none;
+}
+.native-atlas__empty p { margin: 0; font: 500 21px/1.2 var(--archive-serif); }
+.native-atlas__empty small { color: rgba(177, 203, 192, .6); line-height: 1.55; }
+.native-atlas :is(button, [role="switch"], [role="slider"]):focus-visible {
+  outline: 2px solid var(--control-focus, #7de9d1);
+  outline-offset: 3px;
+}
+@media (max-height: 480px) and (orientation: landscape) {
+  .native-atlas__sheet-cover { display: none; }
+  .native-atlas__sheet { max-height: 82svh; }
+}

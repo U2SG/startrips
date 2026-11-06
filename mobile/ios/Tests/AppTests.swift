@@ -11,6 +11,32 @@ final class AppTests: XCTestCase {
         return try JSONDecoder().decode(BridgeFixture.self, from: Data(contentsOf: url))
     }
 
+    func testNativeHeaderSwitchAccessIsScopeBoundAndDeduplicated() throws {
+        let data = try fixture()
+        let defaults = UserDefaults(suiteName: "app.startrips.header-fixture." + UUID().uuidString)!
+        let router = AppRouter(defaults: defaults)
+        router.install(data.snapshot.journeys, identity: "header-owner", access: .owner,
+                       earthExperience: "default")
+        var calls = 0
+        router.onSwitchAccess = { calls += 1 }
+        let event = SceneEvent(version: 1, kind: .switchAccess, scopeId: router.scopeId,
+                               requestId: UUID().uuidString, revision: router.revision,
+                               journeyId: nil, routePointId: nil, assetId: nil)
+        XCTAssertNoThrow(try validateSceneEvent(event, snapshot: router.snapshot))
+        router.receive(event)
+        router.receive(event)
+        XCTAssertEqual(calls, 1)
+        let foreign = SceneEvent(version: 1, kind: .switchAccess, scopeId: "other-owner",
+                                 requestId: UUID().uuidString, revision: router.revision,
+                                 journeyId: nil, routePointId: nil, assetId: nil)
+        router.receive(foreign)
+        XCTAssertEqual(calls, 1)
+        let unauthorized = SceneEvent(version: 1, kind: .switchAccess, scopeId: router.scopeId,
+                                      requestId: UUID().uuidString, revision: router.revision,
+                                      journeyId: data.snapshot.journeys[0].id, routePointId: nil, assetId: nil)
+        XCTAssertThrowsError(try validateSceneEvent(unauthorized, snapshot: router.snapshot))
+    }
+
     func testSnapshotScriptTreatsTitlesAndNotesAsData() throws {
         let json = #"{"title":"海岸');throw Error('x')//","note":"\"quotes\"\nnew line"}"#
         let script = try AtlasSceneView.receiveScript(json)
