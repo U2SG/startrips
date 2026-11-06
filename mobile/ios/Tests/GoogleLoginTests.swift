@@ -90,7 +90,7 @@ final class GoogleLoginTests: XCTestCase {
         let original = defaults.object(forKey: "atlas.origin")
         defer { defaults.set(original, forKey: "atlas.origin") }
         let session = AtlasSession()
-        session.originText = origin.absoluteString
+        try session.configureTestOrigin(origin)
         try session.configureOwner()
         let captured = session.generation
         session.loginPresented = true
@@ -114,7 +114,7 @@ final class GoogleLoginTests: XCTestCase {
         let key = "atlas.stores." + AtlasSession.ownerStoreID(testOrigin).uuidString
         defer { defaults.set(oldOrigin, forKey: "atlas.origin"); defaults.removeObject(forKey: key) }
         let session = AtlasSession()
-        session.originText = testOrigin.absoluteString
+        try session.configureTestOrigin(testOrigin)
         try session.configureOwner()
         session.loginPresented = true
         let originalStore = session.cookieStore

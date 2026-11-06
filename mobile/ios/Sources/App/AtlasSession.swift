@@ -40,6 +40,18 @@ final class AtlasSession: ObservableObject {
     private var refreshID = UUID()
     @Published private(set) var cookieStore = WKWebsiteDataStore.nonPersistent()
 
+    #if DEBUG
+    // Unit tests opt into a synthetic HTTPS site on this session instance only.
+    // The override cannot be persisted or compiled into a Release app.
+    private var testOriginOverride: URL?
+
+    func configureTestOrigin(_ url: URL) throws {
+        let value = try Self.validatedOrigin(url.absoluteString)
+        testOriginOverride = value
+        originText = value.absoluteString
+    }
+    #endif
+
     // HTTP cookies do not distinguish ports; a private store isolates each configured HTTPS origin.
     static func ownerStoreID(_ url: URL) -> UUID {
         let key = "startrips.owner.https|\(url.host?.lowercased() ?? "")|\(url.port ?? 443)"
@@ -160,7 +172,7 @@ final class AtlasSession: ObservableObject {
     func configureOwner() throws {
         #if DEBUG
         let selected = try Self.validatedOrigin(
-            ProcessInfo.processInfo.arguments.contains("-allow-server-override") ? originText : Self.productionOrigin)
+            testOriginOverride?.absoluteString ?? (ProcessInfo.processInfo.arguments.contains("-allow-server-override") ? originText : Self.productionOrigin))
         #else
         let selected = try Self.validatedOrigin(Self.productionOrigin)
         #endif
@@ -172,7 +184,7 @@ final class AtlasSession: ObservableObject {
         guestToken = nil; generation = UUID()
         #if DEBUG
         // Explicit debug-only overrides do not alter the Release server.
-        UserDefaults.standard.set(selected.absoluteString, forKey: "atlas.debug.origin")
+        if testOriginOverride == nil && ProcessInfo.processInfo.arguments.contains("-allow-server-override") { UserDefaults.standard.set(selected.absoluteString, forKey: "atlas.debug.origin") }
         #endif
     }
 
