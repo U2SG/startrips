@@ -1,3 +1,5 @@
+import { JournalPlaceMedia } from "./JournalPlaceMedia";
+import { journalMediaGroups, firstJournalPlaceMediaEvents } from "./journalMedia";
 import { useState, type ReactNode } from "react";
 import type { JournalChapter, JournalStatus } from "./dailyJournal";
 import type { Journey } from "./types";
@@ -30,27 +32,32 @@ export function JournalReadingView({ chapters, journey, busy, onPoint, renderMed
   const [query, setQuery] = useState("");
   const allRows = journalReadingRows(chapters, journey.routePoints);
   const rows = journalReadingRows(chapters, journey.routePoints, date, status, query);
+  const firstPlaceMedia = firstJournalPlaceMediaEvents(rows.map(row => row.event), journey.media ?? []);
   const dates = [...new Set(chapters.map(chapter => chapter.date))].sort();
   const unconfirmed = allRows.filter(({ event }) => event.status === "uncertain").length;
   const filtered = !!(date || status || query.trim());
   const visibleChapters = visibleJournalChapters(chapters, rows, date, status, query);
   const place = (row: typeof rows[number]) => row.point
-    ? <button disabled={busy} onClick={() => onPoint(row.point!.id)}>在 Stream 中查看地点：{row.point.label || "未命名路线点"}</button>
+    ? <><button disabled={busy} onClick={() => onPoint(row.point!.id)}>在 Stream 中查看地点：{row.point.label || "未命名路线点"}</button>{row.point.occurredAt ? <small>地点已有时间记录：<time dateTime={row.point.occurredAt}>{row.point.occurredAt}</time>（不替代手记当地时间）</small> : null}</>
     : <span className="daily-journal__muted">未关联地图点</span>;
-  const body = ({ event, suggestion }: typeof rows[number]) => <>
+  const body = ({ event, suggestion }: typeof rows[number]) => {
+    const media = journalMediaGroups(event, journey.media ?? []);
+    return <>
     <p className="daily-journal__prose">{event.text}</p>
-    {renderMedia(event.mediaIds)}
+    {media.manual.length ? <div><p>手动关联的照片/视频</p>{renderMedia(media.manual)}</div> : null}
+    {media.place.length && event.routePointId ? <JournalPlaceMedia pointId={event.routePointId} first={firstPlaceMedia.get(event.routePointId) === event.id} ids={media.place} renderMedia={renderMedia} /> : null}
     {hasJournalReadingSuggestion(event, suggestion) && suggestion ? <details className="daily-journal__review"><summary tabIndex={0}>AI 阅读建议</summary>
       <p className="daily-journal__prose">{suggestion.text}</p>
       {suggestion.background ? <p>背景补充（未经检索核实，不属于亲历记录）：{suggestion.background}</p> : null}
     </details> : null}
-  </>;
+  </>; };
   return <section className="daily-journal__reader" aria-label="手记阅读">
     <div className="daily-journal__reading-controls">
       <div className="daily-journal__view-switch" role="group" aria-label="手记展示方式">
         <button aria-pressed={view === "reading"} onClick={() => setView("reading")}>按日阅读</button>
         <button aria-pressed={view === "table"} onClick={() => setView("table")}>表格浏览</button>
       </div>
+      <details className="daily-journal__status-help"><summary tabIndex={0}>地点和照片如何关联？</summary><p>新导入的实际事件，仅在原文地点名称与旅程中一个已有地点完整对应时自动关联。简称、别名、多个地点或同名多次停留不会猜测对应；未匹配时显示“未关联地图点”。日期明显冲突会提示核实。地点照片单独展示，不代表在本次事件拍摄；已有手动选择不会被覆盖。</p></details>
       <p>{dates.length} 天 · {allRows.length} 条记录{unconfirmed ? ` · ${unconfirmed} 条状态未确认` : ""}</p>
       {unconfirmed ? <details className="daily-journal__status-help"><summary tabIndex={0}>“状态未确认”是什么意思？</summary><p>这些记录尚未确定是实际发生、计划还是取消，不代表正文有错。可以先阅读，核实后再到编辑中调整状态；不会自动新增地图点。</p></details> : null}
       <div className="daily-journal__filters">

@@ -19,7 +19,7 @@ import { createJourneyForAtlas, getJourneyForAtlas } from "../repositories/journ
 import { readDailyJournal, writeDailyJournal } from "../repositories/daily-journal-repository";
 import { applyImport, readImportState, validateEnvelope, hash, type Envelope } from "../admin/journal-import";
 import { previewImportedHotels, applyImportedHotels } from "../admin/journal-hotel-import";
-import { journalImportDependencies } from "../itinerary/journal-import-service";
+import { journalImportDependencies, prepareAuthorizedJournalImport } from "../itinerary/journal-import-service";
 import { previewJournalImport } from "../../src/journey/dailyJournal";
 import type { LocationSearch } from "../location/location-search";
 const TEST_ORIGIN = "http://127.0.0.1:5173";
@@ -91,7 +91,7 @@ const model = { ...provider, apiKey: "mock-only", timeoutMs: 1000, fetcher: vi.f
   let args;
   if (name === "stage_journal_import") args = { chapters: [{ firstLine: 0, lastLine: 2, headingEvidence: "2028年6月3日", dateStatus: "single", questions: [], date: "2028-06-03", dateEnd: null, dateEvidence: "2028年6月3日",
     events: source.split("\n").slice(1).map((evidence, i) => ({ line: i + 1, evidence, status: i ? "cancelled" : "actual", dateStatus: "absent", localDate: null, dateEvidence: null,
-      time: i ? "07:30" : "23:30", timeEnd: null, timeEvidence: i ? "07:30" : "23:30", reading: evidence, questions: [] })) }] };
+      time: i ? "07:30" : "23:30", timeEnd: null, timeEvidence: i ? "07:30" : "23:30", placeName: null, reading: evidence, questions: [] })) }] };
   else if (name === "search_hotels") {
     const event = data.flatMap((c: any) => c.events).find((e: any) => e.source.includes("入住星桥酒店"));
     args = { stays: [{ eventId: event.id ?? event.eventId, evidence: "在虚构城入住星桥酒店", name: "星桥酒店", area: "虚构城" }], questions: [] };
@@ -366,7 +366,7 @@ for (const path of ["sync", "job"] as const) {
       dateEnd: scenario === "range" ? "2028-06-05" : null,
       dateEvidence: quantity ? chapterHasValue ? singleQuote : null : evidence,
       events: [{ line: 0, evidence: text, status: "actual", dateStatus: quantity ? eventHasValue ? "single" : "absent" : "unknown", localDate: eventHasValue ? singleDate : null,
-        dateEvidence: quantity ? eventHasValue ? singleQuote : null : evidence, time: null, timeEnd: null, timeEvidence: null, reading: text, questions: quantity ? [] : ["日期范围待确认"] }] }] };
+        dateEvidence: quantity ? eventHasValue ? singleQuote : null : evidence, time: null, timeEnd: null, timeEvidence: null, placeName: null, reading: text, questions: quantity ? [] : ["日期范围待确认"] }] }] };
     let calls = 0;
     journalImportDependencies.fetcher = async (_url, init) => {
       calls++;
@@ -493,4 +493,30 @@ it.each(["sync", "job"] as const)("%s preserves repeated source through correcti
     expect(backup).toHaveBeenCalledTimes(1);
     expect((await readDailyJournal(j!.id, owner.atlasId))!.chapters[0].events.map(e => e.source)).toEqual([text, text]);
   } finally { journalImportDependencies.fetcher = model.fetcher; }
+});
+
+it("automatically links an exact existing place in the signed preview, preserving existing links on replay", async () => {
+  const journey = await createJourneyForAtlas(owner.atlasId, owner.userId, { title: "合成地点关联", startedOn: "2028-06-03", endedOn: "2028-06-03", note: "", lightColor: "#ffffff",
+    routePoints: [{ label: "星桥花园", latitude: 1, longitude: 2, isStop: true, occurredAt: null }] });
+  const text = "实际：她在星桥花园看花。", chapter = mockChapter(text);
+  Object.assign(chapter.events[0], { placeName: "星桥花园" });
+  const target = { userId: owner.userId, atlasId: owner.atlasId, email: (await db.select().from(authUsers).where(eq(authUsers.id, owner.userId)))[0].email, journeyId: journey!.id };
+  const input = { source: text, sentence: "导入并关联已有地点", fallbackDate: "2028-06-03", provider };
+  const mock = { ...model, fetcher: async () => toolResponse("stage_journal_import", { chapters: [chapter] }) };
+  const envelope = await prepareAuthorizedJournalImport(target, input, mock);
+  expect(envelope.plan.after.chapters[0].events[0]).toMatchObject({ routePointId: journey!.routePoints[0].id, localDate: null, localTime: null, mediaIds: [] });
+  expect((await readDailyJournal(journey!.id, owner.atlasId))!.chapters).toEqual([]);
+  const previousFetcher = journalImportDependencies.fetcher;
+  try {
+    journalImportDependencies.fetcher = mock.fetcher;
+    const job = await submitJournalJob(target, randomUUID(), input);
+    await runJournalJob();
+    const row = await readJournalJob(target, job.jobId);
+    expect(row.status).toBe("completed");
+    expect((row.envelope as Envelope).plan.after).toEqual(envelope.plan.after);
+  } finally { journalImportDependencies.fetcher = previousFetcher; }
+  await applyImport(envelope, hash(envelope), async () => undefined);
+  const replay = await prepareAuthorizedJournalImport(target, input, mock);
+  expect(replay.plan.after).toEqual(envelope.plan.after);
+  expect(replay.plan.before.revision).toBe(replay.plan.after.revision);
 });

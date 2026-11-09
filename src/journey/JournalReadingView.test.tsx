@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { JournalReadingView, journalReadingRows, visibleJournalChapters } from "./JournalReadingView";
 import { previewJournalImport } from "./dailyJournal";
 import type { Journey } from "./types";
@@ -49,4 +49,28 @@ describe("journal reading without changing the record", () => {
     expect(visibleJournalChapters([empty], [], empty.date)).toHaveLength(1);
     expect(visibleJournalChapters([empty], [], empty.date, "actual")).toHaveLength(0);
   });
+});
+
+it("renders linked point media and recorded time without changing journal time", () => {
+  const copy = structuredClone(chapters), before = JSON.stringify(copy), renderMedia = vi.fn(() => null);
+  const linkedJourney = { ...journey, routePoints: [{ ...points[0], occurredAt: "2027-04-03T12:30:00.000Z" }],
+    media: [{ id: "point-photo", routePointId: "point", mimeType: "image/jpeg" }] } as Journey;
+  const markup = renderToStaticMarkup(createElement(JournalReadingView, { chapters: copy, journey: linkedJourney, busy: false, onPoint() {}, renderMedia }));
+  expect(renderMedia).not.toHaveBeenCalled();
+  expect(markup).toContain("2027-04-03T12:30:00.000Z");
+  expect(markup).toContain("地点已有时间记录：");
+  expect(markup).toContain("不替代手记当地时间");
+  expect(markup).not.toContain("保留原时区");
+  expect(markup).toContain("地点资料，不代表在本次事件拍摄");
+  expect(JSON.stringify(copy)).toBe(before);
+});
+
+it("groups repeated place galleries once and does not read their media until opened", () => {
+  const copy = structuredClone(chapters), renderMedia = vi.fn(() => null);
+  Object.assign(copy[1].events[0], { status: "actual", routePointId: "point" });
+  const linkedJourney = { ...journey, media: [{ id: "photo", routePointId: "point", mimeType: "image/jpeg" }] } as Journey;
+  const markup = renderToStaticMarkup(createElement(JournalReadingView, { chapters: copy, journey: linkedJourney, busy: false, onPoint() {}, renderMedia }));
+  expect(markup.match(/id="journal-place-media-point"/g)).toHaveLength(1);
+  expect(markup).toContain('href="#journal-place-media-point"');
+  expect(renderMedia).not.toHaveBeenCalled();
 });

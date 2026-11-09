@@ -1,3 +1,5 @@
+import { JournalPlaceMedia } from "./JournalPlaceMedia";
+import { journalMediaGroups, firstJournalPlaceMediaEvents } from "./journalMedia";
 import { useEffect, useRef, useState } from "react";
 import { useAtlasView } from "./atlasView";
 import { useModalFocus } from "./useModalFocus";
@@ -85,6 +87,7 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
   const journal = draft ?? saved;
   const ordered = journal?.chapters.map((c, index) => ({ c, index })).sort((a, b) => a.c.date.localeCompare(b.c.date) || a.index - b.index) ?? [];
   const visual = journey.media.filter((m) => /^(image|video)\//.test(m.mimeType));
+  const firstPlaceMedia = firstJournalPlaceMediaEvents(ordered.flatMap(({ c }) => c.events), visual);
   return <div className="daily-journal" role="dialog" aria-modal="true" aria-label="每日手记" ref={root} tabIndex={-1}>
     <header><div><span>私有手记 · 不随分享链接公开</span><h1>{journey.title}</h1></div><button disabled={busy === "保存"} onClick={requestClose}>返回 Stream</button></header>
     {confirmClose ? <div role="alert"><p>当前有未保存内容，离开会丢弃草稿。</p><button onClick={() => setConfirmClose(false)}>继续编辑</button><button disabled={busy === "保存"} onClick={() => { void discardAndClose(); }}>丢弃并返回</button></div> : null}
@@ -141,6 +144,7 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
         <JournalChapterReview chapter={c} />
         {c.events.map((event, index) => {
           const suggestion = c.suggestions.find((s) => s.eventId === event.id);
+          const eventMedia = journalMediaGroups(event, visual);
           const point = event.status === "actual" ? journey.routePoints.find((p) => p.id === event.routePointId) : null;
           return <section key={event.id} className="daily-journal__event" aria-label={`事件 ${index + 1}`}>
             <p className="daily-journal__metadata">{statusLabels[event.status]}{event.localDate ? ` · ${event.localDate}` : ""}{event.localTime ? ` · ${event.localTime} ${event.timeContext}` : ""}</p>
@@ -152,12 +156,14 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
               <label>原文明确的当地钟点（可空）<input type="time" value={event.localTime ?? ""} onChange={(e) => updateEvent(c.id, event.id, { localTime: e.target.value || null })} /></label>
               <label>时间背景<input value={event.timeContext} maxLength={200} onChange={(e) => updateEvent(c.id, event.id, { timeContext: e.target.value })} /></label>
               <label>已确认的实际地点<select aria-label="已确认的实际地点" disabled={event.status !== "actual"} value={event.routePointId ?? ""} onChange={(e) => updateEvent(c.id, event.id, { routePointId: e.target.value || null })}><option value="">无 / 待确认</option>{journey.routePoints.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</select></label>
-              {event.mediaIds.length ? <button type="button" onClick={() => updateEvent(c.id, event.id, { mediaIds: [] })}>清除照片或视频关联</button> : null}
-              {visual.length ? <label>关联照片或视频（可多选）<select aria-label="关联照片或视频（可多选）" multiple value={event.mediaIds} onChange={(e) => updateEvent(c.id, event.id, { mediaIds: Array.from(e.target.selectedOptions, (option) => option.value) })}>{visual.map((m) => <option key={m.id} value={m.id}>{m.fileName}</option>)}</select></label> : null}
+              {event.mediaIds.length ? <button type="button" onClick={() => updateEvent(c.id, event.id, { mediaIds: [] })}>清除手动照片或视频关联</button> : null}
+              {visual.length ? <label>额外关联照片或视频（可多选）<select aria-label="关联照片或视频（可多选）" multiple value={event.mediaIds} onChange={(e) => updateEvent(c.id, event.id, { mediaIds: Array.from(e.target.selectedOptions, (option) => option.value) })}>{visual.map((m) => <option key={m.id} value={m.id}>{m.fileName}</option>)}</select></label> : null}
+              {point ? <p>清除手动关联只移除本事件的选择；该地点已有照片/视频仍会在下方单独展示，不代表本次拍摄。</p> : null}
               </details>
             </fieldset> : <p className="daily-journal__prose">{event.text}</p>}
             {point && !draft ? <button disabled={!!busy} onClick={() => onPoint(point.id)}>在 Stream 中查看地点：{point.label}</button> : null}
-            <JournalMedia assets={visual.filter((m) => event.mediaIds.includes(m.id))} />
+            {eventMedia.manual.length ? <div><p>手动关联的照片/视频</p><JournalMedia assets={visual.filter(m => eventMedia.manual.includes(m.id))} /></div> : null}
+            {eventMedia.place.length && event.routePointId ? <JournalPlaceMedia pointId={event.routePointId} first={firstPlaceMedia.get(event.routePointId) === event.id} ids={eventMedia.place} renderMedia={ids => <JournalMedia assets={visual.filter(m => ids.includes(m.id))} />} /> : null}
             {hasJournalReadingSuggestion(event, suggestion) && suggestion ? <details><summary tabIndex={0}>AI 阅读建议</summary><p className="daily-journal__prose">{suggestion.text}</p>{suggestion.background ? <p>背景补充（未经检索核实，不属于亲历记录）：{suggestion.background}</p> : null}
               {draft && suggestion.text.trim() && suggestion.text.trim() !== event.text.trim() ? <button disabled={!!busy || event.edited} onClick={() => updateEvent(c.id, event.id, { text: suggestion.text })}>{event.edited ? "正文已编辑，请手动合并建议" : "核对后采用这条正文"}</button> : null}
             </details> : null}

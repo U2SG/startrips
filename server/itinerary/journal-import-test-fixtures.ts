@@ -7,7 +7,7 @@ export const toolResponse = (name: string, payload: unknown) => Response.json({ 
 } }] });
 export const mockEvent = (source: string, line = 0) => ({ line, evidence: source, status: "actual", dateStatus: "absent" as JournalDateStatus,
   localDate: null as string | null, dateEvidence: null as string | null, time: null as string | null, timeEnd: null as string | null,
-  timeEvidence: null as string | null, reading: source, questions: [] as string[] });
+  timeEvidence: null as string | null, placeName: null, reading: source, questions: [] as string[] });
 export const mockChapter = (source: string) => ({ firstLine: 0, lastLine: source.split("\n").length - 1,
   headingEvidence: null as string | null, dateStatus: "absent" as JournalDateStatus, date: null as string | null,
   dateEnd: null as string | null, dateEvidence: null as string | null, questions: [] as string[],

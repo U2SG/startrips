@@ -54,7 +54,7 @@ for (const fault of ['omitted-event', 'overlap', 'gap', 'duplicate-event', 'inva
 test('evidence: first-line omission requires an explicit whole heading reference', async () => {
   const source = '### 2028年6月3日 实际：她在虚构城入住星桥酒店。\n计划：次日离开。';
   const payload = { chapters: [{ firstLine: 0, lastLine: 1, headingEvidence: null, dateStatus: 'single', questions: [], date: '2028-06-03', dateEnd: null, dateEvidence: '2028年6月3日', events: [
-    { line: 1, evidence: '计划：次日离开。', status: 'planned', dateStatus: 'absent', localDate: null, dateEvidence: null, time: null, timeEnd: null, timeEvidence: null, reading: '', questions: [] },
+    { line: 1, evidence: '计划：次日离开。', status: 'planned', dateStatus: 'absent', localDate: null, dateEvidence: null, time: null, timeEnd: null, timeEvidence: null, placeName: null, reading: '', questions: [] },
   ] }] };
   await assert.rejects(prepareJournalImport({ ...qaInput, source }, empty(), { ...qaModel, fetcher: qaAnswer(payload) }), { code: 'JOURNAL_IMPORT_MALFORMED' });
 });

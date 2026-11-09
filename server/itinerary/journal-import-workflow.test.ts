@@ -9,7 +9,7 @@ export function fictionalDraft() {
   return { chapters: [{ firstLine: 0, lastLine: 6, headingEvidence: lines[0], dateStatus: "range", questions: [], date: "2028-06-03", dateEnd: "2028-06-05", dateEvidence: lines[0],
     events: lines.slice(1).map((evidence, i) => ({ line: i + 1, evidence, status: ["actual", "planned", "uncertain", "cancelled", "actual", "actual"][i],
       dateStatus: "absent", localDate: null, dateEvidence: null, time: times[i], timeEnd: i === 2 ? "13:30" : null,
-      timeEvidence: i === 2 ? "10:30–13:30" : times[i], reading: i === 4 ? "她已经睡着了。" : evidence, questions: [] })) }] };
+      timeEvidence: i === 2 ? "10:30–13:30" : times[i], placeName: null, reading: i === 4 ? "她已经睡着了。" : evidence, questions: [] })) }] };
 }
 const input = { source: fictionalSource, sentence: "导入原稿并关联已入住酒店", fallbackDate: "2028-06-01" };
 const model = { baseUrl: "https://model.example.test/v1", apiKey: "mock-only", model: "mock", timeoutMs: 1000 };
@@ -39,7 +39,7 @@ it("covers fourteen synthetic chapters with list-first clocks and preserves date
   const source = blocks.flat().join("\n");
   const response = { chapters: blocks.map((lines, i) => ({ firstLine: i * 5, lastLine: i * 5 + 4, headingEvidence: lines[0], dateStatus: "single", questions: [], date: `2028-06-${String(i + 1).padStart(2, "0")}`, dateEnd: null, dateEvidence: lines[0],
     events: lines.slice(1).map((evidence, j) => ({ line: i * 5 + j + 1, evidence, status: ["actual", "actual", "planned", "cancelled"][j], dateStatus: "absent", localDate: null, dateEvidence: null,
-      time: ["23:30", "18:20", "08:00", "09:00"][j], timeEnd: null, timeEvidence: ["23:30", "18:20", "08:00", "09:00"][j], reading: evidence, questions: [] })) })) };
+      time: ["23:30", "18:20", "08:00", "09:00"][j], timeEnd: null, timeEvidence: ["23:30", "18:20", "08:00", "09:00"][j], placeName: null, reading: evidence, questions: [] })) })) };
   const result = await prepareJournalImport({ ...input, source }, { revision: 0, chapters: [] }, { ...model, fetcher: async () => toolResponse("stage_journal_import", response) });
   expect(result.chapters).toHaveLength(14); expect(result.chapters.map(c => c.source).join("\n")).toBe(source);
   for (const c of result.chapters) { expect(c.events.map(e => e.localTime)).toEqual(["23:30", "18:20", "08:00", "09:00"]); expect(c.events.map(e => e.status)).toEqual(["actual", "actual", "planned", "cancelled"]); }

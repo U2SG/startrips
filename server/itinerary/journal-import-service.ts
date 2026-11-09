@@ -25,7 +25,7 @@ export async function prepareAuthorizedJournalImport(target: Target, input: { se
   const draft = await prepareJournalImport(input, before, { ...model, signal: signal ?? model.signal, checkCurrent });
   return db.transaction(async tx => {
     if (hash(await lockedTarget(tx, target)) !== hash(before)) throw new Error("JOURNAL_CHANGED");
-    const chapters = await normalizeJournalReferences(target.journeyId, before.chapters, draft.chapters, tx);
+    const chapters = await normalizeJournalReferences(target.journeyId, before.chapters, draft.chapters, tx, draft.placeClaims);
     return sealJournalDraft(target, input.source, before, chapters, draft.importedChapterIds, { baseUrl: journalProviderInfo().baseUrl, model: model.model });
   });
 }

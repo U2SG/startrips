@@ -1,3 +1,4 @@
+import { linkJournalPlaces, type JournalPlaceClaim } from "../itinerary/journal-place-links";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { and, eq, isNull } from "drizzle-orm";
@@ -63,11 +64,12 @@ export async function readDailyJournal(journeyId: string, atlasId: string): Prom
   return row ? { revision: row.revision, chapters: row.chapters } : EMPTY_JOURNAL;
 }
 /** Caller holds the active Atlas/Journey locks; preview and write must agree. */
-export async function normalizeJournalReferences(journeyId: string, previous: JournalChapter[], chapters: JournalChapter[], tx: Pick<typeof db, "select">): Promise<JournalChapter[]> {
+export async function normalizeJournalReferences(journeyId: string, previous: JournalChapter[], chapters: JournalChapter[], tx: Pick<typeof db, "select">, placeClaims: JournalPlaceClaim[] = []): Promise<JournalChapter[]> {
     // Some deletion paths lock only the referenced row. Keep the validated
     // ownership stable through private backup and the outer transaction commit.
-    const points = await tx.select({ id: journeyRoutePoints.id }).from(journeyRoutePoints).where(eq(journeyRoutePoints.journeyId, journeyId)).for("share");
+    const points = await tx.select({ id: journeyRoutePoints.id, label: journeyRoutePoints.label, occurredAt: journeyRoutePoints.occurredAt }).from(journeyRoutePoints).where(eq(journeyRoutePoints.journeyId, journeyId)).for("share");
     const media = await tx.select({ id: mediaAssets.id }).from(mediaAssets).where(eq(mediaAssets.journeyId, journeyId)).for("share");
+    chapters = linkJournalPlaces(previous, chapters, placeClaims, points);
     const pointIds = new Set(points.map((p) => p.id));
     const mediaIds = new Set(media.map((m) => m.id));
     const previousEvents = new Map(previous.flatMap((c) => c.events.map((e) => [e.id, e] as const)));

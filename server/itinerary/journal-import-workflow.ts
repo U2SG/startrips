@@ -1,3 +1,4 @@
+import type { JournalPlaceClaim } from "./journal-place-links";
 import { createHash } from "node:crypto";
 import type { IntentModelOptions } from "../intents/intent-model-request";
 import { ShareIntentError } from "../intents/create-share-intent";
@@ -24,6 +25,7 @@ export const JOURNAL_IMPORT_SCHEMA = toolObject({ chapters: { type: "array", min
     dateEvidence, time: nullable("Local HH:mm in 24-hour format, normalized by your interpretation of the complete clock evidence. null if absent or uncertain. No timezone conversion."),
     timeEnd: nullable("Local HH:mm inclusive end if an explicit clock range exists; null otherwise. Crossing midnight is allowed and must not invent a new date."),
     timeEvidence: nullable("Exact complete clock substring from this event line, including both endpoints and AM/PM/daypart/approximate cues. For unresolved clocks keep the quote, null times and a question. null only if no clock claim. A resolved range quote must fit 170 characters so the complete clock context fits the preview."),
+    placeName: { ...nullable("Exact place name substring from this event line, only for one unambiguous place where the actual event happened. null for multiple places, transit between places, mere mentions, plans, negations, cancellations or uncertainty. Never expand an alias or invent a name."), maxLength: 200 },
     reading: string("Optional extractive suggestion (empty allowed); copy the whole line rather than changing lived facts. Original event prose is never overwritten."), questions,
   }) },
 }) } });
@@ -33,10 +35,11 @@ Preserve all lines, original order, person and source wording. Do not infer visi
 class JournalImportError extends ShareIntentError { override readonly stage = "journal-import"; }
 const id = (s: string) => "ji_" + createHash("sha256").update(s).digest("hex").slice(0, 32);
 const clock = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
-type Event = { line: number; evidence: string; status: JournalStatus; dateStatus: JournalDateStatus; localDate: string | null; dateEvidence: string | null; time: string | null; timeEnd: string | null; timeEvidence: string | null; reading: string; questions: string[] };
+type Event = { line: number; evidence: string; status: JournalStatus; dateStatus: JournalDateStatus; localDate: string | null; dateEvidence: string | null; time: string | null; timeEnd: string | null; timeEvidence: string | null; reading: string; placeName: string | null; questions: string[] };
 type Chapter = { firstLine: number; lastLine: number; headingEvidence: string | null; dateStatus: JournalDateStatus; date: string | null; dateEnd: string | null; dateEvidence: string | null; questions: string[]; events: Event[] };
 function validateDraft(answer: unknown, input: { source: string; fallbackDate: string }, before: DailyJournal) {
   const lines = input.source.split("\n"), chapters = [...before.chapters], importedChapterIds: string[] = [];
+  const placeClaims: JournalPlaceClaim[] = [];
   let nextLine = 0;
   const inputChapterSources = new Set<string>();
   const capacity = () => new ShareIntentError("JOURNAL_CAPACITY_EXCEEDED", "Journal preview exceeds supported capacity", 422);
@@ -65,7 +68,10 @@ function validateDraft(answer: unknown, input: { source: string; fallbackDate: s
       }
       requireTool(c.questions.length + e.questions.length <= 17, `${ep}.questions`, "QUESTION_CAPACITY");
       requireTool(e.timeEnd === null || e.timeEvidence!.length <= 170, `${ep}.timeEvidence`, "CLOCK_REFERENCE_CAPACITY");
-      return { id: id(`${input.fallbackDate}\0${input.source}\0${e.line}`), source: original.text, text: original.text, status: e.status,
+      requireTool(e.placeName === null || e.status === "actual" && !!e.placeName.trim() && original.text.includes(e.placeName), `${ep}.placeName`, "ACTUAL_PLACE_REFERENCE");
+      const eventId = id(`${input.fallbackDate}\0${input.source}\0${e.line}`);
+      if (e.placeName !== null) placeClaims.push({ eventId, name: e.placeName, date: e.localDate ?? (e.dateStatus === "absent" && c.dateStatus === "single" ? c.date : null) });
+      return { id: eventId, source: original.text, text: original.text, status: e.status,
         localDate: e.localDate, localTime: e.timeEnd === null ? e.time : null,
         timeContext: e.timeEnd !== null ? `当地时间区间 ${e.timeEvidence}（跨日日期未确认）` : "当地时间（具体时区未确认）", edited: false, mediaIds: [], routePointId: null };
     });
@@ -92,9 +98,9 @@ function validateDraft(answer: unknown, input: { source: string; fallbackDate: s
   // The tool shape and domain checks passed. An impossible persisted shape is a
   // server validator/adapter defect, not another opportunity to charge the model.
   if (!checked) throw new Error("INVALID_STAGED_JOURNAL");
-  return { chapters: checked, importedChapterIds };
+  return { chapters: checked, importedChapterIds, placeClaims };
 }
-export async function prepareJournalImport(input: { sentence: string; source: string; fallbackDate: string }, before: DailyJournal, model: IntentModelOptions): Promise<{ chapters: JournalChapter[]; importedChapterIds: string[] }> {
+export async function prepareJournalImport(input: { sentence: string; source: string; fallbackDate: string }, before: DailyJournal, model: IntentModelOptions): Promise<{ chapters: JournalChapter[]; importedChapterIds: string[]; placeClaims: JournalPlaceClaim[] }> {
   if (typeof input.sentence !== "string" || !input.sentence.trim() || input.sentence.length > 500 || typeof input.source !== "string" || !input.source.trim() || input.source.length > JOURNAL_MAX_TEXT || !isPersistedCalendarDate(input.fallbackDate))
     throw new JournalImportError("INVALID_IMPORT", "Invalid journal request; no model request was made", 400);
   const source = input.source.replace(/\r\n?/g, "\n");
