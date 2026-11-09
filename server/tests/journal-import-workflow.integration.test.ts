@@ -502,7 +502,15 @@ it("automatically links an exact existing place in the signed preview, preservin
   Object.assign(chapter.events[0], { placeName: "星桥花园" });
   const target = { userId: owner.userId, atlasId: owner.atlasId, email: (await db.select().from(authUsers).where(eq(authUsers.id, owner.userId)))[0].email, journeyId: journey!.id };
   const input = { source: text, sentence: "导入并关联已有地点", fallbackDate: "2028-06-03", provider };
-  const mock = { ...model, fetcher: async () => toolResponse("stage_journal_import", { chapters: [chapter] }) };
+  const requestModes: boolean[] = [];
+  const mock = { ...model, fetcher: async (_url: unknown, init?: RequestInit) => {
+    const request = JSON.parse(String(init?.body));
+    requestModes.push(request.stream === true);
+    const response = toolResponse("stage_journal_import", { chapters: [chapter] });
+    if (!request.stream) return response;
+    const call = (await response.json()).choices[0].message.tool_calls[0];
+    return new Response(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, ...call }] }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+  } };
   const envelope = await prepareAuthorizedJournalImport(target, input, mock);
   expect(envelope.plan.after.chapters[0].events[0]).toMatchObject({ routePointId: journey!.routePoints[0].id, localDate: null, localTime: null, mediaIds: [] });
   expect((await readDailyJournal(journey!.id, owner.atlasId))!.chapters).toEqual([]);
@@ -512,11 +520,12 @@ it("automatically links an exact existing place in the signed preview, preservin
     const job = await submitJournalJob(target, randomUUID(), input);
     await runJournalJob();
     const row = await readJournalJob(target, job.jobId);
-    expect(row.status).toBe("completed");
+    expect(row.status, row.error?.error).toBe("completed");
     expect((row.envelope as Envelope).plan.after).toEqual(envelope.plan.after);
   } finally { journalImportDependencies.fetcher = previousFetcher; }
   await applyImport(envelope, hash(envelope), async () => undefined);
   const replay = await prepareAuthorizedJournalImport(target, input, mock);
   expect(replay.plan.after).toEqual(envelope.plan.after);
   expect(replay.plan.before.revision).toBe(replay.plan.after.revision);
+  expect(requestModes).toEqual([false, true, false]);
 });
