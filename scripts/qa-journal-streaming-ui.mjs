@@ -22,14 +22,15 @@ const jobMap = new Map();
 const frame = (event, data) => new TextEncoder().encode('event: ' + event + '\\r\\ndata: ' + JSON.stringify(data) + '\\r\\n\\r\\n');
 const qa = window.__qa = { posts: 0, cancels: 0, observes: 0, snapshots: 0, writes: 0, closed: 0, scope: 0, account: 0, holdSubmit: false, holdCancel: false, jobs: [] };
 const inputFor = scope => ({ id: scope ? '33333333-3333-4333-8333-333333333333' : '11111111-1111-4111-8111-111111111111', atlasId: scope ? 'other-atlas' : 'fictional-atlas', title: scope ? '另一合成旅程' : '合成流式验收旅程', startedOn: '2028-06-01', endedOn: null, note: '', lightColor: '#ffffff', revision: 0, createdByUserId: 'fictional', createdAt: '2028-06-01T00:00:00Z', updatedAt: '2028-06-01T00:00:00Z', routePoints: [], media: [] });
-const progress = job => ({ jobId: job.id, status: job.status, phase: 'receiving', characters: job.characters, chunks: 1 });
+const progress = job => ({ jobId: job.id, status: job.status, phase: job.phase ?? 'receiving', characters: job.characters, chunks: 1 });
 function snapshot(job) { return job.final ?? progress(job); }
 function emit(job, event, data) { for (const c of job.controllers) { try { c.enqueue(frame(event, data)); } catch {} } }
-qa.progress = (index, characters) => { const job = qa.jobs[index]; job.characters = characters; emit(job, 'progress', progress(job)); };
+qa.progress = (index, characters, phase = "receiving") => { const job = qa.jobs[index]; job.phase = phase; job.characters = characters; emit(job, 'progress', progress(job)); };
 qa.complete = index => { const job = qa.jobs[index], chapters = previewJournalImport(job.body.source, job.body.fallbackDate); Object.assign(chapters[0].events[0], {status:'actual',localDate:'2028-06-03',localTime:'23:30'}); job.status = 'completed'; job.final = { jobId: job.id, status: 'completed', planDigest: 'a'.repeat(64), envelope: { signature: 'b'.repeat(64), plan: { version: 2, target: { journeyId: job.body.journeyId, atlasId: job.atlasId }, before: { revision: 0, chapters: [] }, after: { revision: 1, chapters }, importedChapterIds: chapters.map(c => c.id), expires: Date.now() + 3600000 } } }; emit(job, 'completed', job.final); };
 qa.disconnect = index => { for (const c of qa.jobs[index].controllers) { try { c.close(); } catch {} } };
 qa.failPartial = index => { const job = qa.jobs[index]; job.status = 'failed'; job.final = {jobId:job.id,status:'failed',error:'INTENT_STREAM_INVALID'}; for(const c of job.controllers) {try {c.enqueue(new TextEncoder().encode('event: completed\\ndata: {')); c.close();} catch {}} };
 async function fetcher(url, options = {}) {
+  if (qa.offline) throw new TypeError("Synthetic offline");
   if (url.endsWith('/provider')) return Response.json({available:true,baseUrl:'provider:synthetic',model:'synthetic',displayName:'synthetic.invalid'});
   if (url.endsWith('/jobs') && options.method === 'POST') {
     qa.posts++; const body = JSON.parse(options.body); const job = {id:body.requestId,body,atlasId:inputFor(qa.scope).atlasId,status:'running',characters:1,controllers:[]}; jobMap.set(job.id,job); qa.jobs.push(job);
@@ -60,20 +61,32 @@ const browser = await launchQaBrowser();
 let cases = 0;
 try {
   for (const viewport of [{ width: 320, height: 568 }, { width: 390, height: 844 }, { width: 844, height: 390 }]) {
-    const context = await browser.newContext({ viewport }); const page = await context.newPage(); const errors = [];
+    const context = await browser.newContext({ viewport, reducedMotion: viewport.width === 320 ? "reduce" : "no-preference" }); const page = await context.newPage(); const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     const open = async () => { await page.goto(`${origin}/${output}/index.html`); await page.getByRole('button', {name:'用 AI 导入',exact:true}).waitFor(); };
     const fill = async marker => { try { await page.locator('.daily-journal__import textarea').fill(`2028-06-03\n23:30 实际：她在虚构城入住${marker}酒店。`, {timeout:5000}); } catch(error) { console.log(JSON.stringify({marker,body:await page.locator('body').innerText(),errors})); await page.screenshot({path:output+'/failure.png'}); throw error; } };
     const start = async () => { await page.getByRole('button',{name:'用 AI 导入',exact:true}).click(); await page.waitForFunction(()=>window.__qa.observes===1); };
     const noDraft = async () => assert.equal(await page.getByRole('button',{name:'确认保存',exact:true}).count(),0);
     const noOverflow = async () => assert.equal(await page.locator('.daily-journal').evaluate(el=>el.scrollWidth>el.clientWidth+1),false);
-    await open(); await fill('持续接收'); await start();
-    await page.evaluate(()=>window.__qa.progress(0,1250)); await page.getByText('正在接收 · 1,250 字',{exact:true}).waitFor(); await noDraft();
+    await open(); await fill('持续接收'); await page.locator('.daily-journal__source-count').filter({hasText:'仅在本地统计'}).waitFor();
+    const sourceCount = await page.locator('.daily-journal__source-count').innerText();
+    await start();
+    for (const [phase, label] of [['queued','正在等待处理…'],['connecting','正在连接模型…'],['receiving','正在接收识别结果…'],['validating','正在处理 · 核对完整记录…']]) {
+      await page.evaluate(phase=>window.__qa.progress(0,40000,phase),phase);
+      await page.getByText(label,{exact:true}).waitFor();
+      assert.equal(await page.getByRole('progressbar').getAttribute('aria-valuenow'),null);
+      assert.equal(await page.locator('.daily-journal__source-count').innerText(),sourceCount);
+      assert.equal(await page.locator('.daily-journal__import-status').innerText().then(t=>t.includes('40,000')||t.includes('%')),false);
+      await noOverflow(); await page.locator('.daily-journal__import-status').scrollIntoViewIfNeeded(); await page.screenshot({path:`${output}/${phase}-${viewport.width}x${viewport.height}.png`});
+    }
+    await page.evaluate(()=>window.__qa.progress(0,Number.MAX_SAFE_INTEGER));
+    await page.getByText('正在接收识别结果…',{exact:true}).waitFor(); await noDraft();
+    if(viewport.width===320) assert.equal(await page.locator('.daily-journal__import-activity span').evaluate(el=>getComputedStyle(el).animationName),'none');
     await noOverflow(); await page.getByRole('button',{name:'停止',exact:true}).scrollIntoViewIfNeeded();
     const box = await page.getByRole('button',{name:'停止',exact:true}).boundingBox(); assert.ok(box && box.x>=0 && box.y>=0 && box.x+box.width<=viewport.width+1 && box.y+box.height<=viewport.height+1);
-    await page.screenshot({path:`${output}/progress-${viewport.width}x${viewport.height}.png`});
+    await page.locator('.daily-journal__import-status').scrollIntoViewIfNeeded(); await page.screenshot({path:`${output}/progress-${viewport.width}x${viewport.height}.png`});
     await page.evaluate(()=>window.__qa.disconnect(0)); await page.waitForFunction(()=>window.__qa.observes===2); assert.equal(await page.evaluate(()=>window.__qa.posts),1);
-    await page.evaluate(()=>window.__qa.complete(0)); await page.getByRole('button',{name:'确认保存',exact:true}).waitFor(); await page.getByText('识别完成，已填入预览，尚未保存。',{exact:true}).waitFor(); assert.equal(await page.evaluate(()=>window.__qa.writes),0);
+    await page.evaluate(()=>window.__qa.complete(0)); await page.getByRole('button',{name:'确认保存',exact:true}).waitFor(); await page.getByText('识别完成，已填入预览，尚未保存。',{exact:true}).waitFor(); await noOverflow(); await page.locator('.daily-journal__import-status').scrollIntoViewIfNeeded(); await page.screenshot({path:`${output}/completed-${viewport.width}x${viewport.height}.png`}); assert.equal(await page.evaluate(()=>window.__qa.writes),0);
     assert.equal(await page.locator('.daily-journal__import textarea').count(),1); assert.equal(await page.locator('.daily-journal__import input').count(),0);
     assert.equal(await page.getByRole('button',{name:'生成导入预览',exact:true}).count(),0);
     await page.getByRole('button',{name:'编辑预览',exact:true}).click();
@@ -86,25 +99,36 @@ try {
     await open(); await fill('已停止旧请求'); await start(); await page.getByRole('button',{name:'停止',exact:true}).click(); await page.getByText('已停止，原文已保留。',{exact:true}).waitFor();
     await fill('新的'); await page.getByRole('button',{name:'用 AI 导入',exact:true}).click(); await page.waitForFunction(()=>window.__qa.observes===2);
     await page.evaluate(()=>{window.__qa.progress(0,999999);window.__qa.complete(0);window.__qa.progress(1,2400)});
-    await page.getByText('正在接收 · 2,400 字',{exact:true}).waitFor(); await noDraft();
+    await page.getByText('正在接收识别结果…',{exact:true}).waitFor(); await noDraft();
     assert.equal(await page.locator('.daily-journal__import textarea').inputValue(),'2028-06-03\n23:30 实际：她在虚构城入住新的酒店。');
     await page.evaluate(()=>window.__qa.complete(1)); await page.getByRole('button',{name:'确认保存',exact:true}).waitFor();
     assert.equal(await page.locator('.daily-journal__reader .daily-journal__prose').first().innerText(),'23:30 实际：她在虚构城入住新的酒店。'); assert.equal(await page.evaluate(()=>window.__qa.writes),0); cases++;
 
+    await open(); await fill('暂停后继续'); await start();
+    await page.evaluate(()=>{window.__qa.offline=true;window.__qa.disconnect(0)});
+    await page.getByRole('button',{name:'继续接收',exact:true}).waitFor();
+    assert.equal(await page.getByRole('progressbar').count(),0); await noOverflow();
+    await page.locator('.daily-journal__import-status').scrollIntoViewIfNeeded(); await page.screenshot({path:`${output}/paused-${viewport.width}x${viewport.height}.png`});
+    await page.evaluate(()=>window.__qa.offline=false);
+    await page.getByRole('button',{name:'继续接收',exact:true}).click();
+    await page.getByText('正在接收识别结果…',{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>window.__qa.posts),1);
+    await page.evaluate(()=>window.__qa.complete(0)); await page.getByRole('button',{name:'确认保存',exact:true}).waitFor(); cases++;
+
     await open(); await fill('提交中停止'); await page.evaluate(()=>window.__qa.holdSubmit=true); await page.getByRole('button',{name:'用 AI 导入',exact:true}).click(); await page.waitForFunction(()=>window.__qa.posts===1);
-    await page.getByRole('button',{name:'停止',exact:true}).click(); await page.getByText('正在停止…',{exact:true}).waitFor(); await page.evaluate(()=>window.__qa.accept());
+    await page.getByRole('button',{name:'停止',exact:true}).click(); await page.getByText('正在停止…',{exact:true}).waitFor(); await noOverflow(); await page.locator('.daily-journal__import-status').scrollIntoViewIfNeeded(); await page.screenshot({path:`${output}/stopping-${viewport.width}x${viewport.height}.png`}); await page.evaluate(()=>window.__qa.accept());
     await page.getByText('已停止，原文已保留。',{exact:true}).waitFor(); assert.deepEqual(await page.evaluate(()=>[window.__qa.posts,window.__qa.observes,window.__qa.cancels]),[1,0,1]); await noDraft(); cases++;
 
     for (const switcher of ['switchJourney','switchAccount']) {
       await open(); await fill('旧身份'); await start(); await page.evaluate(name=>window.__qa[name](),switcher);
       await page.waitForFunction(()=>document.querySelector('textarea')?.value==='');
       await page.evaluate(()=>{window.__qa.progress(0,999999);window.__qa.complete(0)}); await noDraft();
-      assert.equal(await page.getByText('正在接收 · 999,999 字',{exact:true}).count(),0); assert.equal(await page.evaluate(()=>window.__qa.cancels),0);
+      assert.equal(await page.getByRole('progressbar').count(),0); assert.equal(await page.evaluate(()=>window.__qa.cancels),0);
       await fill('新身份'); await page.getByRole('button',{name:'用 AI 导入',exact:true}).click(); await page.waitForFunction(()=>window.__qa.observes===2); await page.evaluate(()=>window.__qa.complete(1));
       await page.getByRole('button',{name:'确认保存',exact:true}).waitFor(); assert.equal(await page.locator('.daily-journal__reader .daily-journal__prose').first().innerText(),'23:30 实际：她在虚构城入住新身份酒店。'); cases++;
     }
 
-    await open(); await fill('断流'); await start(); await page.evaluate(()=>window.__qa.failPartial(0)); await page.getByRole('alert').filter({hasText:'未能完成导入'}).waitFor(); await noDraft(); assert.equal(await page.evaluate(()=>window.__qa.writes),0); cases++;
+    await open(); await fill('断流'); await start(); await page.evaluate(()=>window.__qa.failPartial(0)); await page.getByRole('alert').filter({hasText:'未能完成导入'}).waitFor(); await noOverflow(); await page.locator('.daily-journal__import-status').scrollIntoViewIfNeeded(); await page.screenshot({path:`${output}/failed-${viewport.width}x${viewport.height}.png`}); await noDraft(); assert.equal(await page.evaluate(()=>window.__qa.writes),0); cases++;
 
     await open(); await fill('离开前停止'); await start(); await page.evaluate(()=>window.__qa.holdCancel=true); await page.getByRole('button',{name:'返回 Stream',exact:true}).click();
     await page.getByRole('button',{name:'丢弃并返回',exact:true}).click(); await page.waitForFunction(()=>window.__qa.cancels===1); assert.equal(await page.evaluate(()=>window.__qa.closed),0);

@@ -60,3 +60,23 @@
 @media (max-width: 600px) { .daily-journal__filters { grid-template-columns: 1fr 1fr; } .daily-journal__search { grid-column: 1 / -1; } .daily-journal__view-switch button { flex: 1; min-height: var(--control-height); } }
 .daily-journal__review li { margin: var(--story-space-md) 0; }
 .daily-journal__review li small { display: block; color: var(--startrips-muted); }
+
+/* Import activity is indeterminate: output size cannot measure completion. */
+.daily-journal__source-count { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; margin: -4px 0 16px; color: var(--startrips-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.daily-journal__source-count span { opacity: .85; }
+.daily-journal__import-status { margin-top: 16px; padding: 16px; border: 1px solid var(--startrips-line); border-radius: var(--radius-field); background: var(--story-control-fill); }
+.daily-journal__import-status-heading { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.daily-journal__import-status-heading > [role] { flex: 1 1 200px; min-width: 0; padding: 0; background: transparent; }
+.daily-journal__import-status strong { font-size: 15px; font-weight: 500; }
+.daily-journal__import-status p { margin: 4px 0 0; font-size: 13px; color: var(--startrips-muted); }
+.daily-journal__import-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.daily-journal__import-actions:empty { display: none; }
+.daily-journal__import-actions button { margin: 0; min-height: 44px; font-size: 13px; }
+.daily-journal__import-activity { height: 3px; margin-top: 16px; overflow: hidden; border-radius: 2px; background: var(--startrips-line); }
+.daily-journal__import-activity span { display: block; width: 40%; height: 100%; border-radius: inherit; background: var(--startrips-starlight); animation: journal-import-activity 2.4s ease-in-out infinite; }
+.daily-journal__import-status[data-state=completed] strong { color: var(--startrips-aurora); }
+@keyframes journal-import-activity { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
+@media (prefers-reduced-motion: reduce) {
+  .daily-journal__import-activity { background: repeating-linear-gradient(90deg, var(--startrips-line) 0 8px, transparent 8px 12px); }
+  .daily-journal__import-activity span { animation: none; display: none; }
+}
