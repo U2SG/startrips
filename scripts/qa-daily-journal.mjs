@@ -88,8 +88,10 @@ async function mockImports(page, getSaved) {
   });
   return state;
 }
+// Wrapped label text includes the controlled textarea value after React updates it.
+const sourceInput = page => page.locator(".daily-journal__import textarea");
 async function importPreview(page, source) {
-  await page.getByLabel("原始流水账",{exact:true}).fill(source);
+  await sourceInput(page).fill(source);
   await page.getByRole("button",{name:"用 AI 导入",exact:true}).click();
   await page.getByRole("button",{name:"确认保存",exact:true}).waitFor();
   await page.getByText("识别完成，已填入预览，尚未保存。",{exact:true}).waitFor();
@@ -117,12 +119,14 @@ try {
     assert.equal(await page.getByRole("button",{name:"用 AI 整理原文"}).count(),0);
     // Hold a fictional job to prove double clicks do not submit twice and Stop does not save.
     imports.hold=true;
-    await page.getByLabel("原始流水账",{exact:true}).fill(source);
+    await sourceInput(page).fill(source);
     const submitted=page.waitForRequest(r=>r.method()==="POST" && r.url().endsWith("/journal-import/jobs"));
     await page.getByRole("button",{name:"用 AI 导入",exact:true}).dblclick(); await submitted;
     await page.getByRole("button",{name:"停止",exact:true}).click();
     await page.getByText("已停止，原文已保留。",{exact:true}).waitFor();
     assert.equal(imports.posts,1); assert.equal(imports.cancels,1); assert.equal(writes,0);
+    assert.equal(await sourceInput(page).inputValue(),source,"Stop preserves the original input");
+    assert.equal(await sourceInput(page).isEnabled(),true,"Stop releases the input for another import");
     imports.hold=false;
     await importPreview(page,source);
     assert.equal(await page.getByLabel("阅读正文",{exact:true}).count(),0,"completion defaults to reading view");
@@ -163,7 +167,7 @@ try {
     await page.getByRole("button",{name:"每日手记",exact:true}).click();
     // An old account's late completed response must not populate the new account.
     imports.hold=true;
-    await page.getByLabel("原始流水账",{exact:true}).fill(source);
+    await sourceInput(page).fill(source);
     const observing=imports.waitForObserver();
     await page.getByRole("button",{name:"用 AI 导入",exact:true}).click(); await observing;
     await page.getByRole("button",{name:"停止",exact:true}).waitFor();

@@ -38,12 +38,14 @@ try {
   await page.getByRole("button",{name:"清除筛选",exact:true}).click();await page.getByLabel("查找手记").fill("虚构海湾");assert.equal(await page.locator('.daily-journal__reader .daily-journal__event').count(),14);
   await page.getByRole("button",{name:"清除筛选",exact:true}).click();await page.getByLabel("筛选手记日期").selectOption("2027-04-01");
   const prose=await page.locator('.daily-journal__reader .daily-journal__prose').first().innerText();assert.ok(prose.includes("第 1 天，第 1 条"));
+  await page.locator(".daily-journal__reader article").first().evaluate(el=>el.scrollIntoView({block:"start"}));
   await page.screenshot({path:`${output}/reading-${width}.png`});
   await page.getByRole("button",{name:"表格浏览",exact:true}).click();assert.equal(await page.locator('tbody tr').count(),16);
   assert.equal(await page.getByRole("columnheader").allTextContents().then(x=>x.join("|")),"归章日期 / 当地钟点|地点|事件|状态");
   assert.equal(await page.locator('tbody tr').first().getByText("23:30 · 当地时间",{exact:true}).count(),1);
   assert.equal(await page.locator('tbody tr').nth(1).getByText("18:20 · 当地时间",{exact:true}).count(),1);
   assert.equal(await page.locator('.daily-journal').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
+  await page.locator(".daily-journal__table-scroll").evaluate(el=>el.scrollIntoView({block:"start"}));
   await page.screenshot({path:`${output}/table-${width}.png`});
   assert.equal(await page.evaluate(()=>JSON.stringify(window.__qa.saved)),baseline);assert.equal(await page.evaluate(()=>window.__qa.writes),0);
   await page.getByRole("button",{name:"编辑已有手记",exact:true}).click();await page.getByLabel("阅读正文",{exact:true}).first().fill("保留这条手动修改。");

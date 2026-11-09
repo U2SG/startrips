@@ -45,6 +45,7 @@ test("journal reading screenshots are retained even when browser acceptance fail
   assert.match(browser, /always\(\) && contains\(matrix.suites, '\|journal-reading\|'\)/);
   assert.match(browser, /name: journal-reading-\$\{\{ github.run_attempt \}\}/);
   assert.match(browser, /path: artifacts\/journal-reading\/\*\.png\n          if-no-files-found: error/);
+  assert.match(browser, /timeout-minutes: 5\n        run: bash scripts\/ci-ensure-cjk-font\.sh/);
 });
 
 test("editor navigation and compact layout checks remain mandatory independent suites", () => {
