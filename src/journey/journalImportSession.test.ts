@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { previewJournalImport } from "./dailyJournal";
 import { createJournalImportSession, type JournalImportState } from "./journalImportSession";
 import { JournalImportConnectionError, JournalImportRejectedError, type JournalImportClient, type JournalImportInput, type JournalImportOutcome, type JournalImportProgress } from "./journalImportApi";
 const input: JournalImportInput = { journeyId: "journey-a", atlasId: "atlas-a", sentence: "导入流水账", source: "2027-04-03 合成旅程", fallbackDate: "2027-04-03" };
@@ -21,6 +22,23 @@ function fixture(overrides: Partial<JournalImportClient> = {}) {
 }
 
 describe("journal import lifecycle", () => {
+  it("auto-fills complete recognized fields without manufacturing missing values", async () => {
+    const chapters = previewJournalImport("2027-04-03\n实际：晚间抵达", "2027-04-03");
+    Object.assign(chapters[0].events[0], { localDate: "2027-04-03", localTime: "23:30", timeContext: "原文明示的当地钟点", routePointId: null });
+    const draft = { revision: 4, chapters };
+    const f = fixture({ observe: vi.fn(async () => ({ status: "completed" as const, draft })) });
+    await f.session.start();
+    expect(f.onPreview).toHaveBeenCalledExactlyOnceWith(draft);
+    expect(f.states.at(-1)?.status).toBe("completed");
+    expect(f.onPreview.mock.calls[0][0].chapters[0].events[0]).toMatchObject({ status: "actual", localDate: "2027-04-03", localTime: "23:30", routePointId: null });
+  });
+  it("does not claim fields were filled when the host refuses a stale preview", async () => {
+    const f = fixture(); f.onPreview.mockReturnValue(false);
+    await f.session.start();
+    expect(f.states.at(-1)).toMatchObject({ status: "failed", message: expect.stringContaining("预览未能载入") });
+    expect(f.states.some(state => state.status === "completed")).toBe(false);
+  });
+
   it("deduplicates clicks and publishes a complete draft exactly once", async () => {
     const result = deferred<JournalImportOutcome>();
     const f = fixture({ observe: vi.fn(() => result.promise) });

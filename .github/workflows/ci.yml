@@ -351,6 +351,16 @@ jobs:
       - name: Verify preinstalled browser runtime
         timeout-minutes: 1
         run: node scripts/ci-browser-runtime.mjs
+      - name: Restore pinned Noto Sans SC archive for journal captures
+        if: contains(matrix.suites, '|journal-reading|')
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/startrips-cjk-font
+          key: cjk-font-18_NotoSansSC-4d107c09ada479d3e48b6e78c83835773cbd9214bf6e12cdb7b60f8e068292ec
+      - name: Ensure journal captures have readable Chinese glyphs
+        if: contains(matrix.suites, '|journal-reading|')
+        timeout-minutes: 5
+        run: bash scripts/ci-ensure-cjk-font.sh
       - name: Run browser QA
         env:
           QA_COMMANDS: ${{ matrix.commands }}
@@ -383,6 +393,14 @@ jobs:
         with:
           name: journal-streaming-${{ github.run_attempt }}
           path: artifacts/qa-journal-streaming-ui/*.png
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload synthetic journal reading captures
+        if: ${{ always() && contains(matrix.suites, '|journal-reading|') }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: journal-reading-${{ github.run_attempt }}
+          path: artifacts/journal-reading/*.png
           if-no-files-found: error
           retention-days: 7
       - name: Upload route candidate evidence

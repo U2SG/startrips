@@ -12,7 +12,7 @@ export type JournalImportSession = ReturnType<typeof createJournalImportSession>
 /** Owns one immutable submission; reconnects/retries can never create a second ID. */
 export function createJournalImportSession(client: JournalImportClient, input: JournalImportInput, callbacks: {
   onState: (state: JournalImportState) => void;
-  onPreview: (draft: DailyJournal) => void;
+  onPreview: (draft: DailyJournal) => boolean | void;
 }, requestId = crypto.randomUUID()) {
   let alive = true, generation = 0, stopRequested = false, postStarted = false;
   let prepared: JournalImportSubmission | undefined, jobId: string | undefined;
@@ -48,8 +48,8 @@ export function createJournalImportSession(client: JournalImportClient, input: J
         if (!current() || stopRequested) return;
         if (outcome.status === "completed") {
           // Publishing complete does not write. The host still requires confirmation.
-          callbacks.onPreview(outcome.draft);
-          publish({ status: "completed" });
+          const accepted = callbacks.onPreview(outcome.draft);
+          publish(accepted === false ? { status: "failed", message: "识别已完成，但预览未能载入；请查看手记更新提示，原文已保留。" } : { status: "completed" });
         } else if (outcome.status === "failed") publish({ status: "failed", message: outcome.message });
         else publish({ status: "cancelled" });
       } catch (error) {

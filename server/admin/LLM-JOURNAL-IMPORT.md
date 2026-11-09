@@ -52,7 +52,7 @@ permission to send this source.
 ## Evidence and preview
 
 The model calls only `stage_journal_import`, returning chapter line boundaries,
-whole-line evidence, statuses, local clocks/ranges, explicit date evidence and
+whole-line evidence, statuses, local clocks/ranges, explicit date evidence, one actual place name (or null), and
 questions. The server validates coverage/order, exact source references, normalized
 calendar/clock format, structured interval ordering and existing journal references.
 The tool instructs the model to keep mixed narratives uncertain, cancellations
@@ -223,3 +223,30 @@ it does not establish that cues were included or interpreted correctly. A claim
 of `09:00` citing `9:00` in `晚上9:00` can pass these structural checks. Inspect the
 preserved source and preview; mock tests do not prove real-model interpretation.
 A structured clock range retains the supplied quote without deriving another date.
+
+## Existing journey place and media links
+
+The same extraction call may cite one exact place name from an actual event.
+It must return null for mere mentions, multiple places, plans and cancellations.
+The server matches the complete name (Unicode/letter-case normalization only)
+against the current journey's locked route points. No aliases, substring search,
+new coordinates or new route points are inferred. Multiple same-name points and
+impossible explicit-date conflicts remain unlinked with a review question.
+A timestamp is rejected only if incompatible with the event's explicit date (or an explicit single-day heading when the event has
+no date claim) in
+all UTC offsets within ±14 hours; archive dates never count as event evidence.
+The model's semantic claim is still a reviewable interpretation, not independent
+proof that the visit occurred. No existing journey metadata is sent to the model.
+
+Only new events receive these links; saved events, including deliberately empty
+links, are preserved on replay. The resulting preview still requires Save.
+Reading and editing project photos/videos already owned by a linked route point,
+in an explicitly labeled place-context group (not event capture evidence), separately
+from manual event links and deduplicated. Clearing manual links does not suppress
+place context; the editor explains this next to the control. Each visible place gallery appears once, collapsed by default; other events link
+to it. Media read components mount only when expanded. No media IDs are copied
+or ownership changed.
+Already-linked saved journals therefore show their location media without import.
+Route timestamps are displayed separately, never used to fill missing journal
+local date/time. Unlinked old events need explicit editing or a new import, rather
+than silently guessing whether a member intentionally cleared their links.

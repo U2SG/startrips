@@ -87,7 +87,7 @@ export async function runJournalJob(signal?:AbortSignal) {
     await db.transaction(async tx=>{
       if(hash(await lockedTarget(tx,target))!==hash(before))fail('JOURNAL_CHANGED');
       if(controller.signal.aborted)fail('JOURNAL_JOB_INTERRUPTED');
-      const chapters=await normalizeJournalReferences(target.journeyId,before.chapters,draft.chapters,tx);
+      const chapters=await normalizeJournalReferences(target.journeyId,before.chapters,draft.chapters,tx,draft.placeClaims);
       const envelope=sealJournalDraft(target,input.source,before,chapters,draft.importedChapterIds,input.provider);
       await tx.execute(sql`UPDATE journal_import_jobs SET status='completed',phase='validating',envelope=${JSON.stringify(envelope)},payload=NULL,characters=${progress.characters},chunks=${progress.chunks},updated_at=now() WHERE id=${row.id} AND lease=${token} AND status='running'`);
     });

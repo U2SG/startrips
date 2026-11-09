@@ -24,6 +24,13 @@ const json = (value: unknown) => new Response(JSON.stringify(value), { headers: 
 afterEach(() => vi.useRealTimers());
 
 describe("journal streaming transport", () => {
+  it("does not submit or fake a preview when AI is unavailable", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json({ available: false }));
+    await expect(createJournalImportClient(fetcher).prepare(input, jobId, new AbortController().signal)).rejects.toThrow("AI 导入暂不可用");
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(String(fetcher.mock.calls[0][0])).toBe("/api/intents/journal-import/provider");
+  });
+
   it("echoes opaque provider identity, sends credentials and never sends atlas authority", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(json({ available: true, baseUrl: "provider:opaque-consent", model: "fixture" })).mockResolvedValueOnce(json({ jobId }));
     const client = createJournalImportClient(fetcher), signal = new AbortController().signal;

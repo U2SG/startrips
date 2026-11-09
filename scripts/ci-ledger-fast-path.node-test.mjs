@@ -97,7 +97,7 @@ test("fails closed when final uses more than one commit", () => {
   assert.equal(result.reason, "final-commit-count-2");
 });
 
-test("workflow keeps all 43 logical browser suites across at most eight shards", () => {
+test("workflow keeps all 44 logical browser suites across at most eight shards", () => {
   const workflow = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".github", "workflows", "ci.yml"), "utf8").replace(/\r\n/g, "\n");
   assert.ok(workflow.includes("matrix: ${{ fromJSON(needs.quick-checks.outputs.browser_matrix) }}"));
   const matrix = JSON.parse(fs.readFileSync(new URL("../.github/browser-matrix.json", import.meta.url), "utf8")).include;
@@ -112,6 +112,7 @@ test("workflow keeps all 43 logical browser suites across at most eight shards",
     "soundtrack-ducking", "mobile-native", "story-note-beats",
     "journal-hotels",
     "journal-streaming",
+    "journal-reading",
     "journey-book-3d-turns", "journey-book-3d-drags", "journey-book-3d-last-spread", "journey-book-3d-phone",
   ]);
   const shardNames = matrix.map((row) => row.name);
@@ -119,8 +120,8 @@ test("workflow keeps all 43 logical browser suites across at most eight shards",
   assert.equal(new Set(shardNames).size, shardNames.length);
   assert.deepEqual(new Set(matrix.flatMap((row) => row.suites.split("|").filter(Boolean))), expectedSuites);
   const commands = matrix.flatMap((row) => row.commands.split("\n"));
-  assert.equal((commands.join("\n").match(/pnpm qa:[a-z0-9-]+/g) ?? []).length, 45);
-  assert.equal(commands.length, 43);
+  assert.equal((commands.join("\n").match(/pnpm qa:[a-z0-9-]+/g) ?? []).length, 46);
+  assert.equal(commands.length, 44);
 });
 
 function jobs({ productFailure = false, wrongLedgerFailure = false } = {}) {

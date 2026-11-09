@@ -26,7 +26,7 @@ const progress = job => ({ jobId: job.id, status: job.status, phase: 'receiving'
 function snapshot(job) { return job.final ?? progress(job); }
 function emit(job, event, data) { for (const c of job.controllers) { try { c.enqueue(frame(event, data)); } catch {} } }
 qa.progress = (index, characters) => { const job = qa.jobs[index]; job.characters = characters; emit(job, 'progress', progress(job)); };
-qa.complete = index => { const job = qa.jobs[index], chapters = previewJournalImport(job.body.source, job.body.fallbackDate); job.status = 'completed'; job.final = { jobId: job.id, status: 'completed', planDigest: 'a'.repeat(64), envelope: { signature: 'b'.repeat(64), plan: { version: 2, target: { journeyId: job.body.journeyId, atlasId: job.atlasId }, before: { revision: 0, chapters: [] }, after: { revision: 1, chapters }, importedChapterIds: chapters.map(c => c.id), expires: Date.now() + 3600000 } } }; emit(job, 'completed', job.final); };
+qa.complete = index => { const job = qa.jobs[index], chapters = previewJournalImport(job.body.source, job.body.fallbackDate); Object.assign(chapters[0].events[0], {status:'actual',localDate:'2028-06-03',localTime:'23:30'}); job.status = 'completed'; job.final = { jobId: job.id, status: 'completed', planDigest: 'a'.repeat(64), envelope: { signature: 'b'.repeat(64), plan: { version: 2, target: { journeyId: job.body.journeyId, atlasId: job.atlasId }, before: { revision: 0, chapters: [] }, after: { revision: 1, chapters }, importedChapterIds: chapters.map(c => c.id), expires: Date.now() + 3600000 } } }; emit(job, 'completed', job.final); };
 qa.disconnect = index => { for (const c of qa.jobs[index].controllers) { try { c.close(); } catch {} } };
 qa.failPartial = index => { const job = qa.jobs[index]; job.status = 'failed'; job.final = {jobId:job.id,status:'failed',error:'INTENT_STREAM_INVALID'}; for(const c of job.controllers) {try {c.enqueue(new TextEncoder().encode('event: completed\\ndata: {')); c.close();} catch {}} };
 async function fetcher(url, options = {}) {
@@ -73,7 +73,14 @@ try {
     const box = await page.getByRole('button',{name:'停止',exact:true}).boundingBox(); assert.ok(box && box.x>=0 && box.y>=0 && box.x+box.width<=viewport.width+1 && box.y+box.height<=viewport.height+1);
     await page.screenshot({path:`${output}/progress-${viewport.width}x${viewport.height}.png`});
     await page.evaluate(()=>window.__qa.disconnect(0)); await page.waitForFunction(()=>window.__qa.observes===2); assert.equal(await page.evaluate(()=>window.__qa.posts),1);
-    await page.evaluate(()=>window.__qa.complete(0)); await page.getByRole('button',{name:'确认保存',exact:true}).waitFor(); assert.equal(await page.evaluate(()=>window.__qa.writes),0);
+    await page.evaluate(()=>window.__qa.complete(0)); await page.getByRole('button',{name:'确认保存',exact:true}).waitFor(); await page.getByText('识别完成，已填入预览，尚未保存。',{exact:true}).waitFor(); assert.equal(await page.evaluate(()=>window.__qa.writes),0);
+    assert.equal(await page.locator('.daily-journal__import textarea').count(),1); assert.equal(await page.locator('.daily-journal__import input').count(),0);
+    assert.equal(await page.getByRole('button',{name:'生成导入预览',exact:true}).count(),0);
+    await page.getByRole('button',{name:'编辑预览',exact:true}).click();
+    assert.equal(await page.getByLabel('事件状态',{exact:true}).first().inputValue(),'actual');
+    assert.equal(await page.getByLabel('事件当地日期（可空，与归章日期分开）',{exact:true}).first().inputValue(),'2028-06-03');
+    assert.equal(await page.getByLabel('原文明确的当地钟点（可空）',{exact:true}).first().inputValue(),'23:30');
+    await page.getByRole('button',{name:'返回阅读',exact:true}).click();
     await page.getByRole('button',{name:'确认保存',exact:true}).click(); await page.getByText('手记已保存。',{exact:true}).waitFor(); assert.equal(await page.evaluate(()=>window.__qa.writes),1); cases++;
 
     await open(); await fill('已停止旧请求'); await start(); await page.getByRole('button',{name:'停止',exact:true}).click(); await page.getByText('已停止，原文已保留。',{exact:true}).waitFor();
@@ -82,7 +89,7 @@ try {
     await page.getByText('正在接收 · 2,400 字',{exact:true}).waitFor(); await noDraft();
     assert.equal(await page.locator('.daily-journal__import textarea').inputValue(),'2028-06-03\n23:30 实际：她在虚构城入住新的酒店。');
     await page.evaluate(()=>window.__qa.complete(1)); await page.getByRole('button',{name:'确认保存',exact:true}).waitFor();
-    assert.equal(await page.getByLabel('阅读正文',{exact:true}).first().inputValue(),'23:30 实际：她在虚构城入住新的酒店。'); assert.equal(await page.evaluate(()=>window.__qa.writes),0); cases++;
+    assert.equal(await page.locator('.daily-journal__reader .daily-journal__prose').first().innerText(),'23:30 实际：她在虚构城入住新的酒店。'); assert.equal(await page.evaluate(()=>window.__qa.writes),0); cases++;
 
     await open(); await fill('提交中停止'); await page.evaluate(()=>window.__qa.holdSubmit=true); await page.getByRole('button',{name:'用 AI 导入',exact:true}).click(); await page.waitForFunction(()=>window.__qa.posts===1);
     await page.getByRole('button',{name:'停止',exact:true}).click(); await page.getByText('正在停止…',{exact:true}).waitFor(); await page.evaluate(()=>window.__qa.accept());
@@ -94,7 +101,7 @@ try {
       await page.evaluate(()=>{window.__qa.progress(0,999999);window.__qa.complete(0)}); await noDraft();
       assert.equal(await page.getByText('正在接收 · 999,999 字',{exact:true}).count(),0); assert.equal(await page.evaluate(()=>window.__qa.cancels),0);
       await fill('新身份'); await page.getByRole('button',{name:'用 AI 导入',exact:true}).click(); await page.waitForFunction(()=>window.__qa.observes===2); await page.evaluate(()=>window.__qa.complete(1));
-      await page.getByRole('button',{name:'确认保存',exact:true}).waitFor(); assert.equal(await page.getByLabel('阅读正文',{exact:true}).first().inputValue(),'23:30 实际：她在虚构城入住新身份酒店。'); cases++;
+      await page.getByRole('button',{name:'确认保存',exact:true}).waitFor(); assert.equal(await page.locator('.daily-journal__reader .daily-journal__prose').first().innerText(),'23:30 实际：她在虚构城入住新身份酒店。'); cases++;
     }
 
     await open(); await fill('断流'); await start(); await page.evaluate(()=>window.__qa.failPartial(0)); await page.getByRole('alert').filter({hasText:'未能完成导入'}).waitFor(); await noDraft(); assert.equal(await page.evaluate(()=>window.__qa.writes),0); cases++;

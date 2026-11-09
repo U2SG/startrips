@@ -164,7 +164,7 @@ export function createJournalImportClient(fetcher: typeof fetch = fetch): Journa
       if (!input.source.trim() || input.source.length > JOURNAL_IMPORT_MAX_TEXT || !input.sentence.trim()
         || input.sentence.length > 500 || !isPersistedCalendarDate(input.fallbackDate)) throw new Error("请输入有效日期、操作要求及不超过 10 万字的原文。");
       const provider = await json("/provider", signal);
-      if (!object(provider) || provider.available !== true || typeof provider.baseUrl !== "string" || typeof provider.model !== "string") throw new Error("AI 导入暂不可用，可按日期生成预览。");
+      if (!object(provider) || provider.available !== true || typeof provider.baseUrl !== "string" || typeof provider.model !== "string") throw new Error("AI 导入暂不可用；原文已保留，请稍后重试。");
       return { ...input, requestId, provider: { baseUrl: provider.baseUrl, model: provider.model } };
     },
     async submit(input, signal) {
