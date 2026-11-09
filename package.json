@@ -84,7 +84,8 @@
     "qa:journey-film-export": "node scripts/qa-journey-film-export.mjs && node scripts/qa-story-film-integration.mjs",
     "qa:journal-hotels": "node scripts/qa-journal-hotels.mjs",
     "qa:journal-streaming": "node scripts/qa-journal-streaming-ui.mjs",
-    "qa:daily-journal": "node scripts/qa-daily-journal.mjs"
+    "qa:daily-journal": "node scripts/qa-daily-journal.mjs",
+    "qa:journal-reading": "node scripts/qa-journal-reading.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1108.0",

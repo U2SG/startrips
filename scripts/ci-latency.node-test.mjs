@@ -8,18 +8,20 @@ const reproduction = read(".github/workflows/story-autoplay-reproduction.yml");
 const matrix = JSON.parse(read(".github/browser-matrix.json")).include;
 const job = (name) => ci.split(`\n  ${name}:\n`)[1]?.split(/\n  [a-z][a-z-]*:\n/)[0];
 
-test("all 43 suite commands are retained exactly once across at most eight shards", () => {
+test("all 44 suite commands are retained exactly once across at most eight shards", () => {
   const browser = job("browser-qa");
   assert.match(browser, /matrix: \$\{\{ fromJSON\(needs.quick-checks.outputs.browser_matrix\) \}\}/);
   const names = matrix.map((row) => row.name);
   assert.ok(names.length <= 8);
   assert.equal(new Set(names).size, names.length);
   const rows = matrix.flatMap((row) => row.commands.split("\n").map((command) => command.match(/^([a-z0-9-]+)::(.+)$/)));
-  assert.equal(rows.length, 43);
-  assert.equal(new Set(rows.map((m) => m[1])).size, 43);
+  assert.equal(rows.length, 44);
+  assert.equal(new Set(rows.map((m) => m[1])).size, 44);
   assert.equal(rows.filter((m) => m[1] === "route-point-batch").length, 1);
   assert.equal(rows.filter((m) => m[1] === "journal-hotels").length, 1);
   assert.equal(rows.filter((m) => m[1] === "journal-streaming").length, 1);
+  assert.equal(rows.filter((m) => m[1] === "journal-reading").length, 1);
+  assert.equal(JSON.parse(read("package.json")).scripts["qa:journal-reading"], "node scripts/qa-journal-reading.mjs");
   assert.equal(JSON.parse(read("package.json")).scripts["qa:journal-streaming"], "node scripts/qa-journal-streaming-ui.mjs");
   assert.equal(JSON.parse(read("package.json")).scripts["qa:journal-hotels"], "node scripts/qa-journal-hotels.mjs");
   assert.match(read("scripts/qa-journal-hotels.mjs"), /import "\.\/qa-daily-journal\.mjs"/);
@@ -36,6 +38,13 @@ test("all 43 suite commands are retained exactly once across at most eight shard
   }
   assert.match(browser, /fail-fast: false/);
   assert.match(browser, /QA_SUITE_TIMEOUT_MS: '720000'/);
+});
+
+test("journal reading screenshots are retained even when browser acceptance fails", () => {
+  const browser = job("browser-qa");
+  assert.match(browser, /always\(\) && contains\(matrix.suites, '\|journal-reading\|'\)/);
+  assert.match(browser, /name: journal-reading-\$\{\{ github.run_attempt \}\}/);
+  assert.match(browser, /path: artifacts\/journal-reading\/\*\.png\n          if-no-files-found: error/);
 });
 
 test("editor navigation and compact layout checks remain mandatory independent suites", () => {

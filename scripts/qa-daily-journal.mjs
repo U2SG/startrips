@@ -32,21 +32,79 @@ return <AtlasViewProvider value={view}><main className="living-atlas"><JourneySt
 createRoot(document.getElementById("root")).render(<Harness/>);`);
 await writeFile(`${output}/index.html`, '<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div><script type="module" src="./harness.tsx"></script></body></html>');
 await writeFile(`${output}/fictional-photo.svg`, '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400"><rect width="600" height="400" fill="#4a6970"/><circle cx="300" cy="150" r="60" fill="#edce92"/><path d="M0 400L200 220L400 400Z" fill="#193844"/></svg>');
+// These are fictional model outputs, not a replacement for the production recognizer.
+function fictionalChapters(source) {
+  const chapters = [];
+  for (const line of source.split("\n")) {
+    const heading = line.match(/^(?:### )?2027(?:-|年)0?4(?:-|月)(\d{1,2})(?:日)?(.*)$/);
+    if (heading) {
+      const date = `2027-04-${heading[1].padStart(2,"0")}`;
+      chapters.push({id:`chapter-${chapters.length}`,date,importDate:date,title:heading[2],source:line,suggestions:[],events:[]});
+      continue;
+    }
+    const chapter = chapters.at(-1);
+    assert.ok(chapter, "fictional inputs must begin with a known date heading");
+    chapter.source += "\n" + line;
+    if (!line.trim()) continue;
+    const time = line.match(/^(\d{2}:\d{2}) /)?.[1] ?? null;
+    chapter.events.push({id:`${chapter.id}-event-${chapter.events.length}`,source:line,text:line,
+      status:line.startsWith("取消：") || line === "计划公园取消" ? "cancelled" : line.startsWith("计划：") ? "planned" : "actual",
+      localDate:null,localTime:time,timeContext:"当地时间（具体时区未确认）",routePointId:null,mediaIds:[],edited:false});
+  }
+  return chapters;
+}
+async function mockImports(page, getSaved) {
+  const state = {posts:0,observes:0,cancels:0,hold:false,release:null};
+  const jobs = new Map();
+  state.waitForObserver = () => new Promise(resolve => { state.observerReady = resolve; });
+  await page.route(/\/api\/intents\/journal-import\//, async route => {
+    const request = route.request(), path = new URL(request.url()).pathname;
+    if (path.endsWith("/provider")) return route.fulfill({json:{available:true,baseUrl:"provider:synthetic",model:"synthetic"}});
+    if (path.endsWith("/jobs")) {
+      state.posts++; state.release=null;
+      const body = request.postDataJSON(), before = structuredClone(getSaved());
+      const imported = fictionalChapters(body.source);
+      const chapters = [...before.chapters];
+      for (const chapter of imported) if (!chapters.some(old => old.source === chapter.source)) chapters.push(chapter);
+      const final = {jobId:body.requestId,status:"completed",planDigest:"a".repeat(64),envelope:{signature:"b".repeat(64),plan:{
+        version:2,target:{journeyId:body.journeyId,atlasId:fixture.atlasId},before,after:{revision:before.revision+1,chapters},
+        importedChapterIds:chapters.map(c=>c.id),expires:Date.now()+3600000}}};
+      jobs.set(body.requestId,{final,release:null});
+      return route.fulfill({json:{jobId:body.requestId}});
+    }
+    const match = path.match(/\/jobs\/([^/]+)(?:\/(events|cancel))?$/);
+    assert.ok(match,"unexpected fictional import request");
+    const job = jobs.get(match[1]); assert.ok(job);
+    if (match[2] === "cancel") {
+      state.cancels++; job.final={jobId:match[1],status:"cancelled"}; job.release?.();
+      return route.fulfill({json:job.final});
+    }
+    if (match[2] === "events") {
+      state.observes++;
+      if (state.hold) await new Promise(resolve=>{job.release=resolve;state.release=resolve;state.observerReady?.();state.observerReady=null;});
+      return route.fulfill({contentType:"text/event-stream",body:`event: ${job.final.status}\ndata: ${JSON.stringify(job.final)}\n\n`}).catch(()=>{});
+    }
+    return route.fulfill({json:job.final});
+  });
+  return state;
+}
+async function importPreview(page, source) {
+  await page.getByLabel("原始流水账",{exact:true}).fill(source);
+  await page.getByRole("button",{name:"用 AI 导入",exact:true}).click();
+  await page.getByRole("button",{name:"确认保存",exact:true}).waitFor();
+  await page.getByText("识别完成，已填入预览，尚未保存。",{exact:true}).waitFor();
+}
 const browser = await launchQaBrowser();
 try {
   for (const width of [1280, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: "reduce" });
     const page = await context.newPage();
-    let saved = { revision: 0, chapters: [] }, writes = 0, aiCalls = 0;
-    let releaseAI, releaseSave;
-    await page.route(/\/api\/journeys\/[^/]+\/journal(?:\/suggest)?$/, async route => {
+    let saved = { revision: 0, chapters: [] }, writes = 0;
+    let releaseSave;
+    const imports = await mockImports(page, () => saved);
+    await page.route(/\/api\/journeys\/[^/]+\/journal$/, async route => {
       const request = route.request();
-      if (request.url().endsWith("/suggest")) {
-        aiCalls++;
-        const chapters = request.postDataJSON().chapters;
-        await new Promise(resolve => { releaseAI = resolve; });
-        await route.fulfill({ json: { suggestions: chapters.flatMap(c => c.events.map(e => ({ eventId:e.id,text:"AI 建议正文",questions:["位置是否准确？"],background:"" }))) } }).catch(() => {});
-      } else if (request.method() === "PUT") {
+      if (request.method() === "PUT") {
         writes++; await new Promise(resolve => { releaseSave = resolve; }); saved = { revision: saved.revision + 1, chapters: request.postDataJSON().chapters };
         await route.fulfill({ json: { journal: saved } });
       } else await route.fulfill({ json: { journal: request.url().includes(fixture.id) ? saved : {revision:0,chapters:[]} } });
@@ -54,36 +112,35 @@ try {
     const errors=[]; page.on("pageerror", e => errors.push(e.message));
     await page.goto(`${origin}/${output}/index.html`);
     await page.getByRole("button",{name:"每日手记",exact:true}).click();
-    await page.getByLabel("原始流水账",{exact:true}).fill("2027-04-03\n23:30 她出发\n18:20 她抵达\n计划公园取消\n" + "她记下沿途所见。".repeat(120));
-    await page.getByRole("button",{name:"生成导入预览"}).click();
+    const source="2027-04-03\n23:30 她出发\n18:20 她抵达\n计划公园取消\n" + "她记下沿途所见。".repeat(120);
+    assert.equal(await page.getByRole("button",{name:"生成导入预览"}).count(),0);
+    assert.equal(await page.getByRole("button",{name:"用 AI 整理原文"}).count(),0);
+    // Hold a fictional job to prove double clicks do not submit twice and Stop does not save.
+    imports.hold=true;
+    await page.getByLabel("原始流水账",{exact:true}).fill(source);
+    const submitted=page.waitForRequest(r=>r.method()==="POST" && r.url().endsWith("/journal-import/jobs"));
+    await page.getByRole("button",{name:"用 AI 导入",exact:true}).dblclick(); await submitted;
+    await page.getByRole("button",{name:"停止",exact:true}).click();
+    await page.getByText("已停止，原文已保留。",{exact:true}).waitFor();
+    assert.equal(imports.posts,1); assert.equal(imports.cancels,1); assert.equal(writes,0);
+    imports.hold=false;
+    await importPreview(page,source);
+    assert.equal(await page.getByLabel("阅读正文",{exact:true}).count(),0,"completion defaults to reading view");
     await page.getByRole("button",{name:"取消预览"}).click();
     assert.equal(writes,0); assert.equal(saved.chapters.length,0);
-    const source="2027-04-03\n23:30 她出发\n18:20 她抵达\n计划公园取消\n" + "她记下沿途所见。".repeat(120);
-    await page.getByLabel("原始流水账",{exact:true}).fill(source);
-    await page.getByRole("button",{name:"生成导入预览"}).click();
+    await importPreview(page,source);
+    await page.getByRole("button",{name:"编辑预览",exact:true}).click();
+    assert.equal(await page.getByLabel("事件状态",{exact:true}).nth(0).inputValue(),"actual");
+    assert.equal(await page.getByLabel("事件状态",{exact:true}).nth(2).inputValue(),"cancelled");
     await page.getByLabel("阅读正文",{exact:true}).nth(0).fill("她手工修订了出发记录。");
-    await page.getByLabel("事件状态",{exact:true}).nth(0).selectOption("actual");
+    await page.getByText("时间、地图点与照片（选填）",{exact:true}).nth(0).click();
+    assert.equal(await page.getByLabel("原文明确的当地钟点（可空）",{exact:true}).nth(0).inputValue(),"23:30");
     await page.getByLabel("已确认的实际地点",{exact:true}).nth(0).selectOption(fixture.routePoints[0].id);
-    await page.getByLabel("事件状态",{exact:true}).nth(2).selectOption("cancelled");
+    await page.getByText("时间、地图点与照片（选填）",{exact:true}).nth(2).click();
     assert.equal(await page.getByLabel("已确认的实际地点",{exact:true}).nth(2).isDisabled(),true);
-    await page.getByRole("button",{name:"用 AI 整理原文"}).click();
-    await page.getByRole("status").filter({hasText:"正在整理建议"}).waitFor().catch(async e=>{console.log(await page.locator("body").innerText());console.log(errors);throw e;});
-    await page.getByRole("button",{name:"取消预览"}).click();
-    assert.equal(aiCalls,1); releaseAI();
-    await page.getByLabel("原始流水账",{exact:true}).fill(source);
-    await page.getByRole("button",{name:"生成导入预览"}).click();
-    await page.getByLabel("阅读正文",{exact:true}).nth(0).fill("她手工修订了出发记录。");
-    await page.getByLabel("事件状态",{exact:true}).nth(0).selectOption("actual");
-    await page.getByLabel("已确认的实际地点",{exact:true}).nth(0).selectOption(fixture.routePoints[0].id);
-    await page.getByRole("button",{name:"用 AI 整理原文"}).click();
-    await page.getByRole("status").filter({hasText:"正在整理建议"}).waitFor().catch(async e=>{console.log(await page.locator("body").innerText());console.log(errors);throw e;});
-    releaseAI();
-    await page.getByText("AI 建议与待确认问题",{exact:true}).nth(0).click();
-    assert.equal(await page.getByRole("button",{name:"正文已编辑，请手动合并建议"}).isDisabled(),true);
+    await page.getByRole("button",{name:"返回阅读",exact:true}).click();
+    await page.getByRole("button",{name:"编辑预览",exact:true}).click();
     assert.equal(await page.getByLabel("阅读正文",{exact:true}).nth(0).inputValue(),"她手工修订了出发记录。");
-    await page.getByRole("button",{name:"将建议应用到未手改正文"}).click();
-    assert.equal(await page.getByLabel("阅读正文",{exact:true}).nth(0).inputValue(),"她手工修订了出发记录。");
-    assert.equal(await page.getByLabel("阅读正文",{exact:true}).nth(1).inputValue(),"AI 建议正文");
     const saveRequested=page.waitForRequest(r=>r.method()==="PUT" && r.url().endsWith("/journal"));
     await page.getByRole("button",{name:"确认保存"}).dblclick();
     await saveRequested;
@@ -93,9 +150,9 @@ try {
     releaseSave();
     await page.getByText("手记已保存。",{exact:true}).waitFor(); assert.equal(writes,1);
     assert.equal(saved.chapters.length,1);
-    await page.getByLabel("原始流水账",{exact:true}).fill(source);
-    await page.getByRole("button",{name:"生成导入预览"}).click();
-    await page.getByText(/新增 0 个章节/).waitFor();
+    assert.equal(saved.chapters[0].source,source);
+    await importPreview(page,source);
+    await page.getByRole("button",{name:"编辑预览",exact:true}).click();
     assert.equal(await page.getByLabel("阅读正文",{exact:true}).nth(0).inputValue(),"她手工修订了出发记录。");
     await page.getByRole("button",{name:"取消预览"}).click();
     await page.getByRole("heading",{level:2}).scrollIntoViewIfNeeded();
@@ -104,11 +161,14 @@ try {
     await page.getByRole("button",{name:/在 Stream 中查看地点/}).click();
     await page.waitForFunction(id=>window.__observation?.routePointId===id,fixture.routePoints[0].id);
     await page.getByRole("button",{name:"每日手记",exact:true}).click();
-    await page.getByRole("button",{name:"编辑已有手记"}).click();
-    await page.getByRole("button",{name:"用 AI 整理原文"}).click();
-    await page.getByRole("status").filter({hasText:"正在整理建议"}).waitFor().catch(async e=>{console.log(await page.locator("body").innerText());console.log(errors);throw e;});
+    // An old account's late completed response must not populate the new account.
+    imports.hold=true;
+    await page.getByLabel("原始流水账",{exact:true}).fill(source);
+    const observing=imports.waitForObserver();
+    await page.getByRole("button",{name:"用 AI 导入",exact:true}).click(); await observing;
+    await page.getByRole("button",{name:"停止",exact:true}).waitFor();
     await page.evaluate(()=>window.dispatchEvent(new Event("qa-account-switch")));
-    releaseAI();
+    imports.release?.();
     await page.getByRole("button",{name:"每日手记",exact:true}).click();
     await page.getByText("还没有每日手记。可以先导入文字，无照片和坐标也能保存阅读。",{exact:true}).waitFor();
     assert.equal(await page.getByText("她手工修订了出发记录。",{exact:true}).count(),0);
@@ -119,6 +179,7 @@ try {
   const context = await browser.newContext({viewport:{width:390,height:844},reducedMotion:"reduce"});
   const page=await context.newPage();
   let stored={revision:0,chapters:[]};
+  await mockImports(page,()=>stored);
   await page.route(/\/api\/journeys\/[^/]+\/journal$/, async route=>{
     if(route.request().method()==="PUT") stored={revision:1,chapters:route.request().postDataJSON().chapters};
     await route.fulfill({json:{journal:stored}});
@@ -126,8 +187,9 @@ try {
   await page.goto(`${origin}/${output}/index.html?media=1`);
   await page.getByRole("button",{name:"每日手记",exact:true}).click();
   const fortnight=Array.from({length:14},(_,i)=>`### 2027年4月${i+1}日${i%2 ? "(虚构记录)" : "（虚构记录）"}\n实际：她留下了一张照片。\n计划：次日虚构公园\n取消：原定花园`).join("\n");
-  await page.getByLabel("原始流水账",{exact:true}).fill(fortnight);
-  await page.getByRole("button",{name:"生成导入预览"}).click();
+  await importPreview(page,fortnight);
+  await page.getByRole("button",{name:"编辑预览",exact:true}).click();
+  await page.getByText("时间、地图点与照片（选填）",{exact:true}).nth(0).click();
   await page.getByLabel("关联照片或视频（可多选）",{exact:true}).nth(0).selectOption(["photo-one"]);
   await page.getByRole("button",{name:"确认保存"}).click();
   await page.getByText("手记已保存。",{exact:true}).waitFor();

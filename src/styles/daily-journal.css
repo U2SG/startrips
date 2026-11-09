@@ -25,3 +25,38 @@
 .daily-journal__progress > button { flex: 0 0 auto; margin: 0; }
 
 .daily-journal__ai-import input { width: 100%; box-sizing: border-box; }
+
+.daily-journal__reading-controls { margin: var(--story-space-xl) 0; }
+.daily-journal__view-switch { display: flex; gap: var(--story-space-sm); }
+.daily-journal__view-switch button[aria-pressed=true] { color: var(--startrips-space); background: var(--startrips-starlight); border-color: var(--startrips-starlight); }
+.daily-journal__filters { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: var(--story-space-md); }
+.daily-journal__filters label { margin: var(--story-space-sm) 0; font-size: 14px; color: var(--startrips-muted); }
+.daily-journal__filters input, .daily-journal__filters select { width: 100%; box-sizing: border-box; min-height: var(--control-height); }
+.daily-journal__reader h2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--story-space-md); }
+.daily-journal__reader h2 span { font-size: 18px; font-weight: 400; }
+.daily-journal__reader .daily-journal__event { padding: var(--story-space-lg) 0 var(--story-space-lg) var(--story-space-lg); border-color: var(--startrips-line); }
+.daily-journal__event-heading { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: var(--story-space-sm); color: var(--startrips-muted); font-size: 14px; }
+.daily-journal__reader .daily-journal__prose { font-size: 17px; line-height: 1.9; margin: var(--story-space-md) 0; }
+.daily-journal__status { font-size: 12px; border-radius: var(--radius-field); padding: 2px 8px; background: var(--story-control-fill); color: var(--startrips-muted); white-space: nowrap; }
+.daily-journal__status[data-status=actual] { color: var(--startrips-aurora); }
+.daily-journal__status[data-status=planned] { color: var(--startrips-starlight); }
+.daily-journal__status-help, .daily-journal__review { font-size: 14px; color: var(--startrips-muted); }
+.daily-journal__status-help { max-width: 68ch; }
+.daily-journal__muted { color: var(--startrips-muted); font-size: 13px; }
+.daily-journal__place button { font-size: 13px; }
+.daily-journal summary { cursor: pointer; padding: var(--story-space-sm) 0; }
+.daily-journal button:focus-visible, .daily-journal summary:focus-visible, .daily-journal a:focus-visible, .daily-journal__table-scroll:focus-visible { outline: 2px solid var(--control-focus); outline-offset: 3px; }
+.daily-journal__table-scroll { max-width: 100%; overflow-x: auto; margin: var(--story-space-xl) 0; }
+.daily-journal__table-scroll table { border-collapse: collapse; width: 100%; min-width: 740px; table-layout: fixed; }
+.daily-journal__table-scroll caption { text-align: left; font-size: 13px; color: var(--startrips-muted); padding-bottom: var(--story-space-md); }
+.daily-journal__table-scroll th, .daily-journal__table-scroll td { padding: var(--story-space-md); text-align: left; vertical-align: top; border-bottom: 1px solid var(--startrips-line); }
+.daily-journal__table-scroll th { font-size: 13px; color: var(--startrips-muted); }
+.daily-journal__table-scroll th:nth-child(1) { width: 18%; }
+.daily-journal__table-scroll th:nth-child(2) { width: 18%; }
+.daily-journal__table-scroll th:nth-child(4) { width: 14%; }
+.daily-journal__table-scroll small { display: block; color: var(--startrips-muted); }
+.daily-journal__table-scroll .daily-journal__prose { font-size: 15px; margin-top: 0; }
+.daily-journal__table-scroll button { padding: var(--story-space-sm); margin: 0; }
+@media (max-width: 600px) { .daily-journal__filters { grid-template-columns: 1fr 1fr; } .daily-journal__search { grid-column: 1 / -1; } .daily-journal__view-switch button { flex: 1; min-height: var(--control-height); } }
+.daily-journal__review li { margin: var(--story-space-md) 0; }
+.daily-journal__review li small { display: block; color: var(--startrips-muted); }
