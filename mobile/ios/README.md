@@ -74,7 +74,9 @@ The browser command inventory is unchanged in `.github/browser-matrix.json`.
 The selected matrix is computed before runner allocation. Push triggers remain
 main-only, avoiding branch-push + PR duplicates; old PR heads retain cancellation.
 The macOS job uses one available iPhone and disables parallel simulator clones.
-pnpm and DerivedData are cached. `.xcresult` includes the screenshot attachment.
+pnpm is cached. Xcode DerivedData is rebuilt on each runner to avoid restoring
+compiled SDK modules from a different runner image. `.xcresult` includes the
+screenshot attachment.
 
 The deterministic scope tests cover native/docs/mixed/unknown paths, earlier PR
 commits, renames, push ranges, missing SHAs, runner gates, Source reuse and

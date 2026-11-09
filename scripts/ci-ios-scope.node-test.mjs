@@ -123,6 +123,7 @@ test("workflow gates runner allocation, one simulator, required verify, normal p
   assert.match(job("ios-native"), /if: .*ledger_only_final != 'true'.*soc_client_only != 'true'.*outputs\.ios == 'true'/);
   assert.match(job("ios-native"), /runs-on: macos-15/);
   assert.doesNotMatch(job("ios-native"), /continue-on-error|playwright|browser-qa/);
+  assert.doesNotMatch(job("ios-native"), /DerivedData/, "Native CI must not restore machine-dependent Xcode DerivedData");
   assert.match(job("verify"), /- ios-native/);
   assert.match(job("verify"), /IOS_RESULT: \$\{\{ needs.ios-native.result \}\}/);
   assert.match(job("ledger"), /node scripts\/verify-main-sha.mjs/);
