@@ -136,6 +136,7 @@ import { JourneyTimeline } from "./JourneyTimeline";
 import { GlobeTimeScrubber, formatCursorDate } from "./GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "./useGlobeTimeCursor";
 import { useModalFocus } from "./useModalFocus";
+import { MobileSheetGrabber, useMobileSheetDetents } from "./mobileSheetDetents";
 import { desktopHeaderMoreActions, desktopMoreMenuColumns, resolveDesktopRightSurface } from "./desktopAtlasChrome";
 import { useAutoRouteRefresh } from "./useAutoRouteRefresh";
 import { mergeAutoRouteRefresh } from "./autoRouteSnapping";
@@ -1618,7 +1619,6 @@ export function LivingAtlasApp({
   const mobileSheetStoryActive = storyJourneyId !== null;
   const mobileChipStartX = useRef<number | null>(null);
   const mobileChipSwiped = useRef(false);
-  const mobileSheetStartY = useRef<number | null>(null);
   const mobilePickerDialogRef = useModalFocus<HTMLElement>(
     () => setMobilePickerOpen(false),
     isMobileV2 && mobilePickerOpen,
@@ -1714,6 +1714,11 @@ export function LivingAtlasApp({
     () => setMobileSheetJourneyId(null),
     mobileSheetActive,
     mobileSheetChildActive,
+  );
+  const mobileSheetDetents = useMobileSheetDetents(
+    mobileSheetDialogRef,
+    () => setMobileSheetJourneyId(null),
+    mobileSheetJourneyId,
   );
   const crossPointReading = resolveCrossPointReading(
     crossPointReadingIntent,
@@ -4316,28 +4321,17 @@ export function LivingAtlasApp({
             role="dialog"
             aria-modal="true"
             aria-labelledby="mobile-v2-sheet-title"
+            {...mobileSheetDetents.sheetProps}
             style={{
               "--journey-color": mobileSheetJourney.lightColor,
               "--journey-gradient": getLightEffectGradient(mobileSheetJourney.lightEffect, mobileSheetJourney.lightColor),
             } as React.CSSProperties}
           >
-            <button
-              className="mobile-v2__sheet-handle"
-              type="button"
-              aria-label="向下滑动或点击关闭旅程详情"
-              onClick={() => setMobileSheetJourneyId(null)}
-              onPointerDown={(event) => {
-                mobileSheetStartY.current = event.clientY;
-              }}
-              onPointerUp={(event) => {
-                const start = mobileSheetStartY.current;
-                mobileSheetStartY.current = null;
-                if (start !== null && event.clientY - start > 64) setMobileSheetJourneyId(null);
-              }}
-              onPointerCancel={() => {
-                mobileSheetStartY.current = null;
-              }}
-            ><span aria-hidden="true" /></button>
+            <MobileSheetGrabber
+              detent={mobileSheetDetents.detent}
+              onHandleClick={mobileSheetDetents.onHandleClick}
+              toggle={mobileSheetDetents.toggle}
+            />
             <div className="mobile-v2__sheet-heading">
               <p>{mobileSheetJourney.startedOn}{mobileSheetJourney.endedOn ? ` — ${mobileSheetJourney.endedOn}` : ""}</p>
               <h2 id="mobile-v2-sheet-title">{mobileSheetJourney.title}</h2>

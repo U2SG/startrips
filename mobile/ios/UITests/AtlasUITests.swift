@@ -67,6 +67,58 @@ final class AtlasUITests: XCTestCase {
     }
 
     @MainActor
+    func testJourneySheetHasMediumAndLargeDetents() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture"]
+        app.launch()
+        let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
+        XCTAssertTrue(chip.waitForExistence(timeout: 30))
+        addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
+        // The accessible toggle names the next action, so it doubles as the detent probe.
+        let expand = app.webViews.buttons["展开旅程详情"]
+        let collapse = app.webViews.buttons["收起旅程详情"]
+        let mediumHandle = app.webViews.buttons["向下滑动或点击关闭旅程详情"]
+        let largeHandle = app.webViews.buttons["向下滑动或点击收起旅程详情"]
+        func drag(_ handle: XCUIElement, by multiple: CGFloat) {
+            let from = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            from.press(forDuration: 0.05,
+                       thenDragTo: handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5 + multiple)))
+        }
+
+        chip.tap()
+        XCTAssertTrue(expand.waitForExistence(timeout: 10))
+        XCTAssertTrue(mediumHandle.exists)
+        capture(app, "sheet-medium")
+
+        drag(mediumHandle, by: -3)
+        XCTAssertTrue(collapse.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.webViews.buttons["打开故事：起点"].exists || app.webViews.buttons["打开故事"].exists)
+        capture(app, "sheet-large")
+
+        drag(largeHandle, by: 3)
+        XCTAssertTrue(expand.waitForExistence(timeout: 10), "large must step down to medium, not close")
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let window = app.windows.firstMatch
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline && !(window.frame.width > window.frame.height) {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertTrue(expand.waitForExistence(timeout: 10))
+        assertDarkFullBleed(capture(app, "sheet-medium-landscape", screen: true), checkSides: true)
+        drag(mediumHandle, by: -2)
+        XCTAssertTrue(collapse.waitForExistence(timeout: 10))
+        capture(app, "sheet-large-landscape", screen: true)
+
+        drag(largeHandle, by: 2)
+        XCTAssertTrue(expand.waitForExistence(timeout: 10))
+        drag(mediumHandle, by: 2)
+        XCTAssertTrue(expand.waitForNonExistence(timeout: 10), "medium must close on a downward swipe")
+        XCTAssertTrue(chip.waitForExistence(timeout: 10))
+    }
+
+    @MainActor
     func testLargestAccessibilityTextKeepsEntryAndAtlasUsable() throws {
         let app = XCUIApplication()
         let largest = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]

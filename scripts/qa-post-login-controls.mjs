@@ -779,8 +779,88 @@ async function verifyMobileJourneySheetHandle() {
     await waitForEmptyStack();
     const dragStackDepth = await stackDepth();
 
+    // Two detents: medium (no inner scroll) ⇄ large (thin globe strip, the
+    // only scrolling state); swipe down steps large → medium → close, and an
+    // accessible toggle expands/collapses without any gesture.
+    const swipe = async (dy) => {
+      const bounds = await handle.boundingBox();
+      if (!bounds) throw new Error("journey sheet handle has no bounds");
+      const sx = bounds.x + bounds.width / 2;
+      const sy = bounds.y + bounds.height / 2;
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: sx, y: sy }] });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: sx, y: sy + dy / 2 }] });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: sx, y: sy + dy }] });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    };
+    const detentState = () => sheet.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return {
+        detent: element.getAttribute("data-detent"),
+        overflowY: getComputedStyle(element).overflowY,
+        top: Math.round(box.top),
+        height: Math.round(box.height),
+      };
+    });
+    const waitForDetent = (detent) => page.waitForFunction(
+      (value) => document.querySelector(".mobile-v2__sheet")?.getAttribute("data-detent") === value,
+      detent,
+      { timeout: 5_000 },
+    ).then(() => true, () => false);
+
+    await openSheet();
+    const medium = await detentState();
+    await swipe(-140);
+    const expandedBySwipe = await waitForDetent("large");
+    const large = await detentState();
+    const toggle = sheet.locator(".mobile-v2__sheet-detent-toggle");
+    const toggleLabelLarge = await toggle.textContent();
+    // Keyboard / assistive path: the toggle is clipped until focused, so drive it by focus + Enter.
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+    const collapsedByToggle = await waitForDetent("medium");
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+    const expandedByToggle = await waitForDetent("large");
+    await swipe(110);
+    const collapsedBySwipe = await waitForDetent("medium");
+    const stillOpenAfterCollapse = await sheet.count() === 1;
+    await swipe(110);
+    await sheet.waitFor({ state: "detached", timeout: 5_000 }).catch(() => undefined);
+    const closedFromMedium = await sheet.count() === 0;
+    await waitForEmptyStack();
+    const detentStackDepth = await stackDepth();
+    const detents = {
+      medium,
+      large,
+      expandedBySwipe,
+      toggleLabelLarge,
+      collapsedByToggle,
+      expandedByToggle,
+      collapsedBySwipe,
+      stillOpenAfterCollapse,
+      closedFromMedium,
+      detentStackDepth,
+    };
+    const detentsFailed = medium.detent !== "medium"
+      || medium.overflowY !== "hidden"
+      || !expandedBySwipe
+      || large.overflowY !== "auto"
+      // Large leaves a thin globe strip: well above medium, but not covering the header area entirely.
+      || large.height < medium.height
+      || large.height < 844 * 0.75
+      || large.top < 60
+      || large.top > 140
+      || toggleLabelLarge !== "收起旅程详情"
+      || !collapsedByToggle
+      || !expandedByToggle
+      || !collapsedBySwipe
+      || !stillOpenAfterCollapse
+      || !closedFromMedium
+      || detentStackDepth !== 0;
+
     const result = {
       name: "mobile-v2-journey-sheet-handle",
+      detents,
       handleHeight: handleBox ? Math.round(handleBox.height) : null,
       handleWidth: handleBox ? Math.round(handleBox.width) : null,
       tapClosed,
@@ -793,7 +873,8 @@ async function verifyMobileJourneySheetHandle() {
       || !tapClosed
       || tapStackDepth !== 0
       || !dragClosed
-      || dragStackDepth !== 0;
+      || dragStackDepth !== 0
+      || detentsFailed;
     if (result.failed) failed = true;
     results.push(result);
   } finally {
