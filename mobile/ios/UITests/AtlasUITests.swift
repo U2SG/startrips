@@ -53,9 +53,17 @@ final class AtlasUITests: XCTestCase {
         XCTAssertTrue(chip.waitForExistence(timeout: 30))
         addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
         XCUIDevice.shared.orientation = .landscapeLeft
+        // Capture only after the window has rotated and the rotation animation settled.
+        let window = app.windows.firstMatch
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline && !(window.frame.width > window.frame.height) {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+        XCTAssertGreaterThan(window.frame.width, window.frame.height)
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         XCTAssertTrue(chip.waitForExistence(timeout: 10))
         XCTAssertTrue(app.webViews.buttons["切换账户或分享"].isHittable)
-        assertDarkFullBleed(capture(app, "shell-landscape"), checkSides: true)
+        assertDarkFullBleed(capture(app, "shell-landscape", screen: true), checkSides: true)
     }
 
     @MainActor
@@ -97,8 +105,9 @@ final class AtlasUITests: XCTestCase {
 
     @MainActor
     @discardableResult
-    private func capture(_ app: XCUIApplication, _ name: String) -> XCUIScreenshot {
-        let screenshot = app.screenshot()
+    private func capture(_ app: XCUIApplication, _ name: String, screen: Bool = false) -> XCUIScreenshot {
+        // The screen capture follows the device orientation; used for landscape evidence.
+        let screenshot = screen ? XCUIScreen.main.screenshot() : app.screenshot()
         let attachment = XCTAttachment(screenshot: screenshot)
         attachment.name = name
         attachment.lifetime = .keepAlways

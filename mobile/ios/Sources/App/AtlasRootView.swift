@@ -278,19 +278,23 @@ private struct WelcomeView: View {
                         }
                         #endif
                         Button(action: signIn) {
-                            Text("登录").frame(maxWidth: .infinity, minHeight: 52).contentShape(Capsule())
+                            Text("登录")
+                                .padding(.vertical, 8).padding(.horizontal, 20)
+                                .frame(maxWidth: .infinity, minHeight: 52).contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(AtlasPalette.background)
-                        .background(Capsule().fill(AtlasPalette.accent))
+                        .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(AtlasPalette.accent))
                         .accessibilityIdentifier("welcome.sign-in")
                         Button(action: pasteShare) {
                             Label("粘贴分享链接", systemImage: "doc.on.clipboard")
-                                .frame(maxWidth: .infinity, minHeight: 52).contentShape(Capsule())
+                                .multilineTextAlignment(.center)
+                                .padding(.vertical, 8).padding(.horizontal, 20)
+                                .frame(maxWidth: .infinity, minHeight: 52).contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(AtlasPalette.ink)
-                        .overlay(Capsule().stroke(AtlasPalette.line))
+                        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(AtlasPalette.line))
                         .accessibilityIdentifier("welcome.paste-share")
                     }
                     .font(.headline)
