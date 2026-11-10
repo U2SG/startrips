@@ -112,6 +112,13 @@ describe("journal streaming transport", () => {
     expect(fetcher).toHaveBeenCalledOnce();
   });
 
+  it("reads segment counts only as a bounded pair", () => {
+    expect(readJournalImportSnapshot({ ...progress, segments: 3, segmentsDone: 1 }, jobId, input)).toEqual({ phase: "receiving", characters: 18, chunks: 3, segments: 3, segmentsDone: 1 });
+    expect(readJournalImportSnapshot(progress, jobId, input)).toEqual({ phase: "receiving", characters: 18, chunks: 3 });
+    expect(() => readJournalImportSnapshot({ ...progress, segments: 2, segmentsDone: 3 }, jobId, input)).toThrow();
+    expect(() => readJournalImportSnapshot({ ...progress, segments: 2 }, jobId, input)).toThrow();
+  });
+
   it("does not expose provider response bodies on failure", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("secret-provider-url-and-key", { status: 403 }));
     await expect(createJournalImportClient(fetcher).prepare(input, jobId, new AbortController().signal)).rejects.toThrow("当前账户不能导入");

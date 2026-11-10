@@ -22,10 +22,10 @@ const jobMap = new Map();
 const frame = (event, data) => new TextEncoder().encode('event: ' + event + '\\r\\ndata: ' + JSON.stringify(data) + '\\r\\n\\r\\n');
 const qa = window.__qa = { posts: 0, cancels: 0, observes: 0, snapshots: 0, writes: 0, closed: 0, scope: 0, account: 0, holdSubmit: false, holdCancel: false, jobs: [] };
 const inputFor = scope => ({ id: scope ? '33333333-3333-4333-8333-333333333333' : '11111111-1111-4111-8111-111111111111', atlasId: scope ? 'other-atlas' : 'fictional-atlas', title: scope ? '另一合成旅程' : '合成流式验收旅程', startedOn: '2028-06-01', endedOn: null, note: '', lightColor: '#ffffff', revision: 0, createdByUserId: 'fictional', createdAt: '2028-06-01T00:00:00Z', updatedAt: '2028-06-01T00:00:00Z', routePoints: [], media: [] });
-const progress = job => ({ jobId: job.id, status: job.status, phase: job.phase ?? 'receiving', characters: job.characters, chunks: 1 });
+const progress = job => ({ jobId: job.id, status: job.status, phase: job.phase ?? 'receiving', characters: job.characters, chunks: 1, ...(job.segments ?? {}) });
 function snapshot(job) { return job.final ?? progress(job); }
 function emit(job, event, data) { for (const c of job.controllers) { try { c.enqueue(frame(event, data)); } catch {} } }
-qa.progress = (index, characters, phase = "receiving") => { const job = qa.jobs[index]; job.phase = phase; job.characters = characters; emit(job, 'progress', progress(job)); };
+qa.progress = (index, characters, phase = "receiving", segments) => { const job = qa.jobs[index]; job.phase = phase; job.characters = characters; job.segments = segments; emit(job, 'progress', progress(job)); };
 qa.complete = index => { const job = qa.jobs[index], chapters = previewJournalImport(job.body.source, job.body.fallbackDate); Object.assign(chapters[0].events[0], {status:'actual',localDate:'2028-06-03',localTime:'23:30'}); job.status = 'completed'; job.final = { jobId: job.id, status: 'completed', planDigest: 'a'.repeat(64), envelope: { signature: 'b'.repeat(64), plan: { version: 2, target: { journeyId: job.body.journeyId, atlasId: job.atlasId }, before: { revision: 0, chapters: [] }, after: { revision: 1, chapters }, importedChapterIds: chapters.map(c => c.id), expires: Date.now() + 3600000 } } }; emit(job, 'completed', job.final); };
 qa.disconnect = index => { for (const c of qa.jobs[index].controllers) { try { c.close(); } catch {} } };
 qa.failPartial = index => { const job = qa.jobs[index]; job.status = 'failed'; job.final = {jobId:job.id,status:'failed',error:'INTENT_STREAM_INVALID'}; for(const c of job.controllers) {try {c.enqueue(new TextEncoder().encode('event: completed\\ndata: {')); c.close();} catch {}} };
@@ -79,6 +79,12 @@ try {
       assert.equal(await page.locator('.daily-journal__import-status').innerText().then(t=>t.includes('40,000')||t.includes('%')),false);
       await noOverflow(); await page.locator('.daily-journal__import-status').scrollIntoViewIfNeeded(); await page.screenshot({path:`${output}/${phase}-${viewport.width}x${viewport.height}.png`});
     }
+    await page.evaluate(()=>window.__qa.progress(0,40000,'receiving',{segments:3,segmentsDone:1}));
+    await page.locator('.daily-journal__import-count').filter({hasText:'1/3'}).waitFor();
+    await page.getByText('正在接收识别结果…',{exact:true}).waitFor();
+    assert.equal(await page.getByRole('progressbar').getAttribute('aria-valuenow'),'1');
+    assert.equal(await page.getByRole('progressbar').getAttribute('aria-valuemax'),'3');
+    await noOverflow(); await page.locator('.daily-journal__import-status').scrollIntoViewIfNeeded(); await page.screenshot({path:`${output}/segments-${viewport.width}x${viewport.height}.png`});
     await page.evaluate(()=>window.__qa.progress(0,Number.MAX_SAFE_INTEGER));
     await page.getByText('正在接收识别结果…',{exact:true}).waitFor(); await noDraft();
     if(viewport.width===320) assert.equal(await page.locator('.daily-journal__import-activity span').evaluate(el=>getComputedStyle(el).animationName),'none');

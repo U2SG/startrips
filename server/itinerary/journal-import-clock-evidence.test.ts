@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { prepareJournalImport } from "./journal-import-workflow";
+import { JOURNAL_DEGRADED_QUESTION } from "./journal-import-workflow";
 import { mockChapter, mockJournalModel, toolResponse } from "./journal-import-test-fixtures";
 // Mock semantic clock claims. The server checks shape/provenance, not prose interpretation.
 async function prepare(source: string, time: string | null, evidence: string | null, end: string | null = null, questions = time === null ? ["钟点待确认"] : []) {
@@ -29,12 +30,18 @@ it("preserves wrapped meridiem and midnight without inferring a new date", async
   const source = "（晚上11:30）到（凌晨1:00） 实际：途中。";
   expect((await prepare(source, "23:30", source, "01:00")).chapters[0].events[0]).toMatchObject({ source, localTime: null, localDate: null });
 });
-it.each(["25:00", "10:60", "9:00", "09:000"])("rejects malformed normalized clock %s", async time => {
-  await expect(prepare("09:00 出发", time, "09:00")).rejects.toMatchObject({ code: "JOURNAL_IMPORT_MALFORMED" });
+const degradedLine = async (result: ReturnType<typeof prepare>) => {
+  const draft = await result;
+  expect(draft.degradedLines).toBe(1);
+  expect(draft.chapters[0].events[0]).toMatchObject({ status: "uncertain", localTime: null, localDate: null });
+  expect(draft.chapters[0].suggestions[0].questions).toContain(JOURNAL_DEGRADED_QUESTION);
+};
+it.each(["25:00", "10:60", "9:00", "09:000"])("leaves a line with malformed normalized clock %s for review", async time => {
+  await degradedLine(prepare("09:00 出发", time, "09:00"));
 });
-it("rejects ungrounded or inconsistent clock fields", async () => {
-  await expect(prepare("约09:00", null, "约09:00", null, [])).rejects.toMatchObject({ code: "JOURNAL_IMPORT_MALFORMED" });
-  await expect(prepare("09:00", "09:00", "fabricated")).rejects.toMatchObject({ code: "JOURNAL_IMPORT_MALFORMED" });
-  await expect(prepare("09:00", "09:00", null)).rejects.toMatchObject({ code: "JOURNAL_IMPORT_MALFORMED" });
-  await expect(prepare("约09:00", null, "约09:00", "10:00")).rejects.toMatchObject({ code: "JOURNAL_IMPORT_MALFORMED" });
+it("leaves lines with ungrounded or inconsistent clock fields for review", async () => {
+  await degradedLine(prepare("约09:00", null, "约09:00", null, []));
+  await degradedLine(prepare("09:00", "09:00", "fabricated"));
+  await degradedLine(prepare("09:00", "09:00", null));
+  await degradedLine(prepare("约09:00", null, "约09:00", "10:00"));
 });

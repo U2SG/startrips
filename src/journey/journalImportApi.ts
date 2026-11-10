@@ -6,7 +6,8 @@ const MAX_FRAME = 2_000_000;
 export const JOURNAL_IMPORT_MAX_TEXT = 100_000;
 export type JournalImportInput = { journeyId: string; atlasId: string; sentence: string; source: string; fallbackDate: string };
 export type JournalImportSubmission = JournalImportInput & { requestId: string; provider: { baseUrl: string; model: string } };
-export type JournalImportProgress = { phase: "queued" | "connecting" | "receiving" | "validating"; characters: number; chunks: number };
+/** segments/segmentsDone count server-side source segments; absent from older snapshots. */
+export type JournalImportProgress = { phase: "queued" | "connecting" | "receiving" | "validating"; characters: number; chunks: number; segments?: number; segmentsDone?: number };
 export type JournalImportOutcome =
   | { status: "completed"; draft: DailyJournal }
   | { status: "cancelled" }
@@ -60,7 +61,10 @@ export function readJournalImportSnapshot(value: unknown, jobId: string, input: 
   if ((value.status !== "queued" && value.status !== "running")
     || !["queued", "connecting", "receiving", "validating"].includes(value.phase as string)
     || !counter(value.characters) || !counter(value.chunks)) throw new JournalImportProtocolError();
-  return { phase: value.phase as JournalImportProgress["phase"], characters: value.characters, chunks: value.chunks };
+  const progress: JournalImportProgress = { phase: value.phase as JournalImportProgress["phase"], characters: value.characters, chunks: value.chunks };
+  if (value.segments === undefined && value.segmentsDone === undefined) return progress;
+  if (!counter(value.segments) || !counter(value.segmentsDone) || value.segmentsDone > value.segments) throw new JournalImportProtocolError();
+  return { ...progress, segments: value.segments, segmentsDone: value.segmentsDone };
 }
 
 function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {

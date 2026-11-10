@@ -6,6 +6,12 @@ import { requestIntentModelAnswer, type IntentModelOptions, type ModelMessage, t
 export class ToolArgumentError extends Error {
   constructor(readonly path: string, readonly code: string) { super(code); }
 }
+/** Bounded correction exhausted. Carries only the last server-chosen path/code. */
+export class ToolArgumentsRejectedError extends ShareIntentError {
+  constructor(code: string, readonly path: string, readonly argumentCode: string) {
+    super(code, "Staging arguments could not be corrected within the bounded budget", 422);
+  }
+}
 export type ToolSchema = {
   type: string | string[]; description?: string; enum?: readonly unknown[];
   properties?: Record<string, ToolSchema>; required?: string[]; additionalProperties?: false;
@@ -86,7 +92,7 @@ export async function runStagingTool<A, R>(options: IntentModelOptions, tool: {
       // credentials or source are placed in a tool error message.
       const feedback = messagesForError(error);
       const fingerprint = createHash("sha256").update(JSON.stringify([error.path, error.code])).digest("hex");
-      if (failures.has(fingerprint) || attempt === MAX_CALLS - 1) throw fail(tool.argumentFailureCode ?? "TOOL_ARGUMENTS_INVALID", "Staging arguments could not be corrected within the bounded budget", 422);
+      if (failures.has(fingerprint) || attempt === MAX_CALLS - 1) throw new ToolArgumentsRejectedError(tool.argumentFailureCode ?? "TOOL_ARGUMENTS_INVALID", error.path, error.code);
       failures.add(fingerprint);
       messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(feedback) });
       continue;

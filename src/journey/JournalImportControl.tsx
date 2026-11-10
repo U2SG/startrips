@@ -32,6 +32,8 @@ export function JournalImportProgress({ state, onStop, onResume }: {
   const running = ["submitting", "observing", "stopping"].includes(state.status);
   const paused = state.status === "paused";
   const label = journalImportStatusLabel(state);
+  // Completed source segments are the only determinate measure; output size is not.
+  const segments = state.status === "observing" && state.progress?.segments ? { done: state.progress.segmentsDone ?? 0, total: state.progress.segments } : null;
   const detail = state.message || (state.status === "stopping" ? "正在确认任务停止，请稍候。"
     : state.status === "observing" && state.progress?.phase === "validating" ? "完整性检查通过后，将填入预览供你确认。"
     : running ? "大段原文可能需要较长时间，完成后会自动填入预览。" : "");
@@ -39,6 +41,7 @@ export function JournalImportProgress({ state, onStop, onResume }: {
     <div className="daily-journal__import-status-heading">
       <div role={paused || state.status === "failed" ? "alert" : "status"} aria-atomic="true">
         <strong>{label}</strong>
+        {segments ? <span className="daily-journal__import-count">{segments.done}/{segments.total}</span> : null}
         {detail ? <p>{detail}</p> : null}
         {paused && !state.stopping ? <p>后台任务可能仍在处理。继续接收会连接同一个任务，不会重新生成。</p> : null}
       </div>
@@ -47,7 +50,10 @@ export function JournalImportProgress({ state, onStop, onResume }: {
         {(running && state.status !== "stopping") || (paused && !state.stopping) ? <button type="button" onClick={onStop}>停止</button> : null}
       </div>
     </div>
-    {running ? <div className="daily-journal__import-activity" role="progressbar" aria-label={label}><span /></div> : null}
+    {running ? <div className="daily-journal__import-activity" role="progressbar" aria-label={label}
+      {...segments ? { "aria-valuemin": 0, "aria-valuemax": segments.total, "aria-valuenow": segments.done } : {}}>
+      <span style={segments ? { width: `${(segments.done / segments.total) * 100}%` } : undefined} />
+    </div> : null}
   </div>;
 }
 

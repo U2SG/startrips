@@ -14,14 +14,14 @@ export const qaLines = [
 export const qaInput = { sentence: '导入这份流水账并关联已入住酒店', source: qaLines.join('\n'), fallbackDate: '2028-06-01' };
 export function qaDraft() {
   const event = (line: number, status: string, time: string, timeEnd: string | null = null, timeEvidence = time) => ({
-    line, evidence: qaLines[line], status, dateStatus: "absent", localDate: null, dateEvidence: null,
-    time, timeEnd, timeEvidence, placeName: null, reading: qaLines[line], questions: [] as string[],
+    line, status, dateStatus: "absent", localDate: null, dateEvidence: null,
+    time: time as string | null, timeEnd, timeEvidence, placeName: null, questions: [] as string[],
   });
   return { chapters: [
-    { firstLine: 0, lastLine: 5, headingEvidence: qaLines[0], dateStatus: 'range', questions: [], date: '2028-06-03', dateEnd: '2028-06-05', dateEvidence: qaLines[0], events: [
+    { firstLine: 0, lastLine: 5, heading: true, dateStatus: 'range', questions: [], date: '2028-06-03', dateEnd: '2028-06-05', dateEvidence: qaLines[0], events: [
       event(1, 'actual', '23:30'), event(2, 'planned', '07:30'), event(3, 'cancelled', '08:00'), event(4, 'uncertain', '10:30', '13:30', '10:30–13:30'),
     ] },
-    { firstLine: 6, lastLine: 8, headingEvidence: qaLines[6], dateStatus: 'single', questions: [], date: '2028-06-06', dateEnd: null, dateEvidence: qaLines[6], events: [
+    { firstLine: 6, lastLine: 8, heading: true, dateStatus: 'single', questions: [], date: '2028-06-06', dateEnd: null, dateEvidence: qaLines[6], events: [
       event(7, 'actual', '23:30', '01:00', '晚上11:30–凌晨1:00'), event(8, 'actual', '18:20'),
     ] },
   ] };
