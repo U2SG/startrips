@@ -33,7 +33,7 @@ test('evidence: an uncorrectable structural answer falls back to a whole review 
   const fallback = await prepareJournalImport(qaInput, before, { ...qaModel, fetcher: qaAnswer(malformed) });
   assert.deepEqual(fallback.degradations, [{ segment: 0, path: '$.chapters[1].events', code: 'LINE_COVERAGE' }]);
   const added = fallback.chapters.filter(c => fallback.importedChapterIds.includes(c.id));
-  assert.equal(added.map(c => c.source).join('\n'), qaInput.source);
+  assert.deepEqual(added.map(c => c.source).sort(), [qaLines.slice(0, 6).join('\n'), qaLines.slice(6).join('\n')].sort());
   // A day identical to saved content keeps the saved chapter; new ones are review-only.
   const fresh = added.filter(c => !before.chapters.some(b => b.id === c.id));
   assert.ok(fresh.length > 0 && fresh.flatMap(c => c.events).every(e => e.status === 'uncertain' && e.localTime === null));
