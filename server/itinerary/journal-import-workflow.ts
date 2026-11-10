@@ -155,16 +155,25 @@ function assemble(results: StagedChapter[][], lines: readonly string[], input: {
     // A merged chapter's questions can exceed one suggestion's capacity: degrade that line.
     const kept = c.events.map(e => c.questions.length + e.questions.length + notes.length > 20 ? degraded(e.line) : e);
     degradedLines += kept.filter(e => e.degraded).length;
-    const events = kept.map(e => {
-      const eventId = id(`${input.fallbackDate}\0${input.source}\0${e.line}`);
-      if (e.placeName !== null) placeClaims.push({ eventId, name: e.placeName, date: e.localDate ?? (e.dateStatus === "absent" && c.dateStatus === "single" ? c.date : null) });
+    const rawSource = lines.slice(c.firstLine, c.lastLine + 1).join("\n");
+    // IDs derive from the full source and absolute lines. A saved chapter from the
+    // same source grouped or dated differently already owns them: only then salt.
+    const derive = (salt: string) => ({ chapter: id(`${input.fallbackDate}\0${input.source}\0chapter${c.firstLine}${salt}`), events: kept.map(e => id(`${input.fallbackDate}\0${input.source}\0${e.line}${salt}`)) });
+    const claim = (eventIds: string[]) => kept.forEach((e, i) => {
+      if (e.placeName !== null) placeClaims.push({ eventId: eventIds[i], name: e.placeName, date: e.localDate ?? (e.dateStatus === "absent" && c.dateStatus === "single" ? c.date : null) });
+    });
+    const prior = before.chapters.find(old => old.source === rawSource && (old.importDate ?? old.date) === (c.date ?? input.fallbackDate));
+    if (prior) { claim(derive("").events); importedChapterIds.push(prior.id); continue; }
+    const taken = (ids: string[]) => ids.some(x => chapters.some(old => old.id === x || old.events.some(e => e.id === x)));
+    let ids = derive("");
+    for (let n = 1; taken([ids.chapter, ...ids.events]); n++) ids = derive(`\0${c.date ?? input.fallbackDate}\0${n}`);
+    claim(ids.events);
+    const events = kept.map((e, i) => {
+      const eventId = ids.events[i];
       return { id: eventId, source: lines[e.line], text: lines[e.line], status: e.status, localDate: e.localDate, localTime: e.localTime,
         timeContext: e.timeContext, edited: false, mediaIds: [], routePointId: null };
     });
-    const rawSource = lines.slice(c.firstLine, c.lastLine + 1).join("\n");
-    const prior = before.chapters.find(old => old.source === rawSource && (old.importDate ?? old.date) === (c.date ?? input.fallbackDate));
-    if (prior) { importedChapterIds.push(prior.id); continue; }
-    const chapterId = id(`${input.fallbackDate}\0${input.source}\0chapter${c.firstLine}`); importedChapterIds.push(chapterId);
+    const chapterId = ids.chapter; importedChapterIds.push(chapterId);
     chapters.push({ id: chapterId, source: rawSource, date: c.date ?? input.fallbackDate, importDate: c.date ?? input.fallbackDate,
       title: c.heading ? lines[c.firstLine].trim().slice(0, 200) : "", events,
       suggestions: events.map((e, i) => ({ eventId: e.id, text: e.source, background: "", questions: [...c.questions, ...kept[i].questions, ...notes] })),

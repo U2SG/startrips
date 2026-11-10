@@ -184,6 +184,18 @@ it("falls back to a complete preview after repeated invalid chapter grouping, ne
   expect(result.chapters[0].events.map(e => [e.text, e.status])).toEqual([[text, "uncertain"], [text, "uncertain"]]);
 });
 
+it("keeps IDs unique when a saved chapter of the same source was dated differently", async () => {
+  const source = "2028年6月3日她出发。\n她返回。", dated = mockChapter(source);
+  Object.assign(dated, { dateStatus: "single", date: "2028-06-03", dateEvidence: "2028年6月3日" });
+  const saved = await prepare(source, dated);
+  const result = await prepareJournalImport({ source, sentence: "导入", fallbackDate: "2028-06-01" }, { revision: 1, chapters: saved.chapters },
+    { ...mockJournalModel, fetcher: async () => toolResponse("stage_journal_import", { chapters: [mockChapter(source)] }) });
+  expect(result.chapters).toHaveLength(2);
+  const ids = result.chapters.flatMap(c => [c.id, ...c.events.map(e => e.id)]);
+  expect(new Set(ids).size).toBe(ids.length);
+  expect(result.chapters[0]).toEqual(saved.chapters[0]);
+});
+
 describe("segmented staging", () => {
   it("cuts deterministically: whole days up to the budget, then blank lines, then any line", () => {
     const day = (d: number, n: number) => [`2028年6月${d}日`, prose(n, "甲")];
