@@ -99,6 +99,18 @@ declare global {
   }
 }
 
+// The snapshot could not be decoded, so there is no trusted scope or revision to echo.
+export function sendSceneFailure() {
+  const message = { version: 1, kind: "sceneFailed", requestId: crypto.randomUUID() };
+  window.webkit?.messageHandlers?.atlas?.postMessage(JSON.stringify(message));
+}
+
+// Decode a native snapshot; on failure, tell native so its reload control appears.
+export function decodeSnapshotOrReport(json: string): Snapshot | null {
+  try { return decodeSnapshot(JSON.parse(json)); }
+  catch { sendSceneFailure(); return null; }
+}
+
 export function send(snapshot: Snapshot, kind: SceneEvent["kind"], target: Partial<Pick<SceneEvent, "journeyId" | "routePointId" | "assetId" | "focusRequestId">> = {}) {
   const message: SceneEvent = { version: 1, kind, scopeId: snapshot.scopeId, revision: snapshot.revision,
     requestId: crypto.randomUUID(), ...target };

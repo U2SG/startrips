@@ -23,6 +23,31 @@ final class AppTests: XCTestCase {
         #endif
     }
 
+    func testUnreadableSceneSnapshotRaisesNativeRecovery() throws {
+        let data = try fixture()
+        let router = AppRouter(defaults: UserDefaults(suiteName: "app.startrips.scene-failed." + UUID().uuidString)!)
+        router.install(data.snapshot.journeys, identity: "scene-owner", access: .owner, earthExperience: "default")
+        // The scene cannot echo a scope it failed to decode.
+        let json = #"{"version":1,"kind":"sceneFailed","requestId":"\#(UUID().uuidString)"}"#
+        let failed = try JSONDecoder().decode(SceneEvent.self, from: Data(json.utf8))
+        XCTAssertNoThrow(try validateSceneEvent(failed, snapshot: router.snapshot))
+        router.receive(failed)
+        XCTAssertEqual(router.error, "地球数据无法读取，请刷新重试。")
+        router.error = nil
+        router.receive(failed)
+        XCTAssertNil(router.error, "the same request must not raise recovery twice")
+
+        let targeted = SceneEvent(version: 1, kind: .sceneFailed, scopeId: "", requestId: UUID().uuidString,
+                                  revision: -1, journeyId: data.snapshot.journeys[0].id)
+        XCTAssertThrowsError(try validateSceneEvent(targeted, snapshot: router.snapshot))
+        // Every other kind still has to carry and match the live scope and revision.
+        let unscoped = #"{"version":1,"kind":"invalidate","requestId":"\#(UUID().uuidString)"}"#
+        XCTAssertThrowsError(try JSONDecoder().decode(SceneEvent.self, from: Data(unscoped.utf8)))
+        let foreign = SceneEvent(version: 1, kind: .invalidate, scopeId: "other-owner",
+                                 requestId: UUID().uuidString, revision: router.revision)
+        XCTAssertThrowsError(try validateSceneEvent(foreign, snapshot: router.snapshot))
+    }
+
     func testNativeHeaderSwitchAccessIsScopeBoundAndDeduplicated() throws {
         let data = try fixture()
         let defaults = UserDefaults(suiteName: "app.startrips.header-fixture." + UUID().uuidString)!

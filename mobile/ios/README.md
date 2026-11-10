@@ -12,11 +12,18 @@ iPhone. No signing identity or deployment credential is committed.
 The installed app connects directly to the first-party HTTPS deployment at
 `https://106.53.130.142`; ordinary users never configure a server.
 Only an explicit DEBUG launch with `-allow-server-override` shows a developer
-test-origin field. Sign in and select the Atlas in the private WebView, then
-return to the native Atlas.
-Guest entry accepts the existing `/share#<token>` link. Tokens remain in native
-session memory; guest requests carry only the bearer header and never owner
-cookies. Switching access modes clears native navigation and the local scene.
+test-origin field. The dark welcome screen offers only 登录 and 粘贴分享链接:
+sign in and select the Atlas in the private WebView, then return to the native
+Atlas. A later launch reopens the Atlas directly while the persistent owner
+profile still holds a session; a missing or expired session returns to the
+welcome screen instead of showing an error.
+Guest entry reads a copied `/share#<token>` link from the pasteboard. Tokens
+remain in native session memory; guest requests carry only the bearer header
+and never owner cookies. The Atlas header's account button opens a native menu
+(switch Atlas, paste a share link, sign out); switching access modes clears
+native navigation and the local scene, and sign-out also removes the profile's
+cookies. The shell is dark and full-bleed: the scene draws under the status bar
+and home indicator and pads itself with `env(safe-area-inset-*)`.
 
 ## Scene and navigation
 

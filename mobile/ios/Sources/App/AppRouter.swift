@@ -27,6 +27,9 @@ final class AppRouter: ObservableObject {
 
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
 
+    /// True once an owner or guest Atlas has been installed for the current scope.
+    var installed: Bool { identity != nil }
+
     var snapshot: SceneSnapshot {
         SceneSnapshot(version: 1, scopeId: scopeId, revision: revision, access: access,
                       earthExperience: earthExperience, journeys: journeys, selection: selection, active: path.isEmpty)
@@ -147,6 +150,11 @@ final class AppRouter: ObservableObject {
             // Only the active, trusted local Atlas may release this identity.
             guard path.isEmpty else { return }
             onSwitchAccess?()
+        case .sceneFailed:
+            // The scene could not read its snapshot; surface the native reload,
+            // which does not depend on the WKWebView's own controls.
+            guard path.isEmpty else { return }
+            error = "地球数据无法读取，请刷新重试。"
         case .ready: break
         }
     }

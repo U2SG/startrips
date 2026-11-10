@@ -32,6 +32,9 @@ final class AtlasSession: ObservableObject {
     @Published var shareText = ""
     @Published var busy = false
     @Published var loginPresented = false
+    // Set when the owner session is missing or expired; the shell returns to sign-in
+    // instead of showing an Atlas error.
+    @Published var signInRequired = false
     private(set) var origin: URL?
     private(set) var guestToken: String?
     private(set) var activeIdentity: String?
@@ -130,6 +133,24 @@ final class AtlasSession: ObservableObject {
 
     func isOwnerLoginCurrent(_ captured: UUID, at url: URL) -> Bool {
         loginPresented && generation == captured && origin == url && guestToken == nil
+    }
+
+    // A restored owner profile is only worth an Atlas request when it still holds
+    // a cookie for the pinned origin; otherwise first launch goes straight to sign-in.
+    func hasOwnerCredentials() async -> Bool {
+        guard guestToken == nil, let origin else { return false }
+        return !(await credentials(for: origin)).isEmpty
+    }
+
+    // Ends the server session when reachable, then removes every cookie from the
+    // active owner profile so the next launch cannot restore it.
+    func signOut() async {
+        if guestToken == nil, origin != nil {
+            _ = try? await api("/api/auth/sign-out", method: "POST", body: Data("{}".utf8), scope: nil)
+            let store = cookieStore.httpCookieStore
+            for cookie in await store.allCookies() { await store.deleteCookie(cookie) }
+        }
+        disconnect()
     }
 
     func disconnect() {
@@ -341,6 +362,7 @@ final class AtlasSession: ObservableObject {
         refreshID = observation
         busy = true
         defer { if generation == request && refreshID == observation { busy = false } }
+        let isGuest = guestToken != nil
         do {
             guard let origin else { throw SessionFailure.invalidOrigin }
             struct Payload: Decodable { let journeys: [AtlasJourney] }
@@ -351,12 +373,12 @@ final class AtlasSession: ObservableObject {
             }
             var identity: String
             var preference = "default"
-            let isGuest = guestToken != nil
             if isGuest {
                 identity = "guest:\(generation.uuidString)"
             } else {
-                let session = try JSONDecoder().decode(Session.self, from: await read("/api/auth/get-session"))
-                guard let organization = session.session.activeOrganizationId else { throw SessionFailure.unavailable(401) }
+                // A signed-out profile receives `null`, not an HTTP 401.
+                guard let session = try JSONDecoder().decode(Session?.self, from: await read("/api/auth/get-session")),
+                      let organization = session.session.activeOrganizationId else { throw SessionFailure.unavailable(401) }
                 identity = "\(origin.absoluteString)|\(session.user.id)|\(organization)"
             }
             guard generation == request && refreshID == observation else { return }
@@ -385,7 +407,9 @@ final class AtlasSession: ObservableObject {
         } catch {
             guard generation == request && refreshID == observation else { return }
             activeIdentity = nil; mediaJourneys = [:]
-            router.clear(); router.error = error.localizedDescription
+            router.clear()
+            if !isGuest, case SessionFailure.unavailable(401) = error { signInRequired = true }
+            else { router.error = error.localizedDescription }
         }
     }
 }

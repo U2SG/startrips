@@ -1,55 +1,55 @@
 import SwiftUI
+import UIKit
+
+/// Native shell colours, matching the scene's `--archive-bg` / `--archive-ink`
+/// tokens so no light system surface shows around or before the Atlas.
+enum AtlasPalette {
+    static let background = Color(red: 2 / 255, green: 7 / 255, blue: 6 / 255)
+    static let ink = Color(red: 230 / 255, green: 238 / 255, blue: 233 / 255)
+    static let accent = Color(red: 118 / 255, green: 198 / 255, blue: 188 / 255)
+    static let line = Color(red: 118 / 255, green: 198 / 255, blue: 188 / 255).opacity(0.32)
+}
 
 struct AtlasRootView: View {
     @ObservedObject var router: AppRouter
     @ObservedObject var session: AtlasSession
     @Environment(\.scenePhase) private var phase
     @State private var connected = false
+    @State private var launching = true
     @State private var sceneIdentity = UUID()
     @State private var fixtureMode = false
     @State private var googleLoginFailed = false
     @State private var sceneRecoveryRequired = false
+    @State private var accountMenuPresented = false
+
+    private var loading: Bool {
+        launching || (connected && !router.installed && session.busy)
+    }
 
     var body: some View {
         NavigationStack(path: $router.path) {
-            Group {
+            ZStack {
+                AtlasPalette.background.ignoresSafeArea()
                 if connected {
-                    AtlasSceneView(router: router, mapOrigin: session.origin).id(sceneIdentity)
-                } else {
-                    Form {
-                        Section("我的图谱") {
-                            Text("登录 Startrips，查看已经保存的旅程。")
-                            #if DEBUG
-                            // Only explicit developer launches expose a server override.
-                            if ProcessInfo.processInfo.arguments.contains("-allow-server-override") {
-                                TextField("调试服务器（仅开发版）", text: $session.originText)
-                                    .textContentType(.URL).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                            }
-                            #endif
-                            Button("登录并选择图谱") {
-                                do { try session.configureOwner(); router.clear(); session.loginPresented = true }
-                                catch { router.error = error.localizedDescription }
-                            }
-                            Button("打开图谱") { connectOwner() }
-                        }
-                        Section("打开分享") {
-                            TextField("分享链接", text: $session.shareText).textInputAutocapitalization(.never).autocorrectionDisabled()
-                            Button("查看分享") {
-                                do {
-                                    try session.configureGuest(session.shareText); session.shareText = ""; router.clear()
-                                    connected = true; sceneIdentity = UUID()
-                                    Task { await session.refresh(router) }
-                                } catch { router.error = error.localizedDescription }
-                            }
-                        }
-                    }
+                    // The scene draws under the status bar and home indicator;
+                    // its CSS already pads with env(safe-area-inset-*).
+                    AtlasSceneView(router: router, mapOrigin: session.origin)
+                        .id(sceneIdentity)
+                        .ignoresSafeArea()
+                } else if !launching {
+                    #if DEBUG
+                    WelcomeView(signIn: signIn, pasteShare: pasteShare, debugOrigin: $session.originText)
+                    #else
+                    WelcomeView(signIn: signIn, pasteShare: pasteShare)
+                    #endif
                 }
+                if loading { AtlasLoadingView() }
             }
             .navigationTitle(router.snapshot.access == .guest ? "分享图谱" : "图谱")
             .navigationBarTitleDisplayMode(.inline)
             // Web Mobile V2 draws its own compact brand/header in the local scene.
             // Story keeps native navigation, while the Atlas has only one header.
-            .toolbar(connected && router.path.isEmpty ? .hidden : .visible, for: .navigationBar)
+            .toolbar(router.path.isEmpty ? .hidden : .visible, for: .navigationBar)
             .navigationDestination(for: StoryHandoff.self) { target in
                 StoryDestination(target: target, router: router, session: session).id(target.requestId)
             }
@@ -59,23 +59,41 @@ struct AtlasRootView: View {
                     // JavaScript and the loopback scene are no longer running.
                     Button("重新加载地球") { restartScene() }
                         .accessibilityIdentifier("atlas.native-scene-reload")
-                        .padding(10)
-                        .background(.regularMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                } else if session.busy {
-                    ProgressView("正在读取图谱…").padding().background(.regularMaterial)
+                        .font(.headline)
+                        .foregroundStyle(AtlasPalette.ink)
+                        .padding(.horizontal, 20)
+                        .frame(minHeight: 44)
+                        .background(Capsule().fill(AtlasPalette.background.opacity(0.92)))
+                        .overlay(Capsule().stroke(AtlasPalette.line))
+                        .padding(.top, 8)
                 }
                 #if DEBUG
                 if fixtureMode {
+                    // Accessibility-only probes for XCUITest; never drawn in screenshots.
                     VStack {
                         if router.rendered { Text("地球已就绪").accessibilityIdentifier("earth-rendered") }
                         Text(String(router.completedFocusCount)).accessibilityIdentifier("atlas.focus.count")
                         Text(router.selection?.routePointId ?? "").accessibilityIdentifier("atlas.selection.point")
                         Text(router.selection?.assetId ?? "").accessibilityIdentifier("atlas.selection.asset")
                     }
+                    .foregroundStyle(.clear)
+                    .allowsHitTesting(false)
                 }
                 #endif
             }
+        }
+        .tint(AtlasPalette.accent)
+        .confirmationDialog("账户", isPresented: $accountMenuPresented, titleVisibility: .hidden) {
+            if router.snapshot.access == .owner {
+                Button("切换图谱") { signIn() }
+                Button("粘贴分享链接") { pasteShare() }
+                Button("退出登录", role: .destructive) { signOut() }
+            } else {
+                Button("登录") { signIn() }
+                Button("粘贴分享链接") { pasteShare() }
+                Button("退出分享", role: .destructive) { signOut() }
+            }
+            Button("取消", role: .cancel) { }
         }
         .sheet(isPresented: $session.loginPresented, onDismiss: { connectOwner() }) {
             if let origin = session.origin {
@@ -97,7 +115,7 @@ struct AtlasRootView: View {
             }
         }
         .alert("图谱暂不可用", isPresented: Binding(get: { router.error != nil }, set: { if !$0 { router.error = nil } })) {
-            Button("重新加载地球") { restartScene() }
+            if connected { Button("重新加载地球") { restartScene() } }
             Button("关闭", role: .cancel) { router.error = nil }
         } message: { Text(router.error ?? "") }
         .onChange(of: router.error) { _, error in
@@ -106,24 +124,32 @@ struct AtlasRootView: View {
         .onChange(of: router.rendered) { _, rendered in
             if rendered { sceneRecoveryRequired = false }
         }
+        .onChange(of: session.signInRequired) { _, required in
+            // An expired or missing owner session returns to sign-in, not an error alert.
+            guard required else { return }
+            session.signInRequired = false
+            leaveAtlas { session.disconnect() }
+        }
         .task {
             router.onInvalidation = { refresh() }
-            router.onSwitchAccess = {
-                session.disconnect()
-                router.clear()
-                sceneRecoveryRequired = false
-                sceneIdentity = UUID()
-                connected = false
-            }
+            router.onSwitchAccess = { accountMenuPresented = true }
             #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-atlas-loading-probe") {
+                // Test-only: hold the branded launch state for a screenshot.
+                return
+            }
             if ProcessInfo.processInfo.arguments.contains("-atlas-fixture") {
                 fixtureMode = true
+                launching = false
                 do {
                     let url = Bundle.main.url(forResource: "bridge", withExtension: "json")!
                     let data = try Data(contentsOf: url)
                     let fixture = try JSONDecoder().decode(BridgeFixture.self, from: data)
                     try session.installFixture(data, scope: "synthetic-ci")
                     var fixtureJourneys = fixture.snapshot.journeys
+                    if ProcessInfo.processInfo.arguments.contains("-atlas-empty-fixture") {
+                        fixtureJourneys = []
+                    }
                     if ProcessInfo.processInfo.arguments.contains("-atlas-multi-journey-fixture") {
                         // A second realistic Journey is needed for a real touch
                         // swipe assertion; the normal Story fixture stays unchanged.
@@ -148,8 +174,7 @@ struct AtlasRootView: View {
                 return
             }
             #endif
-            // A fixed server address does not prove the owner is signed in.
-            // First launch shows login / share rather than issuing a 401 Atlas request.
+            await restoreOwner()
         }
         .onChange(of: phase) { _, value in
             if value == .active && connected { refresh() }
@@ -164,6 +189,48 @@ struct AtlasRootView: View {
                 if phase == .active { refresh() }
             }
         }
+    }
+
+    /// Reopens the owner's Atlas when the persistent profile still holds a
+    /// session cookie; a missing or rejected session lands on sign-in.
+    private func restoreOwner() async {
+        defer { launching = false }
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-allow-server-override") { return }
+        #endif
+        do { try session.configureOwner() } catch { return }
+        guard await session.hasOwnerCredentials() else { session.disconnect(); return }
+        router.clear(); connected = true; sceneIdentity = UUID()
+        refresh()
+    }
+
+    private func signIn() {
+        do { try session.configureOwner(); session.loginPresented = true }
+        catch { router.error = error.localizedDescription }
+    }
+
+    private func pasteShare() {
+        let link = (UIPasteboard.general.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try session.configureGuest(link)
+            router.clear(); sceneRecoveryRequired = false
+            connected = true; sceneIdentity = UUID()
+            Task { await session.refresh(router) }
+        } catch { router.error = error.localizedDescription }
+    }
+
+    private func signOut() {
+        // The branded loading surface covers the short server sign-out request.
+        leaveAtlas { launching = true }
+        Task { await session.signOut(); launching = false }
+    }
+
+    private func leaveAtlas(_ end: () -> Void) {
+        end()
+        router.clear()
+        sceneRecoveryRequired = false
+        sceneIdentity = UUID()
+        connected = false
     }
 
     private func connectOwner() {
@@ -183,6 +250,88 @@ struct AtlasRootView: View {
     private func refresh() {
         guard !fixtureMode else { return }
         Task { await session.refresh(router) }
+    }
+}
+
+/// First launch / signed-out entry: the wordmark and two actions, no helper copy.
+private struct WelcomeView: View {
+    let signIn: () -> Void
+    let pasteShare: () -> Void
+    var debugOrigin: Binding<String>? = nil
+
+    var body: some View {
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    Spacer(minLength: 48)
+                    AtlasWordmark()
+                    Spacer(minLength: 48)
+                    VStack(spacing: 12) {
+                        #if DEBUG
+                        // Only explicit developer launches expose a server override.
+                        if let debugOrigin, ProcessInfo.processInfo.arguments.contains("-allow-server-override") {
+                            TextField("调试服务器（仅开发版）", text: debugOrigin)
+                                .textContentType(.URL).keyboardType(.URL)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .padding(12)
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(AtlasPalette.line))
+                        }
+                        #endif
+                        Button(action: signIn) {
+                            Text("登录")
+                                .padding(.vertical, 8).padding(.horizontal, 20)
+                                .frame(maxWidth: .infinity, minHeight: 52).contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(AtlasPalette.background)
+                        .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(AtlasPalette.accent))
+                        .accessibilityIdentifier("welcome.sign-in")
+                        Button(action: pasteShare) {
+                            Label("粘贴分享链接", systemImage: "doc.on.clipboard")
+                                .multilineTextAlignment(.center)
+                                .padding(.vertical, 8).padding(.horizontal, 20)
+                                .frame(maxWidth: .infinity, minHeight: 52).contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(AtlasPalette.ink)
+                        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(AtlasPalette.line))
+                        .accessibilityIdentifier("welcome.paste-share")
+                    }
+                    .font(.headline)
+                    .padding(.bottom, 24)
+                }
+                .padding(.horizontal, 24)
+                .frame(maxWidth: 520)
+                .frame(maxWidth: .infinity, minHeight: proxy.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+}
+
+/// Full-bleed launch / loading surface; replaces the old material progress box.
+private struct AtlasLoadingView: View {
+    var body: some View {
+        ZStack {
+            AtlasPalette.background.ignoresSafeArea()
+            VStack(spacing: 28) {
+                AtlasWordmark()
+                ProgressView().tint(AtlasPalette.accent)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("正在打开图谱")
+        .accessibilityIdentifier("atlas.loading")
+    }
+}
+
+private struct AtlasWordmark: View {
+    var body: some View {
+        Text("startrips")
+            .font(.system(.largeTitle, design: .serif))
+            .foregroundStyle(AtlasPalette.ink)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("atlas.wordmark")
     }
 }
 

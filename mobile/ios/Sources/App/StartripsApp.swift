@@ -19,6 +19,7 @@ struct StartripsApp: App {
     var body: some Scene {
         WindowGroup {
             AtlasRootView(router: router, session: session)
+                .preferredColorScheme(.dark)
         }
     }
 }
