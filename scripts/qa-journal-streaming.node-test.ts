@@ -26,12 +26,12 @@ test('evidence: all source lines, range context, statuses and date-line order su
   assert.ok(result.chapters[0].suggestions.every(s => s.questions.some(q => q.includes('未推断逐日分配'))));
 });
 
-test('evidence: an uncorrectable structural answer falls back to a whole review preview without mutating prior content', async () => {
+test('evidence: an uncorrectable schema violation falls back to a whole review preview without mutating prior content', async () => {
   const first = await prepare(), before = { revision: 3, chapters: first.chapters };
   before.chapters[0].events[0].text = 'member correction'; before.chapters[0].events[0].edited = true;
-  const snapshot = structuredClone(before), malformed = qaDraft(); malformed.chapters[1].events.pop();
+  const snapshot = structuredClone(before), malformed = qaDraft(); Object.assign(malformed.chapters[1].events[0], { latitude: 1 });
   const fallback = await prepareJournalImport(qaInput, before, { ...qaModel, fetcher: qaAnswer(malformed) });
-  assert.deepEqual(fallback.degradations, [{ segment: 0, path: '$.chapters[1].events', code: 'LINE_COVERAGE' }]);
+  assert.deepEqual(fallback.degradations, [{ segment: 0, path: '$.chapters[1].events[0]', code: 'EXTRA_ARGUMENT' }]);
   const added = fallback.chapters.filter(c => fallback.importedChapterIds.includes(c.id));
   assert.deepEqual(added.map(c => c.source).sort(), [qaLines.slice(0, 6).join('\n'), qaLines.slice(6).join('\n')].sort());
   // A day identical to saved content keeps the saved chapter; new ones are review-only.
@@ -55,27 +55,34 @@ for (const fault of ['omitted-event', 'overlap', 'gap', 'duplicate-event', 'inva
     if (fault === 'end-without-start') Object.assign(payload.chapters[0].events[3], { time: null, timeEnd: '13:30', timeEvidence: '10:30–13:30' });
     const result = await prepare(payload), events = result.chapters.flatMap(c => c.events);
     assert.equal(result.chapters.map(c => c.source).join('\n'), qaInput.source);
-    if (['unquoted-clock', 'end-without-start'].includes(fault)) {
-      // One line's interpretation failed: only that line is left for review.
-      assert.deepEqual(result.degradations, []); assert.equal(result.degradedLines, 1);
-      const faulted = events.find(e => e.source === qaLines[fault === 'unquoted-clock' ? 7 : 4])!;
-      assert.equal(faulted.status, 'uncertain'); assert.equal(faulted.localTime, null);
-    } else {
-      // Structure failed twice: the whole segment becomes a deterministic review preview.
+    if (['overlap', 'gap'].includes(fault)) {
+      // Chapter boundaries failed twice: the whole segment becomes a deterministic review preview.
       assert.equal(result.degradations.length, 1); assert.equal(result.degradedLines, events.length);
       assert.ok(events.every(e => e.status === 'uncertain'));
+    } else {
+      // Only the unverifiable claim is dropped; a line without a usable event is left for review.
+      assert.deepEqual(result.degradations, []);
+      assert.equal(result.degradedLines, ['omitted-event', 'duplicate-event'].includes(fault) ? 1 : 0);
+      if (fault === 'unquoted-clock') {
+        const faulted = events.find(e => e.source === qaLines[7])!;
+        assert.equal(faulted.status, 'actual'); assert.equal(faulted.localTime, null);
+      }
+      if (fault === 'end-without-start') {
+        const faulted = events.find(e => e.source === qaLines[4])!;
+        assert.equal(faulted.status, 'uncertain'); assert.equal(faulted.localTime, null);
+      }
     }
   });
 }
 
-test('evidence: first-line omission requires an explicit heading flag', async () => {
+test('evidence: first-line omission leaves the line for review unless the model flags a heading', async () => {
   const source = '### 2028年6月3日 实际：她在虚构城入住星桥酒店。\n计划：次日离开。';
   const payload = { chapters: [{ firstLine: 0, lastLine: 1, heading: false, dateStatus: 'single', questions: [], date: '2028-06-03', dateEnd: null, dateEvidence: '2028年6月3日', events: [
     { line: 1, status: 'planned', dateStatus: 'absent', localDate: null, dateEvidence: null, time: null, timeEnd: null, timeEvidence: null, placeName: null, questions: [] },
   ] }] };
   const result = await prepareJournalImport({ ...qaInput, source }, empty(), { ...qaModel, fetcher: qaAnswer(payload) });
-  // Without heading=true the first line must be an event; the fallback keeps it as one.
-  assert.deepEqual(result.degradations, [{ segment: 0, path: '$.chapters[0].events', code: 'LINE_COVERAGE' }]);
+  // Without heading=true the first line must be an event; the missing one is kept as a review event.
+  assert.deepEqual(result.degradations, []); assert.equal(result.degradedLines, 1);
   assert.deepEqual(result.chapters[0].events.map(e => e.source), source.split('\n'));
 });
 

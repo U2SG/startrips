@@ -35,8 +35,9 @@ The supplied lines may be one part of a longer journal: cover exactly the suppli
 Interpret meaning yourself: dates versus distances/currency/measurements, complete ranges versus single dates, completed events versus plans/cancellations. Keep unknown or ambiguous dates explicitly unknown with a complete evidence quote, null date values and questions. For example an incomplete endpoint in （2028年6月？日）到（2028年6月5日） makes the range unknown; 3.5公里 in a sentence about 2028年6月3日 does not change that single date.
 Do not copy source lines: refer to them by line value. Quote only the short date, clock and place substrings. Do not infer visits, day allocations, midnight dates, time zones, weather, emotion, coordinates or measurements. Normalized values are semantic claims for review, not server-certified interpretations. A tool_arguments error means no staging execution occurred: correct only the reported arguments within the provided evidence. Do not repeat a failed call unchanged.`;
 /** Bounded parallel model calls per import. */
-export const JOURNAL_SEGMENT_CONCURRENCY = 3;
+export const JOURNAL_SEGMENT_CONCURRENCY = 4;
 export const JOURNAL_DEGRADED_QUESTION = "AI 对这一行的识别未通过校验，请核对。";
+export const JOURNAL_DROPPED_CLAIM_QUESTION = "AI 识别的日期或时间未能对上原文，已留空，请核对。";
 class JournalImportError extends ShareIntentError { override readonly stage = "journal-import"; }
 const id = (s: string) => "ji_" + createHash("sha256").update(s).digest("hex").slice(0, 32);
 const clock = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
@@ -52,54 +53,58 @@ const DEFAULT_TIME_CONTEXT = "当地时间（具体时区未确认）";
 const degraded = (line: number): StagedEvent => ({ line, status: "uncertain", dateStatus: "absent", localDate: null, localTime: null, timeContext: DEFAULT_TIME_CONTEXT, placeName: null, questions: [JOURNAL_DEGRADED_QUESTION], degraded: true });
 const identity = (c: StagedChapter, lines: readonly string[], fallbackDate: string) => JSON.stringify([c.date ?? fallbackDate, lines.slice(c.firstLine, c.lastLine + 1).join("\n")]);
 
-/** One line's interpretation. A failure here degrades that line only. */
-function stageEvent(e: ToolEvent, c: ToolChapter, text: string, ep: string): StagedEvent {
-  if (e.dateStatus === "range") {
-    requireTool(e.localDate === null, `${ep}.localDate`, "RANGE_HAS_NO_SINGLE_DAY");
-    requireTool(typeof e.dateEvidence === "string" && !!e.dateEvidence.trim() && text.includes(e.dateEvidence), `${ep}.dateEvidence`, "SOURCE_REFERENCE");
-    requireTool(e.questions.some(q => q.trim()), `${ep}.questions`, "UNCERTAINTY_QUESTION");
-  } else validateJournalDateClaim({ status: e.dateStatus, start: e.localDate, end: null, evidence: e.dateEvidence, questions: e.questions }, text, `${ep}.date`);
-  if (e.timeEvidence === null) requireTool(e.time === null && e.timeEnd === null, `${ep}.time`, "ABSENT_CLOCK_FIELDS");
-  else {
-    requireTool(!!e.timeEvidence.trim() && text.includes(e.timeEvidence), `${ep}.timeEvidence`, "SOURCE_REFERENCE");
-    if (e.time === null) requireTool(e.timeEnd === null && e.questions.some(q => q.trim()), `${ep}.time`, "UNKNOWN_CLOCK_VALUES");
-    else requireTool(clock.test(e.time) && (e.timeEnd === null || clock.test(e.timeEnd)), `${ep}.time`, "CLOCK_FORMAT");
+/** Passes the claim through the shared validator; false means "drop this claim". */
+const verified = (check: () => void) => {
+  try { check(); return true; } catch (error) { if (error instanceof ToolArgumentError) return false; throw error; }
+};
+
+/** One line's interpretation. Status is the model's reading of the whole line and
+ * is kept; a date, clock or place claim that does not match the line is dropped
+ * rather than discarding the line. */
+function stageEvent(e: ToolEvent, c: { dateStatus: JournalDateStatus; date: string | null; questions: string[] }, text: string): StagedEvent {
+  let dropped = false, dateStatus = e.dateStatus, localDate = e.localDate;
+  const questions = e.questions.slice(0, Math.max(0, 17 - c.questions.length));
+  const dateOk = e.dateStatus === "range"
+    ? e.localDate === null && typeof e.dateEvidence === "string" && !!e.dateEvidence.trim() && text.includes(e.dateEvidence) && questions.some(q => q.trim())
+    : verified(() => validateJournalDateClaim({ status: e.dateStatus, start: e.localDate, end: null, evidence: e.dateEvidence, questions }, text, "$"));
+  if (!dateOk) {
+    // Repeating the chapter's own date with the heading as evidence is the common
+    // case: the event simply inherits the chapter date.
+    if (!(c.dateStatus === "single" && e.localDate !== null && e.localDate === c.date)) dropped = true;
+    dateStatus = "absent"; localDate = null;
   }
-  requireTool(c.questions.length + e.questions.length <= 17, `${ep}.questions`, "QUESTION_CAPACITY");
-  requireTool(e.timeEnd === null || e.timeEvidence!.length <= 170, `${ep}.timeEvidence`, "CLOCK_REFERENCE_CAPACITY");
-  requireTool(e.placeName === null || e.status === "actual" && !!e.placeName.trim() && text.includes(e.placeName), `${ep}.placeName`, "ACTUAL_PLACE_REFERENCE");
-  return { line: e.line, status: e.status, dateStatus: e.dateStatus, localDate: e.localDate, localTime: e.timeEnd === null ? e.time : null,
-    timeContext: e.timeEnd !== null ? `当地时间区间 ${e.timeEvidence}（跨日日期未确认）` : DEFAULT_TIME_CONTEXT, placeName: e.placeName, questions: e.questions, degraded: false };
+  let time: string | null = null, timeEnd: string | null = null, timeEvidence: string | null = null;
+  if (e.timeEvidence !== null && !!e.timeEvidence.trim() && text.includes(e.timeEvidence) && e.time !== null && clock.test(e.time)
+    && (e.timeEnd === null || clock.test(e.timeEnd) && e.timeEvidence.length <= 170)) ({ time, timeEnd, timeEvidence } = e);
+  else if (e.time !== null) dropped = true;
+  const placeName = e.placeName !== null && e.status === "actual" && !!e.placeName.trim() && text.includes(e.placeName) ? e.placeName : null;
+  return { line: e.line, status: e.status, dateStatus, localDate, localTime: timeEnd === null ? time : null,
+    timeContext: timeEnd !== null ? `当地时间区间 ${timeEvidence}（跨日日期未确认）` : DEFAULT_TIME_CONTEXT, placeName,
+    questions: dropped ? [...questions.slice(0, 16), JOURNAL_DROPPED_CLAIM_QUESTION] : questions, degraded: false };
 }
 
-/** Structure (coverage, boundaries, chapter claims, in-segment duplicates) is
- * corrected through the bounded tool loop; event semantics degrade per line. */
-function validateSegment(answer: unknown, lines: readonly string[], segment: JournalSegment, fallbackDate: string): StagedChapter[] {
-  const staged: StagedChapter[] = [], seen = new Set<string>();
+/** Only chapter boundaries are corrected through the bounded tool loop. A chapter
+ * date that does not match its lines is dropped; a line the model left out
+ * becomes an uncertain event; extra or repeated event entries are ignored. */
+export function validateSegment(answer: unknown, lines: readonly string[], segment: JournalSegment): StagedChapter[] {
+  const staged: StagedChapter[] = [];
   let nextLine = segment.firstLine;
   for (const [ci, c] of (answer as { chapters: ToolChapter[] }).chapters.entries()) {
-    const p = `$.chapters[${ci}]`;
-    requireTool(c.firstLine === nextLine && c.lastLine >= c.firstLine && c.lastLine <= segment.lastLine, p, "LINE_COVERAGE");
+    requireTool(c.firstLine === nextLine && c.lastLine >= c.firstLine && c.lastLine <= segment.lastLine, `$.chapters[${ci}]`, "LINE_COVERAGE");
     nextLine = c.lastLine + 1;
-    requireTool(c.questions.length <= 16, `${p}.questions`, "QUESTION_CAPACITY");
-    validateJournalDateClaim({ status: c.dateStatus, start: c.date, end: c.dateEnd, evidence: c.dateEvidence, questions: c.questions }, lines[c.firstLine], `${p}.date`);
-    requireTool(!c.heading || !!lines[c.firstLine].trim(), `${p}.heading`, "HEADING_LINE");
-    const expected: number[] = [];
-    for (let line = c.firstLine; line <= c.lastLine; line++) if (lines[line].trim() && !(line === c.firstLine && c.heading)) expected.push(line);
-    requireTool(expected.length === c.events.length, `${p}.events`, "LINE_COVERAGE");
-    requireTool(c.events.length > 0 || c.questions.length === 0 && c.dateStatus !== "unknown", `${p}.events`, "UNRESOLVED_EVENT_REQUIRED");
-    const events = c.events.map((e, ei) => {
-      const ep = `${p}.events[${ei}]`;
-      requireTool(e.line === expected[ei], `${ep}.line`, "LINE_COVERAGE");
-      try { return stageEvent(e, c, lines[e.line], ep); }
-      catch (error) { if (error instanceof ToolArgumentError) return degraded(e.line); throw error; }
-    });
-    const chapter = { firstLine: c.firstLine, lastLine: c.lastLine, heading: c.heading, dateStatus: c.dateStatus, date: c.date, dateEnd: c.dateEnd, questions: c.questions, events };
-    // Repeated content inside this input is not a replay of previously saved
-    // content. Ask for a representable grouping, never discard an occurrence.
-    const key = identity(chapter, lines, fallbackDate);
-    requireTool(!seen.has(key), p, "DUPLICATE_CHAPTER_SOURCE");
-    seen.add(key); staged.push(chapter);
+    const questions = c.questions.slice(0, 16), chapterText = lines.slice(c.firstLine, c.lastLine + 1).join("\n");
+    const dateOk = verified(() => validateJournalDateClaim({ status: c.dateStatus, start: c.date, end: c.dateEnd, evidence: c.dateEvidence, questions }, chapterText, "$"));
+    const claim = dateOk ? { dateStatus: c.dateStatus, date: c.date, dateEnd: c.dateEnd } : { dateStatus: "absent" as const, date: null, dateEnd: null };
+    const heading = c.heading && !!lines[c.firstLine].trim();
+    const byLine = new Map<number, ToolEvent>();
+    for (const e of c.events) if (!byLine.has(e.line)) byLine.set(e.line, e);
+    const events: StagedEvent[] = [];
+    for (let line = c.firstLine; line <= c.lastLine; line++) {
+      if (!lines[line].trim() || line === c.firstLine && heading) continue;
+      const e = byLine.get(line);
+      events.push(e ? stageEvent(e, { ...claim, questions }, lines[line]) : degraded(line));
+    }
+    staged.push({ firstLine: c.firstLine, lastLine: c.lastLine, heading, ...claim, questions, events });
   }
   requireTool(nextLine === segment.lastLine + 1, "$.chapters", "LINE_COVERAGE");
   return staged;
@@ -210,7 +215,7 @@ export async function prepareJournalImport(input: { sentence: string; source: st
       return await runStagingTool({ ...model, signal, stream: model.stream && { ...model.stream, onProgress: p => { live.set(index, p); report(); } } }, {
         name: "stage_journal_import", description: JOURNAL_IMPORT_PROMPT, schema: JOURNAL_IMPORT_SCHEMA,
         input: { sentence: input.sentence, fallbackYear, lines: lines.slice(segment.firstLine, segment.lastLine + 1).map((text, i) => ({ line: segment.firstLine + i, text })) },
-        validate: value => validateSegment(value, lines, segment, input.fallbackDate), execute: staged => staged,
+        validate: value => validateSegment(value, lines, segment), execute: staged => staged,
         argumentFailureCode: "JOURNAL_IMPORT_MALFORMED" });
     } catch (error) {
       if (!(error instanceof ToolArgumentsRejectedError)) throw error;

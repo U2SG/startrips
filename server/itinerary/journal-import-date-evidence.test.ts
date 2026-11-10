@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { validateJournalDateClaim, type JournalDateClaim } from "./journal-import-date-evidence";
 import { prepareJournalImport } from "./journal-import-workflow";
 import { mockChapter, mockJournalModel, toolResponse } from "./journal-import-test-fixtures";
-import { JOURNAL_DEGRADED_QUESTION } from "./journal-import-workflow";
+import { JOURNAL_DROPPED_CLAIM_QUESTION } from "./journal-import-workflow";
 // We verify structured mock claims/provenance, NOT semantic extraction by an LLM.
 // Whole-line date-guessing assertions were replaced with the explicit tool contract.
 const claim = (overrides: Partial<JournalDateClaim> = {}): JournalDateClaim => ({ status: "single", start: "2028-06-03", end: null, evidence: "2028年6月3日", questions: [], ...overrides });
@@ -55,14 +55,15 @@ for (const mode of ["chapter", "event"] as const) {
     expect(result.chapters[0].events[0].localDate).toBeNull();
     expect(result.chapters[0].suggestions[0].questions).toContain("完整日期范围待确认");
   });
-  it.each(["记录：（2028年6月？日）到（2028年6月5日），她旅行。", "记录：（2028年6月5日）到（2028年？月5日），她旅行。"])(`never stages a normalized value on an unknown ${mode} claim: %s`, async source => {
+  it.each(["记录：（2028年6月？日）到（2028年6月5日），她旅行。", "记录：（2028年6月5日）到（2028年？月5日），她旅行。"])(`drops a normalized value on an unknown ${mode} claim instead of staging it: %s`, async source => {
     const result = await prepare(source, mode, true, true);
-    // A chapter claim is structural (whole segment falls back); an event claim degrades its line.
-    expect(result.degradations).toEqual(mode === "chapter" ? [{ segment: 0, path: "$.chapters[0].date", code: "UNKNOWN_DATE_VALUES" }] : []);
-    expect(result.degradedLines).toBe(1);
+    // The unverifiable claim is dropped and the line keeps the model's status; only an event claim adds a question.
+    expect(result.degradations).toEqual([]); expect(result.degradedLines).toBe(0);
     expect(result.chapters[0]).toMatchObject({ source, date: "2028-06-01" });
-    expect(result.chapters[0].events[0]).toMatchObject({ status: "uncertain", localDate: null });
-    expect(result.chapters[0].suggestions[0].questions).toContain(JOURNAL_DEGRADED_QUESTION);
+    expect(result.chapters[0].events[0]).toMatchObject({ status: "actual", localDate: null });
+    const questions = result.chapters[0].suggestions[0].questions;
+    expect(questions.includes(JOURNAL_DROPPED_CLAIM_QUESTION)).toBe(mode === "event");
+    if (mode === "chapter") expect(questions).toContain("章节日期未明确，暂用指定归档日。");
   });
   it.each(measuredDestinations)(`does not reject a correct ${mode} single day beside quantities: %s`, async destination => {
     const source = `她于2028年6月3日到${destination}入住。`, result = await prepare(source, mode, false);

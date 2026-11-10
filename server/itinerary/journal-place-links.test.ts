@@ -53,13 +53,13 @@ describe("source-grounded existing journey links", () => {
     expect(draft.placeClaims).toEqual([{ eventId: draft.chapters[0].events[0].id, name: "星桥花园", date: null }]);
     expect(linkJournalPlaces([], draft.chapters, draft.placeClaims, fixture().points)[0].events[0].routePointId).toBe("point-a");
   });
-  it.each([{ placeName: "捏造地点", status: "actual" }, { placeName: "星桥花园", status: "planned" }])("never links an unsupported place claim; that line is left for review %o", async patch => {
+  it.each([{ placeName: "捏造地点", status: "actual" }, { placeName: "星桥花园", status: "planned" }])("never links an unsupported place claim; the place is dropped and the status kept %o", async patch => {
     const chapter = mockChapter(source); Object.assign(chapter.events[0], patch);
     const draft = await prepareJournalImport({ source, sentence: "导入", fallbackDate: "2028-06-03" }, { revision: 0, chapters: [] }, {
       ...mockJournalModel, fetcher: async () => toolResponse("stage_journal_import", { chapters: [chapter] }),
     });
-    expect(draft.placeClaims).toEqual([]); expect(draft.degradedLines).toBe(1);
-    expect(draft.chapters[0].events[0]).toMatchObject({ status: "uncertain", routePointId: null });
+    expect(draft.placeClaims).toEqual([]); expect(draft.degradedLines).toBe(0);
+    expect(draft.chapters[0].events[0]).toMatchObject({ status: patch.status, routePointId: null });
   });
 });
 

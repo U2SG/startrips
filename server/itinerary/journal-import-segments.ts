@@ -1,7 +1,7 @@
 import { JOURNAL_DATE_HEADING } from "../../src/journey/dailyJournal";
 
 /** Source characters (including line breaks) staged by one model call. */
-export const JOURNAL_SEGMENT_BUDGET = 4_000;
+export const JOURNAL_SEGMENT_BUDGET = 1_500;
 /** Inclusive absolute line range of the normalized source. */
 export type JournalSegment = { firstLine: number; lastLine: number };
 
