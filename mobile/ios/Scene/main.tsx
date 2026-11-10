@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { IconArrowRight, IconRoute, IconTimeline, IconUserCircle, IconX } from "@tabler/icons-react";
-import { StartripsJourneyCue } from "../../../src/brand/StartripsBrandMark";
+import { StartripsBrandLoader, StartripsJourneyCue } from "../../../src/brand/StartripsBrandMark";
 import { StartripsWordmarkSignatureButton } from "../../../src/brand/StartripsSignatureMoment";
 import { GlobeTimeScrubber } from "../../../src/journey/GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "../../../src/journey/useGlobeTimeCursor";
@@ -24,7 +24,22 @@ let pendingSnapshot: string | null =
 let deliverSnapshot: ((json: string) => void) | null = null;
 window.atlasNative = { receive(json) { pendingSnapshot = json; deliverSnapshot?.(json); } };
 
+const reducedMotionQuery = "(prefers-reduced-motion: reduce)";
+
+// WebKit mirrors the iOS Reduce Motion setting; follow live changes like the Web Atlas.
+function usePrefersReducedMotion() {
+  const [reduce, setReduce] = useState(() => window.matchMedia(reducedMotionQuery).matches);
+  useEffect(() => {
+    const media = window.matchMedia(reducedMotionQuery);
+    const update = () => setReduce(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  return reduce;
+}
+
 function AtlasScene() {
+  const reduceMotion = usePrefersReducedMotion();
   const earth = usePersistentEarth();
   useEffect(() => { earth.setStage("atlas"); return () => earth.setStage("idle"); }, [earth]);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -179,8 +194,10 @@ function AtlasScene() {
   const routeSummary = !selected ? "" : stops.length > 1
     ? stops[0].label + " → " + stops[stops.length - 1].label
     : stops.length === 1 ? stops[0].label : selected.routePoints.length + " 个途经点";
-  if (error) return <p role="alert">地球数据无法读取，请刷新。</p>;
-  if (!snapshot) return <p role="status">正在连接图谱…</p>;
+  if (error) return <main className="native-atlas__status"><p role="alert">地球数据无法读取，请刷新。</p></main>;
+  if (!snapshot) return <main className="native-atlas__status" aria-busy="true">
+    <StartripsBrandLoader message="正在打开图谱…" />
+  </main>;
   return <main className="living-atlas is-mobile-v2 native-atlas" data-mobile-v2="on"
     data-native-mobile-v2="on" aria-label="图谱地球">
     <div className="native-atlas__earth" aria-label="旅程地球">
@@ -191,6 +208,7 @@ function AtlasScene() {
         {...atlasSceneFocus(point, routes.find((route) => route.id === selected?.id))}
         focusRevision={focusRevision} focusEnabled={!interrupted && snapshot.active}
         earthExperiencePolicy={snapshot.earthExperience} routeEditingEnabled={false}
+        reduceMotion={reduceMotion}
         cinematicActive={!snapshot.active} mediaCoverHint={{ opaqueMediaCover: !snapshot.active, coverTransitionActive: false }}
         onManualCameraInteraction={interrupt} onFocusSettled={() => {
           if (!cursorActive || (time.scrub === null && selected?.id === snapshot.selection?.journeyId
@@ -277,7 +295,6 @@ function AtlasScene() {
     {!journeys.length && <section className="native-atlas__empty" aria-label="空图谱">
       <StartripsJourneyCue size={54}/>
       <p>图谱里还没有旅程</p>
-      <small>登录后可在 Startrips 中记录第一段旅程。</small>
     </section>}
     {sheetOpen && selected && <div className="mobile-v2__sheet-layer native-atlas__sheet-layer">
       <button className="mobile-v2__sheet-backdrop" type="button" tabIndex={-1}

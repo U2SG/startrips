@@ -27,6 +27,9 @@ final class AppRouter: ObservableObject {
 
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
 
+    /// True once an owner or guest Atlas has been installed for the current scope.
+    var installed: Bool { identity != nil }
+
     var snapshot: SceneSnapshot {
         SceneSnapshot(version: 1, scopeId: scopeId, revision: revision, access: access,
                       earthExperience: earthExperience, journeys: journeys, selection: selection, active: path.isEmpty)

@@ -31,6 +31,14 @@ struct AtlasSceneView: UIViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: "atlas")
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.isOpaque = false; view.scrollView.isScrollEnabled = false
+        // Full-bleed: the page receives real env(safe-area-inset-*) values instead
+        // of UIKit insetting the scroll view a second time, and nothing light
+        // shows before the first frame or during a WebKit restart.
+        let background = UIColor(red: 2 / 255, green: 7 / 255, blue: 6 / 255, alpha: 1)
+        view.backgroundColor = background
+        view.scrollView.backgroundColor = background
+        view.underPageBackgroundColor = background
+        view.scrollView.contentInsetAdjustmentBehavior = .never
         view.navigationDelegate = context.coordinator
         context.coordinator.view = view
         context.coordinator.start(mapOrigin: mapOrigin)

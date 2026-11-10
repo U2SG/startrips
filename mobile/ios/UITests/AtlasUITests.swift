@@ -2,15 +2,140 @@ import XCTest
 
 final class AtlasUITests: XCTestCase {
     @MainActor
-    func testFirstLaunchUsesStartripsServerWithoutUserConfiguration() throws {
+    func testFirstLaunchShowsDarkFullBleedWelcome() throws {
         let app = XCUIApplication()
         app.launch()
-        XCTAssertTrue(app.buttons["登录并选择图谱"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.buttons["打开图谱"].exists)
-        XCTAssertTrue(app.textFields["分享链接"].exists)
-        XCTAssertFalse(app.textFields["https://your-startrips.example"].exists)
-        XCTAssertFalse(app.textFields["调试服务器（仅开发版）"].exists)
+        let signIn = app.buttons["welcome.sign-in"]
+        XCTAssertTrue(signIn.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["welcome.paste-share"].exists)
+        XCTAssertTrue(app.staticTexts["atlas.wordmark"].exists)
+        // No server URL, share text field or helper copy on the product entry.
+        XCTAssertEqual(app.textFields.count, 0)
+        XCTAssertFalse(app.staticTexts["登录 Startrips，查看已经保存的旅程。"].exists)
         XCTAssertFalse(app.alerts["图谱暂不可用"].exists)
+        assertDarkFullBleed(capture(app, "shell-first-launch"))
+    }
+
+    @MainActor
+    func testBrandedLoadingIsFullBleed() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-loading-probe"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["atlas.loading"].waitForExistence(timeout: 15))
+        assertDarkFullBleed(capture(app, "shell-loading"))
+    }
+
+    @MainActor
+    func testConnectedAndEmptyAtlasAreFullBleed() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture"]
+        app.launch()
+        let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
+        XCTAssertTrue(chip.waitForExistence(timeout: 30))
+        XCTAssertTrue(chip.isHittable)
+        assertDarkFullBleed(capture(app, "shell-connected-atlas"))
+        app.terminate()
+
+        app.launchArguments = ["-atlas-fixture", "-atlas-empty-fixture"]
+        app.launch()
+        XCTAssertTrue(app.webViews.staticTexts["图谱里还没有旅程"].waitForExistence(timeout: 30))
+        XCTAssertFalse(app.webViews.staticTexts["登录后可在 Startrips 中记录第一段旅程。"].exists)
+        XCTAssertTrue(app.webViews.buttons["切换账户或分享"].exists)
+        assertDarkFullBleed(capture(app, "shell-empty-atlas"))
+    }
+
+    @MainActor
+    func testLandscapeAtlasIsFullBleed() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture"]
+        app.launch()
+        let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
+        XCTAssertTrue(chip.waitForExistence(timeout: 30))
+        addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(chip.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.webViews.buttons["切换账户或分享"].isHittable)
+        assertDarkFullBleed(capture(app, "shell-landscape"), checkSides: true)
+    }
+
+    @MainActor
+    func testLargestAccessibilityTextKeepsEntryAndAtlasUsable() throws {
+        let app = XCUIApplication()
+        let largest = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launchArguments = largest
+        app.launch()
+        let signIn = app.buttons["welcome.sign-in"]
+        XCTAssertTrue(signIn.waitForExistence(timeout: 15))
+        XCTAssertTrue(signIn.isHittable)
+        XCTAssertTrue(app.buttons["welcome.paste-share"].isHittable)
+        assertDarkFullBleed(capture(app, "shell-ax5-welcome"))
+        app.terminate()
+
+        app.launchArguments = ["-atlas-fixture"] + largest
+        app.launch()
+        XCTAssertTrue(app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
+            .waitForExistence(timeout: 30))
+        assertDarkFullBleed(capture(app, "shell-ax5-atlas"))
+    }
+
+    @MainActor
+    func testAccountMenuOffersSwitchShareAndSignOut() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture"]
+        app.launch()
+        let account = app.webViews.buttons["切换账户或分享"]
+        XCTAssertTrue(account.waitForExistence(timeout: 30))
+        account.tap()
+        XCTAssertTrue(app.buttons["切换图谱"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["粘贴分享链接"].exists)
+        let signOut = app.buttons["退出登录"]
+        XCTAssertTrue(signOut.exists)
+        capture(app, "shell-account-menu")
+        signOut.tap()
+        XCTAssertTrue(app.buttons["welcome.sign-in"].waitForExistence(timeout: 15))
+    }
+
+    @MainActor
+    @discardableResult
+    private func capture(_ app: XCUIApplication, _ name: String) -> XCUIScreenshot {
+        let screenshot = app.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        return screenshot
+    }
+
+    /// Regression guard for the white status-bar / home-indicator bands: the
+    /// outermost pixel rows (and, in landscape, columns) must be the dark shell.
+    @MainActor
+    private func assertDarkFullBleed(_ screenshot: XCUIScreenshot, checkSides: Bool = false,
+                                     file: StaticString = #filePath, line: UInt = #line) {
+        guard let image = screenshot.image.cgImage else { return XCTFail("No screenshot pixels", file: file, line: line) }
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(data: buffer.baseAddress, width: width, height: height,
+                                          bitsPerComponent: 8, bytesPerRow: width * 4,
+                                          space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drawn else { return XCTFail("Cannot read screenshot pixels", file: file, line: line) }
+        func luminance(_ x: Int, _ y: Int) -> Double {
+            let i = (y * width + x) * 4
+            return (0.2126 * Double(pixels[i]) + 0.7152 * Double(pixels[i + 1]) + 0.0722 * Double(pixels[i + 2])) / 255
+        }
+        func row(_ y: Int) -> Double { (0..<width).reduce(0) { $0 + luminance($1, y) } / Double(width) }
+        func column(_ x: Int) -> Double { (0..<height).reduce(0) { $0 + luminance(x, $1) } / Double(height) }
+        let inset = 3
+        var edges = [("top", row(inset)), ("bottom", row(height - 1 - inset))]
+        if checkSides { edges += [("left", column(inset)), ("right", column(width - 1 - inset))] }
+        for (edge, value) in edges {
+            XCTAssertLessThan(value, 0.3, "\(edge) safe-area edge is not the dark shell (mean luminance \(value))",
+                              file: file, line: line)
+        }
     }
 
     @MainActor
