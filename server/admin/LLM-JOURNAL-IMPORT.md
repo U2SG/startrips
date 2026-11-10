@@ -8,7 +8,7 @@ journal and hotel confirmation routes remain available. No new credentials are
 introduced. See [the streaming protocol](../../docs/journal-import/stream-protocol.md)
 for endpoints, progress events and cancellation semantics.
 
-Migration 0042 and the normal API worker must be deployed before using jobs. Do
+Migrations 0042 and 0043 and the normal API worker must be deployed before using jobs. Do
 not run an ad hoc SSH background worker or bypass the migration release process.
 
 ## Input and provider scope
@@ -51,9 +51,11 @@ permission to send this source.
 
 ## Evidence and preview
 
-The model calls only `stage_journal_import`, returning chapter line boundaries,
-whole-line evidence, statuses, local clocks/ranges, explicit date evidence, one actual place name (or null), and
-questions. The server validates coverage/order, exact source references, normalized
+The model calls only `stage_journal_import` once per source segment (see the
+streaming protocol), returning chapter line boundaries, a heading flag, line
+references, statuses, local clocks/ranges, explicit date evidence, one actual place name (or null), and
+questions. The server takes all event text and titles from the source lines; it never asks
+the model to copy a line. It validates coverage/order, exact short references, normalized
 calendar/clock format, structured interval ordering and existing journal references.
 The tool instructs the model to keep mixed narratives uncertain, cancellations
 cancelled, and date ranges unallocated. The server does not independently prove
@@ -61,9 +63,12 @@ these semantic interpretations. It never derives another date or UTC conversion
 from clock order. Duplicate chapter text/date within one input is a grouping error:
 correction must preserve every repeated line, not treat it as a saved-record replay.
 
-Original source and event prose stay intact. Model reading proposals are accepted
-only when they retain the full original line (ignoring surrounding whitespace);
-paraphrases/cropped negatives fall back to original prose with a question. This
+Original source and event prose stay intact; the importer proposes no rewritten
+prose, so each suggestion is the source line. A line whose date, clock or place
+claim fails validation stays in the preview as `uncertain` with a review
+question; a segment whose structure cannot be corrected becomes a deterministic
+review preview, and the job status reports `degradedLines` and each fallback
+segment's `{segment,path,code}` without source text. This
 bounded importer does not claim to prove arbitrary generated prose true. The
 separate existing reading-suggestion UI is not silently invoked. Matching previous
 chapters retain all manual text, suggestions, corrected dates, media and links.

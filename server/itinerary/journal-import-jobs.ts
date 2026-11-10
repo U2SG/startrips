@@ -44,9 +44,9 @@ export async function readJournalJob(target:Target,id:string):Promise<Record<str
   });
 }
 export function jobView(row:any) {
-  const common={jobId:row.id,status:row.status,phase:row.phase,characters:row.characters,chunks:row.chunks};
+  const common={jobId:row.id,status:row.status,phase:row.phase,characters:row.characters,chunks:row.chunks,segments:row.segments,segmentsDone:row.segments_done};
   const {status:statusCode,...error}=row.error??{};
-  return row.status==='completed' ? {...common,envelope:row.envelope as Envelope,planDigest:hash(row.envelope)} : row.error ? {...common,...error,...(statusCode?{statusCode}:{})} : common;
+  return row.status==='completed' ? {...common,degradedLines:row.degraded_lines,degradations:row.degradations??[],envelope:row.envelope as Envelope,planDigest:hash(row.envelope)} : row.error ? {...common,...error,...(statusCode?{statusCode}:{})} : common;
 }
 export async function cancelJournalJob(target:Target,id:string) {
   await db.transaction(async tx=>{
@@ -65,14 +65,14 @@ export async function runJournalJob(signal?:AbortSignal) {
   const {rows}=await pool.query(`UPDATE journal_import_jobs SET status='running',phase='connecting',lease=$1,updated_at=now() WHERE id=(SELECT id FROM journal_import_jobs WHERE status='queued' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`,[token]);
   const row=rows[0];if(!row)return;
   const controller=new AbortController(); const abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
-  let progress={phase:'connecting',characters:0,chunks:0};let ticking=false;
-  const heartbeat=setInterval(()=>{if(ticking)return;ticking=true;void pool.query(`UPDATE journal_import_jobs SET phase=$3,characters=$4,chunks=$5,updated_at=now() WHERE id=$1 AND lease=$2 AND status='running' RETURNING id`,[row.id,token,progress.phase,progress.characters,progress.chunks]).then(r=>{if(!r.rowCount)controller.abort();}).catch(()=>controller.abort()).finally(()=>{ticking=false;});},500);
+  let progress={phase:'connecting',characters:0,chunks:0,segments:0,segmentsDone:0};let ticking=false;
+  const heartbeat=setInterval(()=>{if(ticking)return;ticking=true;void pool.query(`UPDATE journal_import_jobs SET phase=$3,characters=$4,chunks=$5,segments=$6,segments_done=$7,updated_at=now() WHERE id=$1 AND lease=$2 AND status='running' RETURNING id`,[row.id,token,progress.phase,progress.characters,progress.chunks,progress.segments,progress.segmentsDone]).then(r=>{if(!r.rowCount)controller.abort();}).catch(()=>controller.abort()).finally(()=>{ticking=false;});},500);
   try {
     const {target,input,before,configDigest}=row.payload;
     const current=await db.transaction(tx=>lockedTarget(tx,target));if(hash(current)!==hash(before))fail('JOURNAL_CHANGED');
     const model=journalImportModel(input.provider);
     if(hash({baseUrl:model.baseUrl,model:model.model,apiKey:model.apiKey})!==configDigest)fail('JOURNAL_PROVIDER_CHANGED');
-    model.stream={signal:controller.signal,onProgress:p=>{progress=p;}};
+    model.stream={signal:controller.signal,onProgress:p=>{progress={...progress,...p};}};
     model.checkCurrent=async()=>{
       const active=await pool.query(`SELECT id FROM journal_import_jobs WHERE id=$1 AND lease=$2 AND status='running'`,[row.id,token]);
       if(!active.rowCount)fail('JOURNAL_JOB_INTERRUPTED');
@@ -80,7 +80,8 @@ export async function runJournalJob(signal?:AbortSignal) {
       if(hash({baseUrl:configured.baseUrl,model:configured.model,apiKey:configured.apiKey})!==configDigest)fail('JOURNAL_PROVIDER_CHANGED');
       if(hash(await db.transaction(tx=>lockedTarget(tx,target)))!==hash(before))fail('JOURNAL_CHANGED');
     };
-    const draft=await prepareJournalImport(input,before,model);
+    // Segment counts merge into stream progress; neither replaces the other.
+    const draft=await prepareJournalImport(input,before,model,s=>{progress={...progress,...s};});
     progress={...progress,phase:'validating'};
     const finalModel=journalImportModel(input.provider);
     if(hash({baseUrl:finalModel.baseUrl,model:finalModel.model,apiKey:finalModel.apiKey})!==configDigest)fail('JOURNAL_PROVIDER_CHANGED');
@@ -89,7 +90,7 @@ export async function runJournalJob(signal?:AbortSignal) {
       if(controller.signal.aborted)fail('JOURNAL_JOB_INTERRUPTED');
       const chapters=await normalizeJournalReferences(target.journeyId,before.chapters,draft.chapters,tx,draft.placeClaims);
       const envelope=sealJournalDraft(target,input.source,before,chapters,draft.importedChapterIds,input.provider);
-      await tx.execute(sql`UPDATE journal_import_jobs SET status='completed',phase='validating',envelope=${JSON.stringify(envelope)},payload=NULL,characters=${progress.characters},chunks=${progress.chunks},updated_at=now() WHERE id=${row.id} AND lease=${token} AND status='running'`);
+      await tx.execute(sql`UPDATE journal_import_jobs SET status='completed',phase='validating',envelope=${JSON.stringify(envelope)},payload=NULL,characters=${progress.characters},chunks=${progress.chunks},segments=${draft.segments},segments_done=${draft.segments},degraded_lines=${draft.degradedLines},degradations=${JSON.stringify(draft.degradations)}::jsonb,updated_at=now() WHERE id=${row.id} AND lease=${token} AND status='running'`);
     });
   } catch(error) {
     const diagnostic=importDiagnostic(error,'llm-preview');

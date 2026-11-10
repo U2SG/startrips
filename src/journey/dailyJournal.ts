@@ -98,12 +98,15 @@ function journalStatusMarker(line: string): { status: JournalStatus; rest: strin
   return { status: labels[match[1] ?? match[2]], rest: match[3], section: /^#{1,6}\s/.test(line.trim()) || !match[3] };
 }
 
+/** A dated heading line: optional year, month, day, then optional title. */
+export const JOURNAL_DATE_HEADING = /^\s*(?:#{1,6}\s*)?(?:(\d{4})[-年/.])?(\d{1,2})[-月/.](\d{1,2})(?:日)?(?=\s|$|[（(])\s*(.*)$/;
+
 /** Explicit headings only. Undated prose stays intact under the user-selected fallback day. */
 export function previewJournalImport(source: string, fallbackDate: string, existing: readonly JournalChapter[] = [], makeId = () => crypto.randomUUID()): JournalChapter[] {
   if (!source.trim() || source.length > JOURNAL_MAX_TEXT || !isPersistedCalendarDate(fallbackDate)) throw new Error("请输入有效日期及不超过 20 万字的原文。");
   const chunks: { date: string; title: string; lines: string[]; heading: boolean }[] = [];
   for (const line of source.replace(/\r\n?/g, "\n").split("\n")) {
-    const match = line.match(/^\s*(?:#{1,6}\s*)?(?:(\d{4})[-年/.])?(\d{1,2})[-月/.](\d{1,2})(?:日)?(?=\s|$|[（(])\s*(.*)$/);
+    const match = line.match(JOURNAL_DATE_HEADING);
     if (match) {
       const date = `${match[1] ?? fallbackDate.slice(0, 4)}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
       if (!isPersistedCalendarDate(date)) throw new Error(`日期无效：${line}`);

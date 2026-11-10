@@ -20,6 +20,7 @@ import { readDailyJournal, writeDailyJournal } from "../repositories/daily-journ
 import { applyImport, readImportState, validateEnvelope, hash, type Envelope } from "../admin/journal-import";
 import { previewImportedHotels, applyImportedHotels } from "../admin/journal-hotel-import";
 import { journalImportDependencies, prepareAuthorizedJournalImport } from "../itinerary/journal-import-service";
+import { JOURNAL_DEGRADED_QUESTION } from "../itinerary/journal-import-workflow";
 import { previewJournalImport } from "../../src/journey/dailyJournal";
 import type { LocationSearch } from "../location/location-search";
 const TEST_ORIGIN = "http://127.0.0.1:5173";
@@ -89,9 +90,9 @@ const model = { ...provider, apiKey: "mock-only", timeoutMs: 1000, fetcher: vi.f
   const body = JSON.parse(init!.body as string), name = body.tool_choice.function.name, data = JSON.parse(body.messages.filter((m: any) => m.role === "user").at(-1).content);
   expect(body.model).toBe("mock");
   let args;
-  if (name === "stage_journal_import") args = { chapters: [{ firstLine: 0, lastLine: 2, headingEvidence: "2028年6月3日", dateStatus: "single", questions: [], date: "2028-06-03", dateEnd: null, dateEvidence: "2028年6月3日",
-    events: source.split("\n").slice(1).map((evidence, i) => ({ line: i + 1, evidence, status: i ? "cancelled" : "actual", dateStatus: "absent", localDate: null, dateEvidence: null,
-      time: i ? "07:30" : "23:30", timeEnd: null, timeEvidence: i ? "07:30" : "23:30", placeName: null, reading: evidence, questions: [] })) }] };
+  if (name === "stage_journal_import") args = { chapters: [{ firstLine: 0, lastLine: 2, heading: true, dateStatus: "single", questions: [], date: "2028-06-03", dateEnd: null, dateEvidence: "2028年6月3日",
+    events: source.split("\n").slice(1).map((_, i) => ({ line: i + 1, status: i ? "cancelled" : "actual", dateStatus: "absent", localDate: null, dateEvidence: null,
+      time: i ? "07:30" : "23:30", timeEnd: null, timeEvidence: i ? "07:30" : "23:30", placeName: null, questions: [] })) }] };
   else if (name === "search_hotels") {
     const event = data.flatMap((c: any) => c.events).find((e: any) => e.source.includes("入住星桥酒店"));
     args = { stays: [{ eventId: event.id ?? event.eventId, evidence: "在虚构城入住星桥酒店", name: "星桥酒店", area: "虚构城" }], questions: [] };
@@ -359,14 +360,14 @@ for (const path of ["sync", "job"] as const) {
     const singleQuote = quantity ? "2028年6月3日" : "2028年6月5日";
     const chapterHasValue = scenario.endsWith("chapter-unknown-with-value") || scenario === "quantity-chapter";
     const eventHasValue = scenario.endsWith("event-unknown-with-value") || scenario === "quantity-event";
-    const payload = { chapters: [{ firstLine: 0, lastLine: 0, headingEvidence: null,
+    const payload = { chapters: [{ firstLine: 0, lastLine: 0, heading: false,
       dateStatus: quantity ? chapterHasValue ? "single" : "absent" : scenario === "range" ? "range" : "unknown",
       questions: quantity ? [] : ["日期范围待确认"],
       date: chapterHasValue ? singleDate : scenario === "range" ? "2028-06-03" : null,
       dateEnd: scenario === "range" ? "2028-06-05" : null,
       dateEvidence: quantity ? chapterHasValue ? singleQuote : null : evidence,
-      events: [{ line: 0, evidence: text, status: "actual", dateStatus: quantity ? eventHasValue ? "single" : "absent" : "unknown", localDate: eventHasValue ? singleDate : null,
-        dateEvidence: quantity ? eventHasValue ? singleQuote : null : evidence, time: null, timeEnd: null, timeEvidence: null, placeName: null, reading: text, questions: quantity ? [] : ["日期范围待确认"] }] }] };
+      events: [{ line: 0, status: "actual", dateStatus: quantity ? eventHasValue ? "single" : "absent" : "unknown", localDate: eventHasValue ? singleDate : null,
+        dateEvidence: quantity ? eventHasValue ? singleQuote : null : evidence, time: null, timeEnd: null, timeEvidence: null, placeName: null, questions: quantity ? [] : ["日期范围待确认"] }] }] };
     let calls = 0;
     journalImportDependencies.fetcher = async (_url, init) => {
       calls++;
@@ -377,31 +378,36 @@ for (const path of ["sync", "job"] as const) {
     };
     try {
       const input = { source: text, sentence: "导入合成日期记录", fallbackDate: "2028-06-01", provider };
-      const invalid = scenario.endsWith("unknown-with-value"); let result: Envelope | null = null;
+      // An unknown claim with a value never reaches the preview: a chapter claim is
+      // structural (the segment falls back after correction), an event claim degrades its line.
+      const invalid = scenario.endsWith("unknown-with-value"), chapterInvalid = scenario.endsWith("chapter-unknown-with-value"); let result: Envelope | null = null;
       if (path === "sync") {
         const response = await app.request(`${TEST_ORIGIN}/api/intents/journal-import`, { method: "POST", headers: authHeaders(owner.cookie), body: JSON.stringify({ ...input, journeyId: j!.id }) });
-        expect(response.status).toBe(invalid ? 422 : 200);
-        const body = await response.json();
-        if (invalid) { expect(body.error).toBe("JOURNAL_IMPORT_MALFORMED"); expect(body.envelope).toBeUndefined(); }
-        else result = body.envelope;
+        expect(response.status).toBe(200);
+        result = (await response.json()).envelope;
       } else {
         const id = randomUUID(); await submitJournalJob(target, id, input); await runJournalJob();
         const row = await readJournalJob(target, id);
-        expect(row.status).toBe(invalid ? "failed" : "completed");
-        if (invalid) { expect(row.error).toMatchObject({ error: "JOURNAL_IMPORT_MALFORMED" }); expect(row.envelope).toBeNull(); }
-        else result = row.envelope;
+        expect(row.status).toBe("completed");
+        expect(row.degraded_lines).toBe(invalid ? 1 : 0);
+        expect(jobView(row)).toMatchObject({ degradedLines: invalid ? 1 : 0, degradations: chapterInvalid ? [{ segment: 0, path: "$.chapters[0].date", code: "UNKNOWN_DATE_VALUES" }] : [] });
+        result = row.envelope;
       }
-      if (!invalid) {
-        const plan = validateEnvelope(result).plan;
-        expect(plan.after.chapters[0]).toEqual(before!.chapters[0]);
-        const added = plan.after.chapters[1]; expect(added.source).toBe(text);
+      const plan = validateEnvelope(result).plan;
+      expect(plan.after.chapters[0]).toEqual(before!.chapters[0]);
+      const added = plan.after.chapters[1]; expect(added.source).toBe(text);
+      if (invalid) {
+        expect(added.date).toBe("2028-06-01");
+        expect(added.events[0]).toMatchObject({ status: "uncertain", localDate: null, text });
+        expect(added.suggestions[0].questions).toContain(JOURNAL_DEGRADED_QUESTION);
+      } else {
         expect(added.events[0].localDate).toBe(eventHasValue ? singleDate : null);
         if (quantity) {
           expect(added.date).toBe(chapterHasValue ? singleDate : "2028-06-01");
           expect(added.suggestions[0].questions.join()).not.toMatch(/日期范围|日期区间/);
         } else expect(added.suggestions[0].questions.join()).toContain(scenario === "range" ? "2028-06-03 至 2028-06-05" : "日期范围待确认");
       }
-      expect(calls).toBe(invalid ? 2 : 1);
+      expect(calls).toBe(chapterInvalid ? 2 : 1);
       expect(await readDailyJournal(j!.id, owner.atlasId)).toEqual(before);
       expect(await getJourneyForAtlas(j!.id, owner.atlasId)).toEqual(journeyBefore);
     } finally { journalImportDependencies.fetcher = model.fetcher; }

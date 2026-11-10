@@ -54,6 +54,16 @@ describe("journal import controls", () => {
     expect(html).not.toContain(" 字");
     expect(html).toContain("正在接收识别结果");
   });
+  it("shows completed source segments as a determinate n/m without changing the phase label", () => {
+    const html = renderToStaticMarkup(createElement(JournalImportProgress, {
+      state: {status: "observing", progress: {phase: "receiving", characters: 40_000, chunks: 12, segments: 4, segmentsDone: 1}}, onStop() {}, onResume() {},
+    }));
+    expect(html).toContain("<strong>正在接收识别结果…</strong>");
+    expect(html).toContain(">1/4</span>");
+    expect(html).toContain('aria-valuenow="1"'); expect(html).toContain('aria-valuemax="4"');
+    expect(html).toContain("width:25%");
+    expect(html).not.toContain("40,000");
+  });
   it.each([
     ["queued", "正在等待处理"], ["connecting", "正在连接模型"], ["validating", "正在处理"],
   ] as const)("labels the %s phase", (phase, label) => {

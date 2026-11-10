@@ -302,6 +302,13 @@
       "when": 1793360366300,
       "tag": "0042_journal_import_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1794300361907,
+      "tag": "0043_journal_import_segments",
+      "breakpoints": true
     }
   ]
 }

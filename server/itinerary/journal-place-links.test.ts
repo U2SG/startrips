@@ -53,11 +53,13 @@ describe("source-grounded existing journey links", () => {
     expect(draft.placeClaims).toEqual([{ eventId: draft.chapters[0].events[0].id, name: "星桥花园", date: null }]);
     expect(linkJournalPlaces([], draft.chapters, draft.placeClaims, fixture().points)[0].events[0].routePointId).toBe("point-a");
   });
-  it.each([{ placeName: "捏造地点", status: "actual" }, { placeName: "星桥花园", status: "planned" }])("rejects unsupported place claims %o", async patch => {
+  it.each([{ placeName: "捏造地点", status: "actual" }, { placeName: "星桥花园", status: "planned" }])("never links an unsupported place claim; that line is left for review %o", async patch => {
     const chapter = mockChapter(source); Object.assign(chapter.events[0], patch);
-    await expect(prepareJournalImport({ source, sentence: "导入", fallbackDate: "2028-06-03" }, { revision: 0, chapters: [] }, {
+    const draft = await prepareJournalImport({ source, sentence: "导入", fallbackDate: "2028-06-03" }, { revision: 0, chapters: [] }, {
       ...mockJournalModel, fetcher: async () => toolResponse("stage_journal_import", { chapters: [chapter] }),
-    })).rejects.toThrow();
+    });
+    expect(draft.placeClaims).toEqual([]); expect(draft.degradedLines).toBe(1);
+    expect(draft.chapters[0].events[0]).toMatchObject({ status: "uncertain", routePointId: null });
   });
 });
 
@@ -84,7 +86,7 @@ it("keeps multi-place narratives unlinked when the model cannot assert one actua
 
 it("uses an explicit single-day heading only to check the link, never to fill event dates", async () => {
   const source = "2028年6月3日\n实际：她在星桥花园看花。", chapter = mockChapter(source);
-  Object.assign(chapter, { headingEvidence: "2028年6月3日", dateStatus: "single", date: "2028-06-03", dateEvidence: "2028年6月3日" });
+  Object.assign(chapter, { heading: true, dateStatus: "single", date: "2028-06-03", dateEvidence: "2028年6月3日" });
   chapter.events.shift(); Object.assign(chapter.events[0], { placeName: "星桥花园" });
   const draft = await prepareJournalImport({ source, sentence: "导入", fallbackDate: "2028-07-01" }, { revision: 0, chapters: [] }, {
     ...mockJournalModel, fetcher: async () => toolResponse("stage_journal_import", { chapters: [chapter] }),
