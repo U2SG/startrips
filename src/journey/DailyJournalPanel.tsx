@@ -1,6 +1,6 @@
 import { JournalPlaceMedia } from "./JournalPlaceMedia";
 import { journalMediaGroups, firstJournalPlaceMediaEvents } from "./journalMedia";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useAtlasView } from "./atlasView";
 import { useModalFocus } from "./useModalFocus";
 import type { DailyJournal, JournalChapter, JournalEvent, JournalStatus } from "./dailyJournal";
@@ -12,7 +12,7 @@ import "../styles/daily-journal.css";
 import type { HotelPreview } from "./journalHotels";
 import { createJournalRequestSlot } from "./journalRequest";
 import { JournalOperationStatus } from "./JournalOperationStatus";
-import { JournalImportControl } from "./JournalImportControl";
+import { countJournalSourceCharacters, JournalImportControl } from "./JournalImportControl";
 import type { JournalImportSession } from "./journalImportSession";
 import { JournalReadingView } from "./JournalReadingView";
 import { JournalChapterReview, hasJournalReadingSuggestion } from "./JournalChapterReview";
@@ -37,6 +37,8 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
   const [saved, setSaved] = useState<DailyJournal | null>(null);
   const [draft, setDraft] = useState<DailyJournal | null>(null);
   const [source, setSource] = useState("");
+  const sourceCountId = useId();
+  const sourceCharacters = useMemo(() => countJournalSourceCharacters(source), [source]);
   const [busy, setBusy] = useState<string | null>("读取");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -95,7 +97,8 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
     {busy && busy !== "导入" ? <JournalOperationStatus label={`正在${busy}…`} onStop={busy === "保存" || busy === "读取" ? undefined : stopOperation} /> : null}
     {saved ? <>
       <section className="daily-journal__import" aria-label="导入手记">
-        <label>原始流水账<textarea value={source} maxLength={200000} placeholder="粘贴整份游记，AI 会识别日期、钟点与事件状态。" disabled={!!busy || !!draft} onChange={(e) => setSource(e.target.value)} /></label>
+        <label>原始流水账<textarea aria-describedby={sourceCountId} value={source} maxLength={200000} placeholder="粘贴整份游记，AI 会识别日期、钟点与事件状态。" disabled={!!busy || !!draft} onChange={(e) => setSource(e.target.value)} /></label>
+        <p id={sourceCountId} className="daily-journal__source-count">原文 {sourceCharacters.toLocaleString("zh-CN")} 字符<span>不含空白 · 仅在本地统计</span></p>
         <JournalImportControl client={client.importJournal}
           input={{ journeyId: journey.id, atlasId: journey.atlasId, source, fallbackDate: journey.startedOn }}
           disabled={!!draft || (!!busy && busy !== "导入")} control={importControl}
