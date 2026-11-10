@@ -20,6 +20,17 @@ cookies. Switching access modes clears native navigation and the local scene.
 
 ## Scene and navigation
 
+The native Atlas now follows the **Mobile V2** composition from
+`src/journey/LivingAtlasApp.tsx`: the same brand wordmark, compact Journey
+chip/time dock, details bottom sheet and all-Journeys picker. It reuses the
+production mobile CSS class family rather than maintaining a second visual
+specification. The trusted loopback scene sends selection, Story and
+scope-bound account-switch actions through the native bridge. The native Story
+reader remains implemented with SwiftUI/UIKit for playback and photo gestures.
+Signed private media URLs are intentionally never sent to the scene; a brand
+placeholder is shown where the Web details sheet can display an authorized cover.
+Capture matching Web/iPhone screenshots before claiming visual parity.
+
 `Sources/App/AppRouter.swift` owns the navigation stack, selection and revision.
 `Scene/main.tsx` bundles the real production `LivingAtlasGlobe` (Three.js and
 MapLibre), `JourneyTimeline`, `public/earth`, production fonts, brand resources,

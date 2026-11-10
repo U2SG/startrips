@@ -9,6 +9,10 @@
 3. App 自动连接正式 Startrips HTTPS 服务 `https://106.53.130.142`，普通用户无需填写服务器地址，更无需自己部署后端。打开 App 选择「登录并选择图谱」，在登录窗口完成身份和图谱选择，返回后打开图谱。启用 Google 的站点会从原有 Google 按钮启动系统登录窗口，授权成功后回到同一站点选择图谱；该路径依赖 #769 的一次性登录码兑换接口。访客通过「打开分享」输入含片段令牌的完整 `/share#…` 链接。只有开发者以 DEBUG 参数 `-allow-server-override` 启动时才会显示调试服务器输入框。
 4. 真机运行时在 App target 的 Signing & Capabilities 中选择有权签名的 Team，再选择该 iPhone。使用测试图谱和可撤销的测试分享，不把用户素材放入仓库。
 
+## Mobile V2 主界面设计基准
+
+iPhone 图谱主界面复用 Web Mobile V2 的顶部品牌栏、当前旅程紧凑卡片、时间轴、旅程详情抽屉和全部旅程选择器，同样从 `src/journey/LivingAtlasApp.tsx` 和 `src/styles/living-atlas.css` 取得视觉语义。原生 Story 仍采用 SwiftUI/UIKit 实现视频播放、照片缩放与相册操作。由于本地图谱不能持有私有素材签名 URL，详情抽屉暂用品牌图形占位，封面图的真实权限化呈现仍需补全并以同数据截图验收。更改视觉布局后须保留模拟器 XCUITest 的原生导航和地球焦点断言。
+
 ## 代码从哪里改
 
 | 要改的体验 | 入口 | 保持的约定 |

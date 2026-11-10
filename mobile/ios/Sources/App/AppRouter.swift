@@ -23,6 +23,7 @@ final class AppRouter: ObservableObject {
     private var seen = Set<String>()
     private let defaults: UserDefaults
     var onInvalidation: (() -> Void)?
+    var onSwitchAccess: (() -> Void)?
 
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
 
@@ -142,6 +143,10 @@ final class AppRouter: ObservableObject {
             #endif
             rendered = true
         case .cameraInterrupted: rendered = false
+        case .switchAccess:
+            // Only the active, trusted local Atlas may release this identity.
+            guard path.isEmpty else { return }
+            onSwitchAccess?()
         case .ready: break
         }
     }
