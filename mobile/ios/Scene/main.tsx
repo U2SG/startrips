@@ -7,7 +7,7 @@ import { GlobeTimeScrubber } from "../../../src/journey/GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "../../../src/journey/useGlobeTimeCursor";
 import { toJourneyRoutes } from "../../../src/journey/journeyModel";
 import { LivingAtlasGlobe, PersistentEarthProvider, usePersistentEarth } from "../../../src/scene/LivingAtlasGlobe";
-import { acceptsSnapshot, atlasSceneFocus, decodeSnapshot, journeySwipeDirection, nextJourneyIndex, renderJourneys, send, type JourneySwipePoint, type Snapshot } from "./bridge";
+import { acceptsSnapshot, atlasSceneFocus, decodeSnapshotOrReport, journeySwipeDirection, nextJourneyIndex, renderJourneys, send, type JourneySwipePoint, type Snapshot } from "./bridge";
 import "../../../src/styles/tokens.css";
 import "../../../src/styles/controls.css";
 import "../../../src/styles/living-atlas.css";
@@ -61,17 +61,17 @@ function AtlasScene() {
   const [error, setError] = useState(false);
   useEffect(() => {
     deliverSnapshot = (json) => {
-      try {
-        const next = decodeSnapshot(JSON.parse(json));
-        if (!acceptsSnapshot(current.current, next)) return;
-        const previous = current.current;
-        const newFocus = previous?.scopeId !== next.scopeId || previous?.selection?.requestId !== next.selection?.requestId;
-        current.current = next; setSnapshot(next); setError(false);
-        if (newFocus) {
-          setInterrupted(false); setFocusRevision((value) => value + 1);
-        }
-        if (!previous || previous.scopeId !== next.scopeId) send(next, "ready");
-      } catch { setError(true); }
+      // An unreadable snapshot is reported to native, which owns the reload control.
+      const next = decodeSnapshotOrReport(json);
+      if (!next) { setError(true); return; }
+      if (!acceptsSnapshot(current.current, next)) return;
+      const previous = current.current;
+      const newFocus = previous?.scopeId !== next.scopeId || previous?.selection?.requestId !== next.selection?.requestId;
+      current.current = next; setSnapshot(next); setError(false);
+      if (newFocus) {
+        setInterrupted(false); setFocusRevision((value) => value + 1);
+      }
+      if (!previous || previous.scopeId !== next.scopeId) send(next, "ready");
     };
     if (pendingSnapshot) deliverSnapshot(pendingSnapshot);
     return () => { deliverSnapshot = null; };
@@ -194,7 +194,7 @@ function AtlasScene() {
   const routeSummary = !selected ? "" : stops.length > 1
     ? stops[0].label + " → " + stops[stops.length - 1].label
     : stops.length === 1 ? stops[0].label : selected.routePoints.length + " 个途经点";
-  if (error) return <main className="native-atlas__status"><p role="alert">地球数据无法读取，请刷新。</p></main>;
+  if (error) return <main className="native-atlas__status" aria-hidden="true" />;
   if (!snapshot) return <main className="native-atlas__status" aria-busy="true">
     <StartripsBrandLoader message="正在打开图谱…" />
   </main>;

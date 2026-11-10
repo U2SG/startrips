@@ -150,6 +150,11 @@ final class AppRouter: ObservableObject {
             // Only the active, trusted local Atlas may release this identity.
             guard path.isEmpty else { return }
             onSwitchAccess?()
+        case .sceneFailed:
+            // The scene could not read its snapshot; surface the native reload,
+            // which does not depend on the WKWebView's own controls.
+            guard path.isEmpty else { return }
+            error = "地球数据无法读取，请刷新重试。"
         case .ready: break
         }
     }

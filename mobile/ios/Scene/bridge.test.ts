@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import fixture from "../Fixtures/bridge.json";
 import { buildJourneyTimeline, resolveJourneyTimelineSelection } from "../../../src/journey/globeTimeline";
 import { toJourneyRoutes } from "../../../src/journey/journeyModel";
 import { GLOBE_IDLE_RESUME_DELAY_MS, getGlobeIdleRotationDelta, resolveGlobeFocusIntent } from "../../../src/scene/ParticleEarthScene";
-import { acceptsSnapshot, atlasSceneFocus, decodeSnapshot, journeySwipeDirection, nextJourneyIndex, renderJourneys } from "./bridge";
+import { acceptsSnapshot, atlasSceneFocus, decodeSnapshot, decodeSnapshotOrReport, journeySwipeDirection, nextJourneyIndex, renderJourneys } from "./bridge";
 
 describe("native compact Journey chip gestures", () => {
   it("switches only for a meaningful horizontal gesture, not taps or vertical swipes", () => {
@@ -66,5 +66,27 @@ describe("the same redacted fixture as Swift", () => {
       const value = structuredClone(fixture.snapshot); mutate(value);
       expect(() => decodeSnapshot(value)).toThrow();
     }
+  });
+});
+
+describe("unreadable native snapshots", () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("posts an unscoped sceneFailed event so native can offer its reload", () => {
+    const postMessage = vi.fn();
+    vi.stubGlobal("window", { webkit: { messageHandlers: { atlas: { postMessage } } } });
+    expect(decodeSnapshotOrReport("{\"version\":1}")).toBeNull();
+    expect(decodeSnapshotOrReport("not json")).toBeNull();
+    expect(postMessage).toHaveBeenCalledTimes(2);
+    const message = JSON.parse(postMessage.mock.calls[0][0]);
+    expect(message).toEqual({ version: 1, kind: "sceneFailed", requestId: expect.any(String) });
+    expect(message.requestId).toMatch(/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i);
+  });
+
+  it("does not report a valid snapshot", () => {
+    const postMessage = vi.fn();
+    vi.stubGlobal("window", { webkit: { messageHandlers: { atlas: { postMessage } } } });
+    expect(decodeSnapshotOrReport(JSON.stringify(fixture.snapshot))?.scopeId).toBe(fixture.snapshot.scopeId);
+    expect(postMessage).not.toHaveBeenCalled();
   });
 });
