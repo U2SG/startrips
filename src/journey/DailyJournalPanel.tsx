@@ -77,8 +77,10 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
     if (importControl.current && !await importControl.current.stop()) return;
     requests.current.cancel(); onClose();
   }
-  function searchHotels() {
+  function searchHotels(keepNotice?: string) {
     return run("检索酒店", async signal => {
+      // run() clears messages; the automatic step keeps the save confirmation.
+      if (keepNotice) setNotice(keepNotice);
       setHotels(null);
       const preview = await client.previewHotels!(journey.id, signal);
       if (!signal.aborted) setHotels(preview);
@@ -87,7 +89,7 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
   useEffect(() => {
     if (!findHotels || busy) return;
     setFindHotels(false);
-    void searchHotels();
+    void searchHotels("手记已保存。");
   }, [findHotels, busy]); // eslint-disable-line react-hooks/exhaustive-deps
   function stopOperation() {
     requests.current.cancel(); setBusy(null); setError(""); setNotice("已停止，原文和草稿已保留。");
