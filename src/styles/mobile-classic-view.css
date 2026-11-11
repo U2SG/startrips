@@ -40,7 +40,8 @@
 .journey-story[data-classic-view] .journey-story__media {
   --classic-note-space: 0px;
   --classic-controls-height: 64px;
-  height: calc(var(--classic-aperture) + var(--classic-note-space) + var(--classic-controls-height));
+  /* The Story action row above takes its height from the picture aperture. */
+  height: calc(var(--classic-aperture) - var(--story-action-row-height, 0px) + var(--classic-note-space) + var(--classic-controls-height));
   min-height: 0; max-height: none;
 }
 .journey-story[data-classic-view] .journey-story__media[data-point-note-slot="true"] {
@@ -132,7 +133,7 @@
   .journey-story[data-classic-view] {
     --journey-story-sheet-extent: 92svh;
     /* Preserve a picture area above the native video controls on short phones. */
-    --classic-aperture: max(180px, calc(92svh - 192px - var(--story-action-row-height, 0px)));
+    --classic-aperture: max(180px, calc(92svh - 192px));
   }
   .journey-story[data-classic-view] .journey-story__classic-context { display: none; }
 }
