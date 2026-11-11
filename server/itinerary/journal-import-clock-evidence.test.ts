@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { prepareJournalImport } from "./journal-import-workflow";
-import { JOURNAL_DEGRADED_QUESTION } from "./journal-import-workflow";
+import { JOURNAL_DROPPED_CLAIM_QUESTION } from "./journal-import-workflow";
 import { mockChapter, mockJournalModel, toolResponse } from "./journal-import-test-fixtures";
 // Mock semantic clock claims. The server checks shape/provenance, not prose interpretation.
 async function prepare(source: string, time: string | null, evidence: string | null, end: string | null = null, questions = time === null ? ["钟点待确认"] : []) {
@@ -30,18 +30,19 @@ it("preserves wrapped meridiem and midnight without inferring a new date", async
   const source = "（晚上11:30）到（凌晨1:00） 实际：途中。";
   expect((await prepare(source, "23:30", source, "01:00")).chapters[0].events[0]).toMatchObject({ source, localTime: null, localDate: null });
 });
-const degradedLine = async (result: ReturnType<typeof prepare>) => {
+/** The line keeps its status; the clock claim is dropped, with a question only when the model had asserted a time. */
+const clockDropped = async (result: ReturnType<typeof prepare>, flagged: boolean) => {
   const draft = await result;
-  expect(draft.degradedLines).toBe(1);
-  expect(draft.chapters[0].events[0]).toMatchObject({ status: "uncertain", localTime: null, localDate: null });
-  expect(draft.chapters[0].suggestions[0].questions).toContain(JOURNAL_DEGRADED_QUESTION);
+  expect(draft.degradedLines).toBe(0); expect(draft.degradations).toEqual([]);
+  expect(draft.chapters[0].events[0]).toMatchObject({ status: "actual", localTime: null, localDate: null });
+  expect(draft.chapters[0].suggestions[0].questions.includes(JOURNAL_DROPPED_CLAIM_QUESTION)).toBe(flagged);
 };
-it.each(["25:00", "10:60", "9:00", "09:000"])("leaves a line with malformed normalized clock %s for review", async time => {
-  await degradedLine(prepare("09:00 出发", time, "09:00"));
+it.each(["25:00", "10:60", "9:00", "09:000"])("drops a malformed normalized clock %s and flags it for review", async time => {
+  await clockDropped(prepare("09:00 出发", time, "09:00"), true);
 });
-it("leaves lines with ungrounded or inconsistent clock fields for review", async () => {
-  await degradedLine(prepare("约09:00", null, "约09:00", null, []));
-  await degradedLine(prepare("09:00", "09:00", "fabricated"));
-  await degradedLine(prepare("09:00", "09:00", null));
-  await degradedLine(prepare("约09:00", null, "约09:00", "10:00"));
+it("drops ungrounded or inconsistent clock fields; only an asserted time is flagged", async () => {
+  await clockDropped(prepare("约09:00", null, "约09:00", null, []), false);
+  await clockDropped(prepare("09:00", "09:00", "fabricated"), true);
+  await clockDropped(prepare("09:00", "09:00", null), true);
+  await clockDropped(prepare("约09:00", null, "约09:00", "10:00"), false);
 });

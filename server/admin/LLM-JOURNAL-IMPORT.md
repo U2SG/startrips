@@ -60,13 +60,14 @@ calendar/clock format, structured interval ordering and existing journal referen
 The tool instructs the model to keep mixed narratives uncertain, cancellations
 cancelled, and date ranges unallocated. The server does not independently prove
 these semantic interpretations. It never derives another date or UTC conversion
-from clock order. Duplicate chapter text/date within one input is a grouping error:
-correction must preserve every repeated line, not treat it as a saved-record replay.
+from clock order. Duplicate chapter text/date within one input is joined into one
+chapter that keeps every repeated line; it is never treated as a saved-record replay.
 
 Original source and event prose stay intact; the importer proposes no rewritten
-prose, so each suggestion is the source line. A line whose date, clock or place
-claim fails validation stays in the preview as `uncertain` with a review
-question; a segment whose structure cannot be corrected becomes a deterministic
+prose, so each suggestion is the source line. A date, clock or place claim that
+does not match its line is dropped while the model's status is kept; a line the
+model omitted stays in the preview as `uncertain` with a review question; a
+segment whose chapter boundaries cannot be corrected becomes a deterministic
 review preview, and the job status reports `degradedLines` and each fallback
 segment's `{segment,path,code}` without source text. This
 bounded importer does not claim to prove arbitrary generated prose true. The

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import { prepareJournalImport, JOURNAL_DEGRADED_QUESTION, JOURNAL_IMPORT_SCHEMA, JOURNAL_SEGMENT_CONCURRENCY } from "./journal-import-workflow";
+import { prepareJournalImport, JOURNAL_DEGRADED_QUESTION, JOURNAL_DROPPED_CLAIM_QUESTION, JOURNAL_IMPORT_SCHEMA, JOURNAL_SEGMENT_CONCURRENCY } from "./journal-import-workflow";
 import { mockChapter, mockEvent, mockJournalModel, suppliedLines, toolResponse } from "./journal-import-test-fixtures";
 import { segmentJournalLines, JOURNAL_SEGMENT_BUDGET } from "./journal-import-segments";
 import { JOURNAL_DATE_HEADING, previewJournalImport } from "../../src/journey/dailyJournal";
@@ -32,7 +32,9 @@ function stageByHeadings(supplied: { line: number; text: string }[]) {
   return { chapters };
 }
 const byHeadings = vi.fn(async (_url: unknown, init?: RequestInit) => toolResponse("stage_journal_import", stageByHeadings(suppliedLines(init))));
-const prose = (n: number, mark: string) => `她在${mark}散步。`.repeat(n);
+// Sizes below were written for a 4,000-character budget; scale them so the
+// segmentation expectations hold for the current budget.
+const prose = (n: number, mark: string) => `她在${mark}散步。`.repeat(Math.max(1, Math.round(n * JOURNAL_SEGMENT_BUDGET / 4_000)));
 
 describe("journal model boundary", () => {
   it("uses a real named tool and preserves range, clock order, mixed facts, person and existing edits", async () => {
@@ -76,19 +78,11 @@ async function prepare(source: string, chapter = mockChapter(source)) {
 }
 const twoLines = "2028年6月3日她出发。\n2028年6月5日她返回。";
 it.each([
-  ["omission", "$.chapters[0].events", "LINE_COVERAGE"], ["order", "$.chapters[0].events[0].line", "LINE_COVERAGE"],
-  ["date", "$.chapters[0].date.start", "CALENDAR_DATE"], ["range-order", "$.chapters[0].date", "DATE_RANGE_ORDER"],
   ["extra", "$.chapters[0].events[0]", "EXTRA_ARGUMENT"], ["copied-line", "$.chapters[0].events[0]", "EXTRA_ARGUMENT"],
-  ["wrong-line-quote", "$.chapters[0].date.evidence", "SOURCE_REFERENCE"],
-])("degrades the whole segment after an uncorrected structural violation %s and records only its path and code", async (kind, path, code) => {
+])("degrades the whole segment after an uncorrected schema violation %s and records only its path and code", async (kind, path, code) => {
   const c = mockChapter(twoLines), e = c.events[0];
-  if (kind === "omission") c.events.pop();
-  if (kind === "order") e.line = 1;
-  if (kind === "date") Object.assign(c, { dateStatus: "single", date: "2028-02-30", dateEvidence: "2028年6月3日" });
-  if (kind === "range-order") Object.assign(c, { dateStatus: "range", date: "2028-06-05", dateEnd: "2028-06-03", dateEvidence: "2028年6月3日" });
   if (kind === "extra") Object.assign(e, { latitude: 1 });
   if (kind === "copied-line") Object.assign(e, { evidence: "2028年6月3日她出发。" });
-  if (kind === "wrong-line-quote") Object.assign(c, { dateStatus: "single", date: "2028-06-05", dateEvidence: "2028年6月5日" });
   const result = await prepare(twoLines, c);
   expect(result.degradations).toEqual([{ segment: 0, path, code }]);
   expect(result.degradedLines).toBe(2);
@@ -99,7 +93,38 @@ it.each([
   }
   expect(JSON.stringify(result.degradations)).not.toContain("她");
 });
-it.each(["time", "clock-quote", "place", "event-date", "questions"])("degrades only the line whose interpretation fails (%s)", async kind => {
+it.each([["omission", 1], ["order", 0]])("leaves only the line without a matching event for review, no fallback (%s)", async (kind, missing) => {
+  const c = mockChapter(twoLines);
+  if (kind === "omission") c.events.pop();
+  // Both events now claim line 1: the first wins, so line 0 has none.
+  if (kind === "order") c.events[0].line = 1;
+  const result = await prepare(twoLines, c);
+  expect(result.degradations).toEqual([]); expect(result.degradedLines).toBe(1);
+  expect(result.chapters[0].source).toBe(twoLines);
+  for (const [i, ev] of result.chapters[0].events.entries()) {
+    expect(ev.text).toBe(twoLines.split("\n")[i]);
+    expect(ev.status).toBe(i === missing ? "uncertain" : "actual");
+    expect(result.chapters[0].suggestions[i].questions.includes(JOURNAL_DEGRADED_QUESTION)).toBe(i === missing);
+  }
+});
+it.each([
+  ["date", { dateStatus: "single", date: "2028-02-30", dateEvidence: "2028年6月3日" }],
+  ["range-order", { dateStatus: "range", date: "2028-06-05", dateEnd: "2028-06-03", dateEvidence: "2028年6月3日" }],
+])("drops a chapter date claim that fails verification and uses the archive date without retry (%s)", async (_kind, patch) => {
+  const c = mockChapter(twoLines); Object.assign(c, patch);
+  const result = await prepare(twoLines, c);
+  expect(result.degradations).toEqual([]); expect(result.degradedLines).toBe(0);
+  expect(result.chapters.map(ch => [ch.source, ch.date])).toEqual([[twoLines, "2028-06-01"]]);
+  expect(result.chapters[0].events.map(e => e.status)).toEqual(["actual", "actual"]);
+  expect(result.chapters[0].suggestions[0].questions).toContain("章节日期未明确，暂用指定归档日。");
+});
+it("checks a chapter date quote against the whole chapter text, not only its first line", async () => {
+  const c = mockChapter(twoLines); Object.assign(c, { dateStatus: "single", date: "2028-06-05", dateEvidence: "2028年6月5日" });
+  const result = await prepare(twoLines, c);
+  expect(result.degradations).toEqual([]); expect(result.degradedLines).toBe(0);
+  expect(result.chapters[0].date).toBe("2028-06-05");
+});
+it.each(["time", "clock-quote", "place", "event-date", "questions"])("keeps the model's status and drops only the claim that fails verification (%s)", async kind => {
   const c = mockChapter(twoLines), e = c.events[0];
   if (kind === "time") Object.assign(e, { time: "25:30", timeEvidence: "出发" });
   if (kind === "clock-quote") Object.assign(e, { time: "11:30", timeEvidence: "fabricated" });
@@ -107,27 +132,54 @@ it.each(["time", "clock-quote", "place", "event-date", "questions"])("degrades o
   if (kind === "event-date") Object.assign(e, { dateStatus: "single", localDate: "2028-06-03", dateEvidence: "2028年6月5日" });
   if (kind === "questions") e.questions = Array.from({ length: 18 }, (_, i) => `问题${i}`);
   const result = await prepare(twoLines, c);
-  expect(result.degradations).toEqual([]); expect(result.degradedLines).toBe(1);
-  const [first, second] = result.chapters[0].events;
-  expect(first).toMatchObject({ text: "2028年6月3日她出发。", status: "uncertain", localDate: null, localTime: null });
-  expect(result.chapters[0].suggestions[0].questions).toContain(JOURNAL_DEGRADED_QUESTION);
+  expect(result.degradations).toEqual([]); expect(result.degradedLines).toBe(0);
+  const [first, second] = result.chapters[0].events, [firstQuestions, secondQuestions] = result.chapters[0].suggestions.map(s => s.questions);
+  expect(first).toMatchObject({ text: "2028年6月3日她出发。", status: kind === "place" ? "planned" : "actual", localDate: null, localTime: null });
+  expect(firstQuestions).not.toContain(JOURNAL_DEGRADED_QUESTION);
+  // A dropped clock or date is flagged; a dropped place is silent.
+  expect(firstQuestions.includes(JOURNAL_DROPPED_CLAIM_QUESTION)).toBe(["time", "clock-quote", "event-date"].includes(kind));
+  if (kind === "questions") { expect(firstQuestions).toContain("问题16"); expect(firstQuestions).not.toContain("问题17"); }
   expect(second).toMatchObject({ text: "2028年6月5日她返回。", status: "actual" });
-  expect(result.chapters[0].suggestions[1].questions).not.toContain(JOURNAL_DEGRADED_QUESTION);
+  expect(secondQuestions).not.toContain(JOURNAL_DEGRADED_QUESTION); expect(secondQuestions).not.toContain(JOURNAL_DROPPED_CLAIM_QUESTION);
   expect(result.placeClaims).toEqual([]);
 });
-it("splits a fallback segment at dated headings and keeps each heading date", async () => {
-  const source = "2028年6月3日\n她出发。\n2028年6月5日 返程\n她返回。", c = mockChapter(source); c.events.pop();
+it("keeps status and inherits the chapter date when events repeat the heading date as their evidence", async () => {
+  const source = "2028年6月3日\n她出发。\n她返回。", c = mockChapter(source); c.events.shift();
+  Object.assign(c, { heading: true, dateStatus: "single", date: "2028-06-03", dateEvidence: "2028年6月3日" });
+  for (const [i, e] of c.events.entries()) Object.assign(e, { status: i ? "planned" : "actual", dateStatus: "single", localDate: "2028-06-03", dateEvidence: "2028年6月3日" });
   const result = await prepare(source, c);
-  expect(result.degradations).toEqual([{ segment: 0, path: "$.chapters[0].events", code: "LINE_COVERAGE" }]);
+  expect(result.degradations).toEqual([]); expect(result.degradedLines).toBe(0);
+  expect(result.chapters[0]).toMatchObject({ date: "2028-06-03", title: "2028年6月3日" });
+  expect(result.chapters[0].events.map(e => [e.status, e.localDate])).toEqual([["actual", null], ["planned", null]]);
+  expect(result.chapters[0].suggestions.map(s => s.questions)).toEqual([[], []]);
+});
+it("drops a place name expanded beyond the line text without a question or a place claim", async () => {
+  const source = "她入住星桥酒店。", c = mockChapter(source);
+  Object.assign(c.events[0], { status: "actual", placeName: "星桥酒店一号楼" });
+  const result = await prepare(source, c);
+  expect(result.degradations).toEqual([]); expect(result.degradedLines).toBe(0);
+  expect(result.chapters[0].events[0]).toMatchObject({ status: "actual", routePointId: null });
+  expect(result.placeClaims).toEqual([]);
+  const questions = result.chapters[0].suggestions[0].questions;
+  expect(questions).not.toContain(JOURNAL_DEGRADED_QUESTION); expect(questions).not.toContain(JOURNAL_DROPPED_CLAIM_QUESTION);
+});
+it("splits a fallback segment at dated headings and keeps each heading date", async () => {
+  const source = "2028年6月3日\n她出发。\n2028年6月5日 返程\n她返回。", c = mockChapter(source); Object.assign(c.events[0], { latitude: 1 });
+  const result = await prepare(source, c);
+  expect(result.degradations).toEqual([{ segment: 0, path: "$.chapters[0].events[0]", code: "EXTRA_ARGUMENT" }]);
   expect(result.chapters.map(ch => [ch.source, ch.date, ch.events.length])).toEqual([["2028年6月3日\n她出发。", "2028-06-03", 2], ["2028年6月5日 返程\n她返回。", "2028-06-05", 2]]);
   expect(result.chapters[0].suggestions[0].questions).toEqual([JOURNAL_DEGRADED_QUESTION]);
   expect(result.degradedLines).toBe(4);
 });
-it("omits a first line from events only when the model marks it as a heading", async () => {
+it("leaves a first line without an event for review unless the model marks it as a heading", async () => {
   const source = "### 2028年6月3日\n她出发。", c = mockChapter(source); c.events.shift();
-  expect((await prepare(source, c)).degradations).toEqual([{ segment: 0, path: "$.chapters[0].events", code: "LINE_COVERAGE" }]);
+  const unmarked = await prepare(source, c);
+  expect(unmarked.degradations).toEqual([]); expect(unmarked.degradedLines).toBe(1);
+  expect(unmarked.chapters[0].events.map(e => [e.text, e.status])).toEqual([[source.split("\n")[0], "uncertain"], ["她出发。", "actual"]]);
+  expect(unmarked.chapters[0].suggestions[0].questions).toContain(JOURNAL_DEGRADED_QUESTION);
   c.heading = true;
   const result = await prepare(source, c);
+  expect(result.degradedLines).toBe(0);
   expect(result.chapters[0]).toMatchObject({ source, title: "### 2028年6月3日" });
   expect(result.chapters[0].events.map(e => e.text)).toEqual(["她出发。"]);
 });
@@ -139,34 +191,25 @@ it("keeps semantic status supplied for review without keyword reclassification",
   expect(result.chapters[0].suggestions[0].questions).toContain("实际行为待确认");
   expect(result.chapters[0].suggestions[0].text).toBe(source);
 });
-it("corrects an invalid date argument with a matched error before staging once", async () => {
+it("drops an invalid chapter date claim without a second model call and keeps its questions", async () => {
   const source = "2028年6月？日到2028年6月5日，她旅行。", c = mockChapter(source);
   Object.assign(c, { dateStatus: "unknown", date: "2028-06-05", dateEvidence: source, questions: ["日期范围待确认"] });
-  const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
-    const messages = JSON.parse(String(init?.body)).messages;
-    if (messages.length > 2) { expect(messages.at(-1).tool_call_id).toBe(messages.at(-2).tool_calls[0].id); c.date = null; }
-    return toolResponse("stage_journal_import", { chapters: [c] });
-  });
+  const fetcher = vi.fn(async () => toolResponse("stage_journal_import", { chapters: [c] }));
   const result = await prepareJournalImport({ source, sentence: "导入", fallbackDate: "2028-06-01" }, { revision: 0, chapters: [] }, { ...model, fetcher });
-  expect(fetcher).toHaveBeenCalledTimes(2); expect(result.chapters[0].events[0].localDate).toBeNull();
+  expect(fetcher).toHaveBeenCalledTimes(1); expect(result.chapters[0].events[0].localDate).toBeNull();
+  expect(result.chapters[0].date).toBe("2028-06-01");
   expect(result.chapters[0].suggestions[0].questions).toContain("日期范围待确认");
-  expect(result.degradations).toEqual([]);
+  expect(result.degradations).toEqual([]); expect(result.degradedLines).toBe(0);
 });
 
-it.each([false, true])("does not collapse same-input repetitions into saved-record replay (prior=%s)", async withPrior => {
+it.each([false, true])("joins same-input repetitions from one response instead of retrying (prior=%s)", async withPrior => {
   const text = "她在湖边散步。", source = `${text}\n${text}`;
   const prior = withPrior ? (await prepare(text)).chapters : [];
   const before = { revision: withPrior ? 1 : 0, chapters: prior }, snapshot = structuredClone(before);
-  const first = mockChapter(text), second = mockChapter(text, 1);
-  const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
-    if (fetcher.mock.calls.length === 1) return toolResponse("stage_journal_import", { chapters: [first, second] });
-    const messages = JSON.parse(String(init?.body)).messages;
-    expect(JSON.parse(messages.at(-1).content).error).toMatchObject({ path: "$.chapters[1]", code: "DUPLICATE_CHAPTER_SOURCE" });
-    expect(messages.at(-1).tool_call_id).toBe(messages.at(-2).tool_calls[0].id);
-    return toolResponse("stage_journal_import", { chapters: [mockChapter(source)] });
-  });
+  const fetcher = vi.fn(async () => toolResponse("stage_journal_import", { chapters: [mockChapter(text), mockChapter(text, 1)] }));
   const result = await prepareJournalImport({ source, sentence: "导入", fallbackDate: "2028-06-01" }, before, { ...model, fetcher });
-  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(result.degradations).toEqual([]); expect(result.degradedLines).toBe(0);
   expect(result.chapters.filter(c => result.importedChapterIds.includes(c.id)).map(c => c.source).join("\n")).toBe(source);
   expect(result.chapters.at(-1)!.events.map(e => e.source)).toEqual([text, text]);
   expect(new Set(result.importedChapterIds).size).toBe(result.importedChapterIds.length);
@@ -174,14 +217,14 @@ it.each([false, true])("does not collapse same-input repetitions into saved-reco
   expect(before).toEqual(snapshot);
   if (withPrior) expect(result.chapters[0]).toEqual(prior[0]);
 });
-it("falls back to a complete preview after repeated invalid chapter grouping, never a shortened one", async () => {
+it("joins repeated chapter grouping into one chapter in a single call and keeps the model's statuses", async () => {
   const text = "她在湖边散步。", source = `${text}\n${text}`;
   const fetcher = vi.fn(async () => toolResponse("stage_journal_import", { chapters: [mockChapter(text), mockChapter(text, 1)] }));
   const result = await prepareJournalImport({ source, sentence: "导入", fallbackDate: "2028-06-01" }, { revision: 0, chapters: [] }, { ...model, fetcher });
-  expect(fetcher).toHaveBeenCalledTimes(2);
-  expect(result.degradations).toEqual([{ segment: 0, path: "$.chapters[1]", code: "DUPLICATE_CHAPTER_SOURCE" }]);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(result.degradations).toEqual([]);
   expect(result.chapters).toHaveLength(1); expect(result.chapters[0].source).toBe(source);
-  expect(result.chapters[0].events.map(e => [e.text, e.status])).toEqual([[text, "uncertain"], [text, "uncertain"]]);
+  expect(result.chapters[0].events.map(e => [e.text, e.status])).toEqual([[text, "actual"], [text, "actual"]]);
 });
 
 it("keeps IDs unique when a saved chapter of the same source was dated differently", async () => {

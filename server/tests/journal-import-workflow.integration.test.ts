@@ -20,7 +20,7 @@ import { readDailyJournal, writeDailyJournal } from "../repositories/daily-journ
 import { applyImport, readImportState, validateEnvelope, hash, type Envelope } from "../admin/journal-import";
 import { previewImportedHotels, applyImportedHotels } from "../admin/journal-hotel-import";
 import { journalImportDependencies, prepareAuthorizedJournalImport } from "../itinerary/journal-import-service";
-import { JOURNAL_DEGRADED_QUESTION } from "../itinerary/journal-import-workflow";
+import { JOURNAL_DROPPED_CLAIM_QUESTION } from "../itinerary/journal-import-workflow";
 import { previewJournalImport } from "../../src/journey/dailyJournal";
 import type { LocationSearch } from "../location/location-search";
 const TEST_ORIGIN = "http://127.0.0.1:5173";
@@ -378,8 +378,8 @@ for (const path of ["sync", "job"] as const) {
     };
     try {
       const input = { source: text, sentence: "导入合成日期记录", fallbackDate: "2028-06-01", provider };
-      // An unknown claim with a value never reaches the preview: a chapter claim is
-      // structural (the segment falls back after correction), an event claim degrades its line.
+      // An unknown claim with a value never reaches the preview: the claim is dropped and the line keeps
+      // its status, with no correction call; a dropped event date adds a question.
       const invalid = scenario.endsWith("unknown-with-value"), chapterInvalid = scenario.endsWith("chapter-unknown-with-value"); let result: Envelope | null = null;
       if (path === "sync") {
         const response = await app.request(`${TEST_ORIGIN}/api/intents/journal-import`, { method: "POST", headers: authHeaders(owner.cookie), body: JSON.stringify({ ...input, journeyId: j!.id }) });
@@ -389,8 +389,8 @@ for (const path of ["sync", "job"] as const) {
         const id = randomUUID(); await submitJournalJob(target, id, input); await runJournalJob();
         const row = await readJournalJob(target, id);
         expect(row.status).toBe("completed");
-        expect(row.degraded_lines).toBe(invalid ? 1 : 0);
-        expect(jobView(row)).toMatchObject({ degradedLines: invalid ? 1 : 0, degradations: chapterInvalid ? [{ segment: 0, path: "$.chapters[0].date", code: "UNKNOWN_DATE_VALUES" }] : [] });
+        expect(row.degraded_lines).toBe(0);
+        expect(jobView(row)).toMatchObject({ degradedLines: 0, degradations: [] });
         result = row.envelope;
       }
       const plan = validateEnvelope(result).plan;
@@ -398,8 +398,9 @@ for (const path of ["sync", "job"] as const) {
       const added = plan.after.chapters[1]; expect(added.source).toBe(text);
       if (invalid) {
         expect(added.date).toBe("2028-06-01");
-        expect(added.events[0]).toMatchObject({ status: "uncertain", localDate: null, text });
-        expect(added.suggestions[0].questions).toContain(JOURNAL_DEGRADED_QUESTION);
+        expect(added.events[0]).toMatchObject({ status: "actual", localDate: null, text });
+        expect(added.suggestions[0].questions.includes(JOURNAL_DROPPED_CLAIM_QUESTION)).toBe(!chapterInvalid);
+        if (chapterInvalid) expect(added.suggestions[0].questions).toContain("章节日期未明确，暂用指定归档日。");
       } else {
         expect(added.events[0].localDate).toBe(eventHasValue ? singleDate : null);
         if (quantity) {
@@ -407,7 +408,7 @@ for (const path of ["sync", "job"] as const) {
           expect(added.suggestions[0].questions.join()).not.toMatch(/日期范围|日期区间/);
         } else expect(added.suggestions[0].questions.join()).toContain(scenario === "range" ? "2028-06-03 至 2028-06-05" : "日期范围待确认");
       }
-      expect(calls).toBe(chapterInvalid ? 2 : 1);
+      expect(calls).toBe(1);
       expect(await readDailyJournal(j!.id, owner.atlasId)).toEqual(before);
       expect(await getJourneyForAtlas(j!.id, owner.atlasId)).toEqual(journeyBefore);
     } finally { journalImportDependencies.fetcher = model.fetcher; }
@@ -425,14 +426,14 @@ for (const mode of ["sync", "job"] as const) {
       const body = JSON.parse(String(init?.body)), payload = await (await model.fetcher(url, init)).json();
       const call = payload.choices[0].message.tool_calls[0];
       if (calls === 1) {
-        const args = JSON.parse(call.function.arguments); args.chapters[0].date = "2028-02-30"; call.function.arguments = JSON.stringify(args);
+        const args = JSON.parse(call.function.arguments); args.chapters[0].events[0].latitude = 1; call.function.arguments = JSON.stringify(args);
         if (change === "version") await writeDailyJournal(j!.id, owner.atlasId, 0, previewJournalImport("她后来手工记录。", "2028-06-01"));
         if (change === "permission") await db.update(member).set({ role: "viewer" }).where(eq(member.userId, owner.userId));
         if (change === "cancel") await cancelJournalJob(target, jobId);
       } else {
         expect(body.messages.at(-1).role).toBe("tool");
         expect(body.messages.at(-1).tool_call_id).toBe(body.messages.at(-2).tool_calls[0].id);
-        expect(JSON.parse(body.messages.at(-1).content).error.code).toBe("CALENDAR_DATE");
+        expect(JSON.parse(body.messages.at(-1).content).error.code).toBe("EXTRA_ARGUMENT");
       }
       if (!body.stream) return Response.json(payload);
       return new Response(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, ...call }] }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
@@ -462,7 +463,7 @@ for (const mode of ["sync", "job"] as const) {
   });
 }
 
-it.each(["sync", "job"] as const)("%s preserves repeated source through correction, preview, signed save and replay", async mode => {
+it.each(["sync", "job"] as const)("%s preserves repeated source through chapter joining, preview, signed save and replay", async mode => {
   const j = await createJourneyForAtlas(owner.atlasId, owner.userId, { title: "repeated source fixture", startedOn: "2028-06-01", endedOn: "2028-06-09", note: "", lightColor: "#ffffff", routePoints: [{ label: "合成起点", latitude: 1, longitude: 2, isStop: true, occurredAt: null }] });
   const target = { ...owner, email: authUserEmails[0], journeyId: j!.id }, jobId = randomUUID();
   const text = "她在湖边散步。", repeated = `${text}\n${text}`, input = { source: repeated, sentence: "导入合成记录", fallbackDate: "2028-06-01", provider };
@@ -471,8 +472,7 @@ it.each(["sync", "job"] as const)("%s preserves repeated source through correcti
     calls++;
     const request = JSON.parse(String(init?.body)), first = mockChapter(text), second = mockChapter(text);
     second.firstLine = second.lastLine = second.events[0].line = 1;
-    if (calls === 2) expect(JSON.parse(request.messages.at(-1).content).error.code).toBe("DUPLICATE_CHAPTER_SOURCE");
-    const response = toolResponse("stage_journal_import", { chapters: calls === 1 ? [first, second] : [mockChapter(repeated)] });
+    const response = toolResponse("stage_journal_import", { chapters: [first, second] });
     if (!request.stream) return response;
     const call = (await response.json()).choices[0].message.tool_calls[0];
     return new Response(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, ...call }] }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
@@ -487,7 +487,7 @@ it.each(["sync", "job"] as const)("%s preserves repeated source through correcti
       const row = await readJournalJob(target, jobId); expect(row.status).toBe("completed"); result = row.envelope;
     }
     const checked = validateEnvelope(result);
-    expect(calls).toBe(2); expect(checked.plan.importedChapterIds).toHaveLength(1);
+    expect(calls).toBe(1); expect(checked.plan.importedChapterIds).toHaveLength(1);
     expect(checked.plan.after.chapters.map(c => c.source).join("\n")).toBe(repeated);
     expect(checked.plan.after.chapters[0].events.map(e => e.source)).toEqual([text, text]);
     expect(readJournalImportSnapshot({ jobId, status: "completed", envelope: checked, planDigest: hash(checked) }, jobId,
