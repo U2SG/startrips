@@ -385,7 +385,8 @@
   .journey-story[data-story-layout="mobile"] .journey-story__editor-actions button > span { display: none; }
 }
 
-/* Keep picture/tool overlays below the sticky editor controls while scrolling. */
-.journey-story[data-story-layout="mobile"]:is([data-story-editing="true"], :has(> header > .journey-story__editor-actions)) > .journey-story__layout {
+/* Keep picture tools under the sticky header while scrolling. An open note
+   sheet needs its own higher stacking order so the header cannot cover it. */
+.journey-story[data-story-layout="mobile"]:is([data-story-editing="true"], :has(> header > .journey-story__editor-actions)) > .journey-story__layout:not(:has(.story-point-note-sheet)) {
   position: relative; isolation: isolate;
 }
