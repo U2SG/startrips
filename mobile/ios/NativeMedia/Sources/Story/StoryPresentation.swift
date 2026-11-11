@@ -44,6 +44,16 @@ enum StoryTheme {
     static let gold = Color(red: 217 / 255, green: 185 / 255, blue: 122 / 255)
     static let coverInk = Color(red: 236 / 255, green: 230 / 255, blue: 214 / 255)
     static func serif(_ style: Font.TextStyle) -> Font { .system(style, design: .serif) }
+
+    // Layout tokens (4pt grid), shared by every Story row so edges line up.
+    static func grid(_ units: CGFloat) -> CGFloat { units * 4 }
+    static let hitTarget: CGFloat = 44
+    /// Inset of an icon row; a 44pt slot then puts its glyph near `edge`.
+    static let slotInset: CGFloat = grid(1)
+    /// Text side margin: the optical edge of a glyph in an inset 44pt slot.
+    static let edge: CGFloat = grid(4)
+    /// Paper page text inset (旅程之书).
+    static let pageInset: CGFloat = grid(6)
 }
 
 /// Port of `src/journey/journeyBookPages.ts` (#393): the Journey read as a book.

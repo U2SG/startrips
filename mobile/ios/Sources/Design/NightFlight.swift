@@ -23,6 +23,11 @@ enum NightFlight {
     // MARK: Spacing (4pt grid)
     static func grid(_ units: CGFloat) -> CGFloat { units * 4 }
     static let hitTarget: CGFloat = 44
+    /// One side margin for every native surface: top bar, card content, ribbon, welcome.
+    static let edge: CGFloat = grid(5)
+    /// The floating card's inset from the screen; its content pads the rest of `edge`.
+    static let cardInset: CGFloat = grid(2)
+    static let cardPadding: CGFloat = edge - cardInset
 
     // MARK: Motion (two springs; Reduce Motion falls back to a short fade)
     static let snappy = Animation.spring(response: 0.32, dampingFraction: 0.86)

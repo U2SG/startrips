@@ -97,7 +97,7 @@ struct JourneyCard: View {
         VStack(spacing: 0) {
             grabber
             HStack(alignment: .center, spacing: NightFlight.grid(3)) {
-                Capsule().fill(Color(cssHex: journey.lightColor)).frame(width: 4).padding(.vertical, 2)
+                Capsule().fill(Color(cssHex: journey.lightColor)).frame(width: NightFlight.grid(1)).padding(.vertical, NightFlight.grid(0.5))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: NightFlight.grid(1)) {
                     // Accessibility sizes break between the two dates, never inside one.
@@ -119,7 +119,7 @@ struct JourneyCard: View {
                         .accessibilityHidden(true)
                 }
             }
-            .padding(.horizontal, NightFlight.grid(5))
+            .padding(.horizontal, NightFlight.cardPadding)
             .padding(.bottom, NightFlight.grid(4))
             .frame(minHeight: NightFlight.hitTarget)
             .contentShape(Rectangle())
@@ -196,7 +196,7 @@ struct JourneyCard: View {
                 JourneyList(router: router, session: session, covers: covers) { move(to: .peek) }
             }
         }
-        .padding(.horizontal, NightFlight.grid(4))
+        .padding(.horizontal, NightFlight.cardPadding)
     }
 
     private var cover: some View {
@@ -301,9 +301,9 @@ struct JourneyList: View {
                 } label: {
                     HStack(spacing: NightFlight.grid(3)) {
                         JourneyCoverView(image: covers.image(for: journey.id), lightColor: journey.lightColor)
-                            .frame(width: 56, height: 56)
+                            .frame(width: NightFlight.grid(14), height: NightFlight.grid(14))
                             .clipShape(RoundedRectangle(cornerRadius: NightFlight.radiusSmall, style: .continuous))
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: NightFlight.grid(0.5)) {
                             Text(journey.title).font(.body.weight(.semibold))
                                 .foregroundStyle(current ? NightFlight.accent : NightFlight.ink)
                             Text([journey.startedOn, journey.endedOn].compactMap { $0 }.joined(separator: " — "))

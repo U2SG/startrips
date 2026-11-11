@@ -15,6 +15,7 @@ final class StoryPresentationUITests: XCTestCase {
         XCTAssertEqual(story.label, "打开故事：起点")
         story.tap()
         XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10))
+        assertStoryChromeIsCentred(app)
         let style = app.buttons["story.style"]
         XCTAssertEqual(style.label, "展示方式")
         XCTAssertEqual(style.value as? String, "默认")
@@ -62,6 +63,23 @@ final class StoryPresentationUITests: XCTestCase {
         choose(app, "默认")
         XCTAssertTrue(photo.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["story.next"].exists)
+    }
+
+    /// Title and play sit on the screen axis; the header's outer icons mirror each other.
+    @MainActor private func assertStoryChromeIsCentred(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let window = app.windows.firstMatch.frame
+        let title = app.staticTexts["story.title"].frame
+        let play = app.buttons["story.play"].frame
+        let close = app.buttons["story.close"].frame
+        let expand = app.buttons["story.expand"].frame
+        XCTAssertEqual(title.midX, window.midX, accuracy: 1, "title is centred", file: file, line: line)
+        XCTAssertEqual(play.midX, window.midX, accuracy: 1, "play is centred", file: file, line: line)
+        XCTAssertEqual(close.minX - window.minX, window.maxX - expand.maxX, accuracy: 1, "header slots mirror", file: file, line: line)
+        for frame in [play, close, expand, app.buttons["story.previous"].frame, app.buttons["story.next"].frame] {
+            XCTAssertGreaterThanOrEqual(min(frame.width, frame.height), 44, file: file, line: line)
+        }
+        XCTAssertEqual(app.buttons["story.previous"].frame.minX - window.minX,
+                       window.maxX - app.buttons["story.next"].frame.maxX, accuracy: 1, "controls mirror", file: file, line: line)
     }
 
     @MainActor private func element(_ app: XCUIApplication, _ id: String) -> XCUIElement {

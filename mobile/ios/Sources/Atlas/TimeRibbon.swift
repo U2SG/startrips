@@ -155,18 +155,18 @@ struct TimeRibbon: View {
 
     private var journeyTrack: some View {
         GeometryReader { proxy in
-            let width = max(1, proxy.size.width - NightFlight.grid(8))
+            let width = max(1, proxy.size.width - NightFlight.edge * 2)
             ZStack(alignment: .leading) {
                 track(width: width)
                 cursor
-                    .offset(x: NightFlight.grid(4) + width * model.fraction(of: selectedIndex) - 1)
+                    .offset(x: NightFlight.edge + width * model.fraction(of: selectedIndex) - 1)
                     .animation(dragIndex == nil ? NightFlight.motion(NightFlight.snappy, reduceMotion: reduceMotion) : nil,
                                value: selectedIndex)
             }
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { value in
-                scrub(to: model.index(at: (value.location.x - NightFlight.grid(4)) / width))
+                scrub(to: model.index(at: (value.location.x - NightFlight.edge) / width))
             }.onEnded { _ in commit() })
         }
         .frame(height: NightFlight.hitTarget + NightFlight.grid(3))
@@ -191,7 +191,7 @@ struct TimeRibbon: View {
             let mid = size.height / 2
             let step = width / CGFloat(max(1, model.lastIndex))
             for (index, month) in model.months.enumerated() {
-                let x = NightFlight.grid(4) + CGFloat(index) * step
+                let x = NightFlight.edge + CGFloat(index) * step
                 let tall = month.month == 1 || index == 0
                 var tick = Path()
                 tick.move(to: CGPoint(x: x, y: mid - (tall ? 7 : 3)))
@@ -201,8 +201,8 @@ struct TimeRibbon: View {
             }
             for span in model.spans {
                 var bar = Path()
-                let start = NightFlight.grid(4) + CGFloat(span.start) * step
-                let end = NightFlight.grid(4) + CGFloat(span.end) * step
+                let start = NightFlight.edge + CGFloat(span.start) * step
+                let end = NightFlight.edge + CGFloat(span.end) * step
                 bar.move(to: CGPoint(x: start, y: mid)); bar.addLine(to: CGPoint(x: max(start + 2, end), y: mid))
                 let current = span.journeyId == router.focusedJourneyId
                 context.stroke(bar, with: .color(current ? NightFlight.accent : NightFlight.ink.opacity(0.6)),
@@ -217,7 +217,7 @@ struct TimeRibbon: View {
         let step = width / CGFloat(max(1, model.lastIndex))
         let years = model.months.enumerated().filter { $0.offset == 0 || $0.element.month == 1 }
         // Thin labels so neighbouring years never collide.
-        let stride = max(1, Int((44 / max(step * 12, 1)).rounded(.up)))
+        let stride = max(1, Int((NightFlight.hitTarget / max(step * 12, 1)).rounded(.up)))
         return ZStack(alignment: .leading) {
             ForEach(Array(years.enumerated()).filter { $0.offset % stride == 0 }.map(\.element), id: \.offset) { item in
                 Text(String(item.element.year))
@@ -225,7 +225,7 @@ struct TimeRibbon: View {
                     .dynamicTypeSize(...DynamicTypeSize.xxLarge)
                     .nightFlightMuted()
                     .fixedSize()
-                    .offset(x: NightFlight.grid(4) + CGFloat(item.offset) * step)
+                    .offset(x: NightFlight.edge + CGFloat(item.offset) * step)
             }
         }
     }
@@ -273,7 +273,7 @@ struct RoutePointTrack: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let inset = NightFlight.grid(4)
+            let inset = NightFlight.edge
             let width = max(1, proxy.size.width - inset * 2)
             Canvas { context, size in
                 let mid = size.height / 2

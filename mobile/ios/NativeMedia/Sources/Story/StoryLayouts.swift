@@ -48,7 +48,7 @@ struct StoryBook: View {
             .shadow(color: .black.opacity(0.5), radius: 18, y: 8)
             .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
         }
-        .padding(.horizontal, 16).padding(.vertical, 8)
+        .padding(.horizontal, StoryTheme.edge).padding(.vertical, StoryTheme.grid(2))
         .accessibilityElement(children: .contain).accessibilityIdentifier("story.book")
         .onAppear(perform: open)
         .onChange(of: state.index) { index in follow(index) }
@@ -162,21 +162,21 @@ private struct StoryBookPageView: View {
                 else { starry }
                 LinearGradient(colors: [.clear, StoryTheme.night.opacity(0.85)], startPoint: .center, endPoint: .bottom)
                 Text(model.journey.title).font(StoryTheme.serif(.largeTitle)).foregroundStyle(StoryTheme.coverInk)
-                    .padding(28).accessibilityAddTraits(.isHeader)
+                    .padding(StoryTheme.pageInset).accessibilityAddTraits(.isHeader)
             }.background(StoryTheme.night)
         case .media(let asset, _, let note):
             VStack(spacing: 0) {
                 if asset.isVideo { video(asset) } else { picture(asset, fill: false) }
                 if let note {
                     Text(note).font(StoryTheme.serif(.body)).lineSpacing(5).foregroundStyle(StoryTheme.paperInk)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24).padding(.vertical, 18)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, StoryTheme.pageInset).padding(.vertical, StoryTheme.grid(4))
                         .fixedSize(horizontal: false, vertical: true)
                 }
-            }.padding(.top, 18).background(StoryTheme.paper)
+            }.padding(.top, StoryTheme.grid(4)).background(StoryTheme.paper)
         case .note(_, let note):
             ScrollView {
                 Text(note).font(StoryTheme.serif(.title3)).lineSpacing(8).foregroundStyle(StoryTheme.paperInk)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(32)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(StoryTheme.grid(8))
             }.background(StoryTheme.paper)
         case .blank:
             StoryTheme.paper
@@ -200,7 +200,7 @@ private struct StoryBookPageView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(.horizontal, fill ? 0 : 18)
+        .padding(.horizontal, fill ? 0 : StoryTheme.edge)
         // Re-request when the Story pager prunes its own copy of this picture.
         .task(id: model.image(for: asset.id) == nil) { if model.image(for: asset.id) == nil { model.requestLibraryImage(asset) } }
         .onDisappear { model.cancelLibraryImage(asset.id) }
@@ -208,7 +208,7 @@ private struct StoryBookPageView: View {
 
     @ViewBuilder private func video(_ asset: MediaAsset) -> some View {
         if model.cursor.current?.role != .journeyCover && model.cursor.current?.asset?.id == asset.id {
-            ForegroundVideo(playback: model.foreground).padding(.horizontal, 18)
+            ForegroundVideo(playback: model.foreground).padding(.horizontal, StoryTheme.edge)
         } else {
             Image(systemName: "play.rectangle").font(.largeTitle).foregroundStyle(StoryTheme.paperInk.opacity(0.5))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -226,7 +226,7 @@ struct StoryStream: View {
         let entries = Array(model.cursor.entries.enumerated()).filter { $0.element.role != .journeyCover }
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 20) {
+                LazyVStack(alignment: .leading, spacing: StoryTheme.grid(5)) {
                     Text(model.journey.title).font(StoryTheme.serif(.largeTitle)).accessibilityAddTraits(.isHeader)
                     let journeyNote = model.journey.note.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !journeyNote.isEmpty {
@@ -237,7 +237,7 @@ struct StoryStream: View {
                     }
                     if !model.journal.isEmpty { journal }
                 }
-                .padding(.horizontal, 20).padding(.vertical, 16)
+                .padding(.horizontal, StoryTheme.edge).padding(.vertical, StoryTheme.grid(4))
                 .frame(maxWidth: 680).frame(maxWidth: .infinity)
             }
             .accessibilityElement(children: .contain).accessibilityIdentifier("story.stream")
@@ -253,10 +253,10 @@ struct StoryStream: View {
     /// A route point's place and note are said once, at its first row.
     @ViewBuilder private func row(_ index: Int, _ entry: StoryEntry, previous: StoryEntry?) -> some View {
         let opensPoint = entry.routePointId != nil && entry.routePointId != previous?.routePointId
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: StoryTheme.grid(3)) {
             if opensPoint, let point = point(entry.routePointId) {
                 Text(point.label).font(StoryTheme.serif(.title3)).foregroundStyle(StoryTheme.ink)
-                    .accessibilityAddTraits(.isHeader).padding(.top, 12)
+                    .accessibilityAddTraits(.isHeader).padding(.top, StoryTheme.grid(3))
             }
             if let asset = entry.asset { StoryStreamMedia(model: model, asset: asset, index: index, entryID: entry.id) }
             if opensPoint, let note = point(entry.routePointId)?.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
@@ -267,15 +267,15 @@ struct StoryStream: View {
     }
 
     private var journal: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Divider().overlay(StoryTheme.line).padding(.vertical, 12)
+        VStack(alignment: .leading, spacing: StoryTheme.grid(4)) {
+            Divider().overlay(StoryTheme.line).padding(.vertical, StoryTheme.grid(3))
             Text("每日手记").font(StoryTheme.serif(.title2)).accessibilityAddTraits(.isHeader)
             ForEach(model.journal) { chapter in
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: StoryTheme.grid(3)) {
                     Text([chapter.date, chapter.title].filter { !$0.isEmpty }.joined(separator: "  "))
                         .font(StoryTheme.serif(.headline)).foregroundStyle(StoryTheme.muted).accessibilityAddTraits(.isHeader)
                     ForEach(chapter.events) { event in
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: StoryTheme.grid(1)) {
                             if let time = event.localTime, !time.isEmpty {
                                 Text(time).font(.footnote.monospacedDigit()).foregroundStyle(StoryTheme.muted)
                             }

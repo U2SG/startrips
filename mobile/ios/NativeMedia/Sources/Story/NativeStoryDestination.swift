@@ -35,39 +35,46 @@ public struct NativeStoryDestination: View {
         .sheet(isPresented: $toolsPresented) {
             NavigationStack {
                 ScrollView {
-                    VStack(spacing: 24) {
+                    VStack(spacing: StoryTheme.grid(6)) {
                         if model.session.access == .owner, let importer { PhotosImportButton(model: importer) }
                         if model.session.access == .owner, let moveModel { MediaMoveView(model: moveModel) }
                         if model.session.access == .owner, let exporter { FilmExportButton(model: exporter) }
-                    }.padding(24)
+                    }.padding(StoryTheme.grid(6))
                 }.navigationTitle("整理与导出")
                     .toolbar { Button("完成") { toolsPresented = false } }
             }
         }
     }
 
+    /// Equal leading and trailing slots (two 44pt icons each) keep the title on the screen axis.
     private var header: some View {
-        HStack(spacing: 4) {
-            StoryIconButton(symbol: "chevron.down", label: "返回", id: "story.close") { model.leave() }
-            Spacer(minLength: 8)
-            Text(model.journey.title).font(StoryTheme.serif(.headline)).lineLimit(1)
+        HStack(spacing: 0) {
+            HStack(spacing: 0) {
+                StoryIconButton(symbol: "chevron.down", label: "返回", id: "story.close") { model.leave() }
+                Spacer(minLength: 0)
+            }.frame(width: StoryTheme.hitTarget * 2)
+            Text(model.journey.title).font(StoryTheme.serif(.headline)).lineLimit(1).truncationMode(.tail)
+                .frame(maxWidth: .infinity)
                 .accessibilityAddTraits(.isHeader).accessibilityIdentifier("story.title")
-            Spacer(minLength: 8)
-            Menu {
+            HStack(spacing: 0) {
+                Menu {
                 Picker(selection: $storedStyle) {
                     ForEach(StoryPresentationStyle.allCases) { option in
                         Label(option.label, systemImage: option.symbol).tag(option.rawValue)
                     }
                 } label: { EmptyView() }.pickerStyle(.inline).labelsHidden()
             } label: {
-                Image(systemName: style.symbol).font(.body.weight(.medium)).frame(minWidth: 44, minHeight: 44)
+                Image(systemName: style.symbol).font(.body.weight(.medium))
+                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                    .frame(width: StoryTheme.hitTarget, height: StoryTheme.hitTarget).contentShape(Rectangle())
             }
             .accessibilityLabel("展示方式").accessibilityValue(style.label).accessibilityIdentifier("story.style")
             StoryIconButton(symbol: model.expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
                             label: model.expanded ? "收起" : "全屏", id: "story.expand") {
                 if model.expanded { model.collapse() } else { model.expanded = true }
             }
-        }.frame(minHeight: 44).padding(.horizontal, 8)
+            }.frame(width: StoryTheme.hitTarget * 2)
+        }.frame(minHeight: StoryTheme.hitTarget).padding(.horizontal, StoryTheme.slotInset)
     }
 
     @ViewBuilder private var content: some View {
@@ -83,7 +90,7 @@ public struct NativeStoryDestination: View {
                 if model.cursor.entries.isEmpty {
                     ScrollView {
                         Text(model.journey.note).font(StoryTheme.serif(.title3)).lineSpacing(6)
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(24)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(StoryTheme.pageInset)
                     }
                 } else {
                     StoryPager(model: model, overlay: style == .noteOverlay)
@@ -93,34 +100,56 @@ public struct NativeStoryDestination: View {
         }
     }
 
+    /// Five equal slots: previous, an auxiliary, play, an auxiliary, next. Empty
+    /// slots keep their width, so play always sits on the screen axis.
     private var controls: some View {
-        HStack(spacing: 4) {
-            if style != .stream || model.playback != nil {
-                StoryIconButton(symbol: "chevron.left", label: "上一页", id: "story.previous") { turn(-1) }
+        let pages = style != .stream || model.playback != nil
+        let tools = model.session.access == .owner && (importer != nil || exporter != nil || moveModel != nil)
+        return HStack(spacing: 0) {
+            slot {
+                if pages { StoryIconButton(symbol: "chevron.left", label: "上一页", id: "story.previous") { turn(-1) } }
             }
-            Spacer(minLength: 8)
-            if model.playback == nil {
-                StoryIconButton(symbol: "play.fill", label: "播放旅程", id: "story.play") { model.playJourney() }
-            } else {
-                StoryIconButton(symbol: model.paused ? "play.fill" : "pause.fill", label: model.paused ? "继续" : "暂停",
-                                id: "story.pause") { model.setPaused(!model.paused) }
-                Menu {
-                    ForEach(NarrativeTempo.allCases, id: \.self) { tempo in
-                        Button(tempo == .fast ? "轻快" : tempo == .standard ? "标准" : "沉浸") { model.changeTempo(tempo) }
+            slot {
+                if model.playback != nil {
+                    Menu {
+                        ForEach(NarrativeTempo.allCases, id: \.self) { tempo in
+                            Button(tempo == .fast ? "轻快" : tempo == .standard ? "标准" : "沉浸") { model.changeTempo(tempo) }
+                        }
+                    } label: {
+                        Image(systemName: "metronome").dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                            .frame(width: StoryTheme.hitTarget, height: StoryTheme.hitTarget)
+                            .contentShape(Rectangle())
                     }
-                } label: { Image(systemName: "metronome").frame(minWidth: 44, minHeight: 44) }
                     .accessibilityLabel("节奏").accessibilityIdentifier("story.tempo")
-            }
-            if model.session.access == .owner && (importer != nil || exporter != nil || moveModel != nil) {
-                StoryIconButton(symbol: "slider.horizontal.3", label: "整理与导出", id: "story.tools") {
-                    model.setPaused(true); toolsPresented = true
                 }
             }
-            Spacer(minLength: 8)
-            if style != .stream || model.playback != nil {
-                StoryIconButton(symbol: "chevron.right", label: "下一页", id: "story.next") { turn(1) }
+            slot {
+                if model.playback == nil {
+                    StoryIconButton(symbol: "play.fill", label: "播放旅程", id: "story.play") { model.playJourney() }
+                } else {
+                    StoryIconButton(symbol: model.paused ? "play.fill" : "pause.fill", label: model.paused ? "继续" : "暂停",
+                                    id: "story.pause") { model.setPaused(!model.paused) }
+                }
             }
-        }.frame(minHeight: 44).padding(.horizontal, 8).padding(.vertical, 6)
+            slot {
+                if tools {
+                    StoryIconButton(symbol: "slider.horizontal.3", label: "整理与导出", id: "story.tools") {
+                        model.setPaused(true); toolsPresented = true
+                    }
+                }
+            }
+            slot {
+                if pages { StoryIconButton(symbol: "chevron.right", label: "下一页", id: "story.next") { turn(1) } }
+            }
+        }
+        .frame(minHeight: StoryTheme.hitTarget)
+        .padding(.horizontal, StoryTheme.slotInset).padding(.vertical, StoryTheme.grid(1))
+    }
+
+    private func slot<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        // A clear base keeps an empty slot's width; `EmptyView` alone would collapse.
+        Color.clear.frame(maxWidth: .infinity, minHeight: StoryTheme.hitTarget, maxHeight: StoryTheme.hitTarget)
+            .overlay { content() }
     }
 
     private func turn(_ direction: Int) {
@@ -137,7 +166,10 @@ struct StoryIconButton: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.body.weight(.medium)).frame(minWidth: 44, minHeight: 44)
+            Image(systemName: symbol).font(.body.weight(.medium))
+                // Glyphs stop growing at the largest standard size so they stay inside their slot.
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                .frame(width: StoryTheme.hitTarget, height: StoryTheme.hitTarget)
                 .contentShape(Rectangle())
         }
         .foregroundStyle(StoryTheme.ink.opacity(0.86))
@@ -163,19 +195,19 @@ private struct StoryPage: View {
                     }
                 } else {
                     media(asset)
-                    if !text.isEmpty { note.padding(.horizontal, 20).padding(.vertical, 12) }
+                    if !text.isEmpty { note.padding(.vertical, StoryTheme.grid(3)) }
                 }
             } else {
                 ScrollView {
                     Text(text).font(StoryTheme.serif(.title2)).lineSpacing(8)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(28)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(StoryTheme.pageInset)
                 }
             }
             if current, let failure = model.failure {
                 VStack(spacing: 4) {
                     Text(failure).font(.callout).foregroundStyle(StoryTheme.muted)
-                    Button("重试") { model.retry() }.frame(minHeight: 44)
-                }.padding(.horizontal, 20)
+                    Button("重试") { model.retry() }.frame(minHeight: StoryTheme.hitTarget)
+                }.padding(.horizontal, StoryTheme.edge)
             }
         }.background(StoryTheme.background)
     }
@@ -184,7 +216,7 @@ private struct StoryPage: View {
         if asset.isVideo {
             if current {
                 ForegroundVideo(playback: model.foreground, fill: overlay)
-                if model.foreground.failure != nil { Button("重试视频") { model.retry() }.frame(minHeight: 44) }
+                if model.foreground.failure != nil { Button("重试视频") { model.retry() }.frame(minHeight: StoryTheme.hitTarget) }
             } else {
                 Image(systemName: "play.rectangle").font(.largeTitle).foregroundStyle(StoryTheme.muted)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -204,39 +236,46 @@ private struct StoryPage: View {
         }
     }
 
+    /// Text starts at `edge`; the chevron's 44pt slot ends at `slotInset`, so its
+    /// glyph lines up with the header and control icons, centred on the caption.
     @ViewBuilder private var note: some View {
-        HStack(alignment: .top, spacing: 8) {
-            if noteExpanded {
-                ScrollView {
-                    Text(text).font(StoryTheme.serif(.body)).lineSpacing(5)
+        HStack(alignment: .center, spacing: 0) {
+            Group {
+                if noteExpanded {
+                    ScrollView {
+                        Text(text).font(StoryTheme.serif(.body)).lineSpacing(5)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxHeight: StoryTheme.grid(60))
+                } else {
+                    Text(text).font(StoryTheme.serif(.body)).lineSpacing(5).lineLimit(3)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                }.frame(maxHeight: 240)
-            } else {
-                Text(text).font(StoryTheme.serif(.body)).lineSpacing(5).lineLimit(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
+            .padding(.leading, StoryTheme.edge - StoryTheme.slotInset)
             expandToggle
         }
+        .padding(.horizontal, StoryTheme.slotInset)
     }
 
     /// 图上感想: the route point note is laid over the picture, like web note-overlay.
     private var overlayNote: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        HStack(alignment: .center, spacing: 0) {
             Group {
                 if noteExpanded {
                     ScrollView {
                         Text(text).font(StoryTheme.serif(.title3)).lineSpacing(6)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                    }.frame(maxHeight: 260)
+                    }.frame(maxHeight: StoryTheme.grid(65))
                 } else {
                     Text(text).font(StoryTheme.serif(.title3)).lineSpacing(6).lineLimit(4)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }.shadow(color: .black.opacity(0.6), radius: 6, y: 1)
+            .padding(.leading, StoryTheme.edge - StoryTheme.slotInset)
             expandToggle
         }
         .foregroundStyle(StoryTheme.ink)
-        .padding(.horizontal, 20).padding(.top, 48).padding(.bottom, 16)
+        .padding(.horizontal, StoryTheme.slotInset).padding(.top, StoryTheme.grid(12)).padding(.bottom, StoryTheme.edge)
         .background(LinearGradient(colors: [.clear, StoryTheme.background.opacity(0.88)], startPoint: .top, endPoint: .bottom)
             .allowsHitTesting(false))
         .accessibilityElement(children: .contain).accessibilityIdentifier("story.overlay")
@@ -250,7 +289,7 @@ struct ForegroundVideo: View {
         ZStack {
             PlayerSurface(player: playback.player, fill: fill)
             if !playback.ready && playback.failure == nil { ProgressView() }
-            if let failure = playback.failure { Text(failure).padding(24) }
+            if let failure = playback.failure { Text(failure).padding(StoryTheme.grid(6)) }
         }
     }
 }

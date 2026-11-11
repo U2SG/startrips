@@ -38,7 +38,7 @@ struct AtlasChrome: View {
                                     height: layout.cardHeight(detent, drag: dragOffset),
                                     mediumScrolls: layout.medium >= layout.large || typeSize.isAccessibilitySize,
                                     storyNamespace: storyNamespace, onPeekHeight: { peekHeight = $0 })
-                            .padding(.horizontal, NightFlight.grid(2))
+                            .padding(.horizontal, NightFlight.cardInset)
                         if detent == .peek && !ribbon.isEmpty {
                             TimeRibbon(router: router, model: ribbon)
                                 .frame(maxWidth: 560)
@@ -114,7 +114,7 @@ struct AtlasChrome: View {
             .accessibilityLabel("设置")
             .accessibilityIdentifier("atlas.account")
         }
-        .padding(.horizontal, NightFlight.grid(4))
+        .padding(.horizontal, NightFlight.edge)
         .padding(.vertical, NightFlight.grid(1))
         .background(alignment: .top) {
             LinearGradient(colors: [NightFlight.background.opacity(0.75), .clear], startPoint: .top, endPoint: .bottom)
@@ -128,7 +128,7 @@ struct AtlasChrome: View {
             .font(NightFlight.serif(.title2))
             .foregroundStyle(NightFlight.ink)
             .multilineTextAlignment(.center)
-            .padding(.horizontal, NightFlight.grid(6))
+            .padding(.horizontal, NightFlight.edge)
             .accessibilityIdentifier("atlas.empty")
     }
 }
