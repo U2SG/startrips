@@ -80,7 +80,7 @@ export async function proposeJournalHotels(journal: DailyJournal, points: Pick<R
             latitude: p.latitude, longitude: p.longitude, providerId: p.id, existingPointId: existing[0]?.id ?? null });
         }
         if (!candidates.length) {
-          questions.push(plausible.length && !anchors.length
+          questions.push(plausible.length && !points.length
             ? `${label}：旅程还没有地点，且没有其他酒店可以印证位置，未建点。`
             : `${label}：没有找到可靠的住宿地点，未建点。`);
           continue;

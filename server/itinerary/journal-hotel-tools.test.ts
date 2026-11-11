@@ -35,7 +35,7 @@ describe("hotel tool boundaries", () => {
     const copy = structuredClone(journal); copy.chapters[0].events[0].text = "secret manual edit";
     const result = await proposeJournalHotels(copy, nearPoints, model, search);
     expect(result.hotels).toEqual([expect.objectContaining({ latitude: 10, longitude: 20, evidence: event.source, existingPointId: null, searchName: "星桥酒店", sourceName: "星桥酒店" })]);
-    expect(search.search).toHaveBeenCalledWith("星桥酒店", { limit: 8, signal: undefined, focus: undefined });
+    expect(search.search).toHaveBeenCalledWith("星桥酒店", { limit: 8, signal: undefined, focus: { latitude: 10.5, longitude: 20.5 } });
     const bodies = fetcher.mock.calls.map(c => JSON.parse(c[1]?.body as string));
     expect(bodies.map(b => b.tool_choice.function.name)).toEqual(["search_hotels"]);
     expect(JSON.stringify(bodies)).not.toContain("secret manual edit");
