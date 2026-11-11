@@ -138,6 +138,17 @@ describe("hotel tool boundaries", () => {
     const alone = await proposeJournalHotels(journal, [], lone.model, lone.search);
     expect(alone.hotels).toEqual([]); expect(alone.questions).toEqual(["星桥酒店：旅程还没有地点，且没有其他酒店可以印证位置，未建点。"]);
   });
+  it.each([["the same provider result", "provider-1"], ["two provider features of one building", "provider-1b"]])(
+    "does not let repeated nights at one hotel corroborate themselves without Journey points (%s)", async (_case, secondId) => {
+    const nights = previewJournalImport("2027-05-01\n住宿：星桥酒店\n住宿：星桥酒店", "2027-05-01");
+    const [first, second] = nights[0].events;
+    const far = { ...candidate, latitude: 40, longitude: 116 };
+    const s = setup([{ eventId: first.id, name: "星桥酒店", searchName: "星桥酒店" }, { eventId: second.id, name: "星桥酒店", searchName: "星桥酒店" }],
+      (() => { let n = 0; return () => [n++ === 0 ? far : { ...far, id: secondId, latitude: 40.001 }]; })());
+    const result = await proposeJournalHotels({ revision: 1, chapters: nights }, [], s.model, s.search);
+    expect(result.hotels).toEqual([]);
+    expect(result.questions).toEqual(Array(2).fill("星桥酒店：旅程还没有地点，且没有其他酒店可以印证位置，未建点。"));
+  });
   it("lets the batch's own hotels corroborate each other when the Journey has no points", async () => {
     const three = previewJournalImport("2027-05-01\n住宿：星桥酒店\n住宿：月湾酒店\n住宿：远山酒店", "2027-05-01");
     const [a, b, c] = three[0].events;

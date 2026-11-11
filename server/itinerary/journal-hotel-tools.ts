@@ -69,7 +69,7 @@ export async function proposeJournalHotels(journal: DailyJournal, points: Pick<R
       // Geography: within the radius of an existing Journey point, or, for a Journey
       // without points, of this batch's best candidates that corroborate each other
       // (in a group of two or more linked by the radius).
-      const anchors = points.length ? points : corroboratingAnchors(searched.flatMap(s => s.plausible.slice(0, 1)));
+      const anchors = points.length ? points : corroboratingAnchors(searched.flatMap(s => s.plausible.slice(0, 1).map(place => ({ place, hotel: s.name }))));
       const near = (p: { latitude: number; longitude: number }) => anchors.some(a => distanceKm(a, p) <= HOTEL_JOURNEY_RADIUS_KM);
       for (const { event, name, query, label, plausible } of searched) {
         const candidates: HotelSelection[] = [];
@@ -111,15 +111,19 @@ export async function proposeJournalHotels(journal: DailyJournal, points: Pick<R
   });
   return { hotels: ordered([...hotels, ...picked], events), questions };
 }
-/** Candidates linked to at least one other by the journey radius (single-linkage groups of two or more). An isolated result corroborates nothing. */
-export function corroboratingAnchors<P extends { latitude: number; longitude: number }>(candidates: P[]): P[] {
+/** Best candidates linked by the journey radius (single linkage). A group corroborates only when it
+ * holds at least two different hotels: different source names AND different provider results, so
+ * repeated nights at one hotel (same or near-duplicate provider features) are a single piece of
+ * evidence. An isolated result corroborates nothing. */
+export function corroboratingAnchors<P extends { id: string; latitude: number; longitude: number }>(candidates: { place: P; hotel: string }[]): P[] {
   const group = candidates.map((_, i) => i);
   const root = (i: number): number => group[i] === i ? i : (group[i] = root(group[i]));
   for (let i = 0; i < candidates.length; i++) for (let j = i + 1; j < candidates.length; j++)
-    if (distanceKm(candidates[i], candidates[j]) <= HOTEL_JOURNEY_RADIUS_KM) group[root(i)] = root(j);
-  const sizes = new Map<number, P[]>();
-  candidates.forEach((c, i) => sizes.set(root(i), [...(sizes.get(root(i)) ?? []), c]));
-  return [...sizes.values()].filter(members => members.length >= 2).flat();
+    if (distanceKm(candidates[i].place, candidates[j].place) <= HOTEL_JOURNEY_RADIUS_KM) group[root(i)] = root(j);
+  const groups = new Map<number, { place: P; hotel: string }[]>();
+  candidates.forEach((c, i) => groups.set(root(i), [...(groups.get(root(i)) ?? []), c]));
+  return [...groups.values()].filter(members => new Set(members.map(m => norm(m.hotel))).size >= 2
+    && new Set(members.map(m => m.place.id)).size >= 2).flat().map(m => m.place);
 }
 const ordered = (hotels: HotelSelection[], events: { id: string }[]) => events.flatMap(e => hotels.filter(h => h.eventId === e.id));
 
