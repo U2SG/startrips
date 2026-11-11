@@ -5,6 +5,7 @@ import { StartripsBrandLoader, StartripsJourneyCue } from "../../../src/brand/St
 import { StartripsWordmarkSignatureButton } from "../../../src/brand/StartripsSignatureMoment";
 import { GlobeTimeScrubber } from "../../../src/journey/GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "../../../src/journey/useGlobeTimeCursor";
+import { MobileSheetGrabber, useMobileSheetDetents } from "../../../src/journey/mobileSheetDetents";
 import { toJourneyRoutes } from "../../../src/journey/journeyModel";
 import { LivingAtlasGlobe, PersistentEarthProvider, usePersistentEarth } from "../../../src/scene/LivingAtlasGlobe";
 import { acceptsSnapshot, atlasSceneFocus, decodeSnapshotOrReport, journeySwipeDirection, nextJourneyIndex, renderJourneys, send, type JourneySwipePoint, type Snapshot } from "./bridge";
@@ -55,7 +56,6 @@ function AtlasScene() {
   const picker = useRef<HTMLElement>(null);
   const swipeStart = useRef<JourneySwipePoint | null>(null);
   const didSwipe = useRef(false);
-  const sheetStart = useRef<number | null>(null);
   const lastCursorCommit = useRef<string | null>(null);
   const current = useRef<Snapshot | null>(null);
   const [error, setError] = useState(false);
@@ -151,6 +151,7 @@ function AtlasScene() {
     setSheetOpen(false);
     requestAnimationFrame(() => chip.current?.focus({ preventScroll: true }));
   };
+  const sheetDetents = useMobileSheetDetents(sheet, closeSheet, sheetOpen ? selected?.id ?? null : null);
   const closePicker = () => {
     setPickerOpen(false);
     requestAnimationFrame(() => pickerTrigger.current?.focus({ preventScroll: true }));
@@ -301,18 +302,10 @@ function AtlasScene() {
         aria-label="关闭旅程详情" onClick={closeSheet}/>
       <section ref={sheet} className="mobile-v2__sheet native-atlas__sheet" role="dialog"
         aria-modal="true" aria-labelledby="native-atlas-sheet-title"
-        tabIndex={-1} onKeyDown={onDialogKeyDown}
+        tabIndex={-1} onKeyDown={onDialogKeyDown} {...sheetDetents.sheetProps}
         style={{ "--journey-color": selected.lightColor } as CSSProperties}>
-        <button className="mobile-v2__sheet-handle" type="button"
-          aria-label="向下滑动或点击关闭旅程详情"
-          onPointerDown={(event) => { sheetStart.current = event.clientY; }}
-          onPointerUp={(event) => {
-            const start = sheetStart.current;
-            sheetStart.current = null;
-            if (start !== null && event.clientY - start > 64) closeSheet();
-          }}
-          onPointerCancel={() => { sheetStart.current = null; }}
-          onClick={closeSheet}><span aria-hidden="true" /></button>
+        <MobileSheetGrabber detent={sheetDetents.detent}
+          onHandleClick={sheetDetents.onHandleClick} toggle={sheetDetents.toggle}/>
         <div className="mobile-v2__sheet-heading">
           <p>{dateRange}</p>
           <h2 id="native-atlas-sheet-title">{selected.title}</h2>

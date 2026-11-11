@@ -102,7 +102,12 @@ body { background: var(--archive-bg); color: var(--archive-ink); font-family: va
   outline: 2px solid var(--control-focus, #7de9d1);
   outline-offset: 3px;
 }
+/* Dialog containers take programmatic focus for VoiceOver; only their
+   controls draw a focus ring (WebKit may treat that focus as focus-visible). */
+.native-atlas__sheet:focus-visible,
+.native-atlas__picker:focus-visible { outline: none; }
 @media (max-height: 480px) and (orientation: landscape) {
   .native-atlas__sheet-cover { display: none; }
-  .native-atlas__sheet { max-height: 82svh; }
+  /* Medium leaves the globe and route visible; large is the near-full detent. */
+  .native-atlas__sheet { max-height: 60svh; }
 }

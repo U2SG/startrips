@@ -8420,6 +8420,71 @@ button.living-atlas__globe-focus-exit {
   animation: atlasSheetIn var(--motion-ui) var(--motion-ease-out) backwards;
 }
 
+/* Journey sheet detents (shared by Web Mobile V2 and the iPhone scene; the
+   More sheet keeps its single height). Medium is the original height, leaves
+   the globe and route visible above and never scrolls; large leaves a thin
+   globe strip and is the only state whose content scrolls. */
+.mobile-v2__sheet {
+  --mobile-sheet-large-height: calc(100svh - env(safe-area-inset-top, 0px) - 96px);
+  transition:
+    min-height var(--motion-ui) var(--motion-ease-out),
+    max-height var(--motion-ui) var(--motion-ease-out);
+}
+
+.mobile-v2__sheet[data-detent="medium"] {
+  overflow-y: hidden;
+  touch-action: pan-x;
+}
+
+.mobile-v2__sheet[data-detent="large"] {
+  min-height: var(--mobile-sheet-large-height);
+  max-height: var(--mobile-sheet-large-height);
+}
+
+.mobile-v2__sheet-heading {
+  touch-action: none;
+}
+
+@media (max-height: 480px) and (orientation: landscape) {
+  .mobile-v2__sheet {
+    --mobile-sheet-large-height: calc(100svh - 24px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-v2__sheet {
+    transition: none;
+  }
+}
+
+/* Expand / collapse without a gesture: announced to VoiceOver and reachable
+   by keyboard, drawn only while it has keyboard focus. */
+.mobile-v2__sheet-detent-toggle {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  padding: 0;
+  border: 0;
+  white-space: nowrap;
+}
+
+.mobile-v2__sheet-detent-toggle:focus-visible {
+  z-index: var(--z-content-1);
+  top: 10px;
+  right: calc(16px + env(safe-area-inset-right, 0px));
+  width: auto;
+  height: auto;
+  clip-path: none;
+  padding: 6px 12px;
+  border: 1px solid rgba(118, 198, 188, 0.32);
+  border-radius: 999px;
+  background: rgba(2, 10, 11, 0.92);
+  color: #edf6f2;
+  font: 500 12px/1.2 var(--archive-sans);
+}
+
 /* A 36px bar in a 44px box; the negative margins keep the sheet's rhythm. */
 .mobile-v2__sheet-handle,
 .mobile-v2__more-handle {
