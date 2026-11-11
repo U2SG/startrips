@@ -130,6 +130,12 @@ struct AtlasChrome: View {
 }
 
 extension View {
+    /// Story zooms out of the Journey cover (iOS 18+); iOS 17 keeps the push.
+    @ViewBuilder
+    func storyZoomTransition(id: String, in namespace: Namespace.ID) -> some View {
+        if #available(iOS 18.0, *) { navigationTransition(.zoom(sourceID: id, in: namespace)) } else { self }
+    }
+
     /// The Journey cover is the source of the zoom into Story (iOS 18+).
     @ViewBuilder
     func storyTransitionSource(id: String, in namespace: Namespace.ID) -> some View {

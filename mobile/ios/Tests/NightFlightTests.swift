@@ -87,4 +87,41 @@ final class NightFlightTests: XCTestCase {
         XCTAssertEqual(try cover("b"), "b")
         XCTAssertEqual(try cover("v"), "a", "a video is never a still cover")
     }
+
+    func testSystemPopLeavesStoryThroughItsOwnExit() throws {
+        let url = try XCTUnwrap(Bundle.main.url(forResource: "bridge", withExtension: "json"))
+        let fixture = try JSONDecoder().decode(BridgeFixture.self, from: Data(contentsOf: url))
+        let router = AppRouter(defaults: UserDefaults(suiteName: "pop." + UUID().uuidString)!)
+        router.install(fixture.snapshot.journeys, identity: "pop", access: .owner, earthExperience: "default")
+        var invalidations = 0
+        router.onInvalidation = { invalidations += 1 }
+        XCTAssertTrue(router.openStory(journeyId: "journey-fixture", routePointId: "point-a"))
+        let revision = router.revision
+        var exits = 0
+        // The live Story commits its position and returns, as story.finish() does.
+        router.onStoryPop = {
+            exits += 1
+            router.commitStoryPosition(StoryHandoff(journeyId: "journey-fixture", routePointId: "point-b", assetId: nil,
+                                                    revision: router.path.last!.revision, requestId: router.path.last!.requestId))
+            router.returnToAtlas()
+        }
+        router.navigate([])
+        XCTAssertEqual(exits, 1)
+        XCTAssertTrue(router.path.isEmpty)
+        XCTAssertEqual(router.selection?.routePointId, "point-b", "the zoom dismiss keeps Story's last position")
+        XCTAssertEqual(router.revision, revision + 1)
+        XCTAssertEqual(invalidations, 1)
+
+        // A Story that has not loaded (or refuses a stale exit) still returns once.
+        router.onStoryPop = { exits += 1 }
+        XCTAssertTrue(router.openStory(journeyId: "journey-fixture"))
+        router.navigate([])
+        XCTAssertTrue(router.path.isEmpty)
+        XCTAssertEqual(invalidations, 2)
+        // Pushes are not pops.
+        let handoff = try XCTUnwrap(router.selection)
+        router.navigate([handoff])
+        XCTAssertEqual(router.path, [handoff])
+        XCTAssertEqual(exits, 2)
+    }
 }

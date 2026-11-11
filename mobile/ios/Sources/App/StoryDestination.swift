@@ -23,6 +23,9 @@ struct StoryDestination: View {
             }
         }
         .navigationBarBackButtonHidden(feature != nil)
+        .onDisappear {
+            if router.path.last?.requestId != target.requestId { router.onStoryPop = nil }
+        }
         .task(id: target.requestId) { build() }
         .onChange(of: session.mediaJourneys[target.journeyId]) { _, fresh in
             guard let fresh, let feature, fresh != feature.story.journey else { return }
@@ -124,6 +127,10 @@ struct StoryDestination: View {
                     Self.completeReturn(result, target: target, scope: scope, session: session, router: router)
                 })
             feature = model; failure = nil
+            router.onStoryPop = { [weak model] in
+                guard let model, router.path.last?.requestId == target.requestId else { return }
+                model.story.finish()
+            }
             model.importer?.recover()
         } catch { failure = error.localizedDescription }
     }

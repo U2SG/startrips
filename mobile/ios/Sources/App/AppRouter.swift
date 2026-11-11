@@ -42,6 +42,8 @@ final class AppRouter: ObservableObject {
     private let defaults: UserDefaults
     var onInvalidation: (() -> Void)?
     var onSwitchAccess: (() -> Void)?
+    /// Set by the live Story destination: leaves Story through StoryModel.finish().
+    var onStoryPop: (() -> Void)?
 
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
 
@@ -240,5 +242,15 @@ final class AppRouter: ObservableObject {
     }
 
     func returnToAtlas() { path = []; revision += 1; onInvalidation?() }
+
+    /// NavigationStack writes here only for system pops. Story leaves through
+    /// its own exit (commit position, then returnToAtlas); without a live Story
+    /// the pop still returns to the Atlas the normal way.
+    func navigate(_ next: [StoryHandoff]) {
+        guard next.count < path.count else { path = next; return }
+        onStoryPop?()
+        if !path.isEmpty && next.isEmpty { returnToAtlas() }
+        else if path.count > next.count { path = next }
+    }
     func sceneRestarted() { rendered = false; revision += 1; seen.removeAll() }
 }

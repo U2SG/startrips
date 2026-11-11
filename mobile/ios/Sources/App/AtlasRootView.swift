@@ -20,7 +20,9 @@ struct AtlasRootView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $router.path) {
+        // System pops (the zoom transition's interactive dismiss, edge swipe)
+        // go through Story's own exit so #788's position commit still runs.
+        NavigationStack(path: Binding(get: { router.path }, set: { router.navigate($0) })) {
             ZStack {
                 AtlasPalette.background.ignoresSafeArea()
                 if connected {
@@ -49,6 +51,7 @@ struct AtlasRootView: View {
             .toolbar(router.path.isEmpty ? .hidden : .visible, for: .navigationBar)
             .navigationDestination(for: StoryHandoff.self) { target in
                 StoryDestination(target: target, router: router, session: session).id(target.requestId)
+                    .storyZoomTransition(id: target.journeyId, in: storyNamespace)
             }
             .overlay(alignment: .top) {
                 if connected && router.path.isEmpty && sceneRecoveryRequired {
@@ -162,6 +165,10 @@ struct AtlasRootView: View {
                     }
                     router.install(fixtureJourneys, identity: "synthetic-ci", access: .owner, earthExperience: "default")
                     connected = true
+                    if ProcessInfo.processInfo.arguments.contains("-atlas-open-story") {
+                        // Screenshot probe only: open Story without a gesture.
+                        router.openStory(journeyId: fixture.snapshot.journeys[0].id, routePointId: "point-a")
+                    }
                     if ProcessInfo.processInfo.arguments.contains("-atlas-scene-recovery-probe") {
                         // Test-only failure path: WKWebView may be unusable while
                         // native recovery controls still have to work.

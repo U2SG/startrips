@@ -253,6 +253,27 @@ final class AtlasUITests: XCTestCase {
     }
 
     @MainActor
+    func testCoverZoomsIntoStoryAndCloseReturnsToTheCard() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture"]
+        app.launch()
+        XCTAssertTrue(card(app).waitForExistence(timeout: 30))
+        openCard(app)
+        let cover = app.buttons["atlas.card.cover"]
+        XCTAssertTrue(cover.waitForExistence(timeout: 10))
+        XCTAssertEqual(cover.label, "封面：海岸旅程")
+        // The cover is loaded natively through the scoped read path.
+        cover.tap()
+        let title = app.staticTexts["story.title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        XCTAssertEqual(title.label, "海岸旅程")
+        capture(app, "story-from-cover")
+        app.buttons["story.close"].tap()
+        XCTAssertTrue(cover.waitForExistence(timeout: 10), "Story zooms back into the medium card")
+        XCTAssertEqual(app.buttons["atlas.card.grabber"].value as? String, "半屏")
+    }
+
+    @MainActor
     func testNativeSceneRecoveryDoesNotDependOnWebViewControls() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture", "-atlas-scene-recovery-probe"]
