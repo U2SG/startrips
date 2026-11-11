@@ -12,6 +12,13 @@ import UIKit
     @Published public var expanded = true
     @Published public private(set) var paused = false
     @Published public private(set) var tempo: NarrativeTempo = .standard
+    /// Decoded pictures for the book and stream layouts; never signed URLs.
+    @Published public private(set) var library: [String: UIImage] = [:]
+    @Published public private(set) var journal: [StoryJournalChapter] = []
+    private var libraryTasks: [String: Task<Void, Never>] = [:]
+    private var libraryOrder: [String] = []
+    private var libraryEpoch = 0
+    private var journalTask: Task<Void, Never>?
     public let foreground: ForegroundPlayback
     public private(set) var intent: StoryIntent
     public private(set) var journey: MediaJourney
@@ -57,7 +64,46 @@ import UIKit
     public func appear() { guard !closed else { return }; loadCurrent(); loadSoundtrack() }
     public func disappear() {
         epoch += 1; loadTask?.cancel(); prewarmTask?.cancel(); clockTask?.cancel(); soundtrackTask?.cancel(); foreground.stop()
-        images.removeAll()
+        images.removeAll(); clearLibrary(); journalTask?.cancel(); journalTask = nil
+    }
+    /// Loads one picture for a book page or stream row. Bounded; the caller cancels when its row leaves.
+    public func requestLibraryImage(_ asset: MediaAsset) {
+        guard !closed, !asset.isVideo, library[asset.id] == nil, images[asset.id] == nil, libraryTasks[asset.id] == nil,
+              journey.media.contains(where: { $0.id == asset.id }) else { return }
+        let ticket = libraryEpoch
+        libraryTasks[asset.id] = Task { [weak self] in
+            guard let self else { return }
+            defer { if ticket == self.libraryEpoch && !Task.isCancelled { self.libraryTasks[asset.id] = nil } }
+            guard let image = try? await self.loadImage(asset, maxPixel: 1600),
+                  !Task.isCancelled, ticket == self.libraryEpoch, !self.closed,
+                  self.journey.media.contains(where: { $0.id == asset.id }) else { return }
+            self.library[asset.id] = image
+            self.libraryOrder.removeAll { $0 == asset.id }; self.libraryOrder.append(asset.id)
+            while self.libraryOrder.count > 12 { self.library[self.libraryOrder.removeFirst()] = nil }
+        }
+    }
+    public func cancelLibraryImage(_ assetID: String) { libraryTasks.removeValue(forKey: assetID)?.cancel() }
+    public func image(for assetID: String) -> UIImage? { images[assetID] ?? library[assetID] }
+    private func clearLibrary() {
+        libraryEpoch += 1; libraryTasks.values.forEach { $0.cancel() }; libraryTasks.removeAll()
+        library.removeAll(); libraryOrder.removeAll()
+    }
+    /// Owner-only, read-only, and silent on failure: the stream simply omits the journal.
+    public func loadJournal() {
+        guard session.access == .owner, !closed, journalTask == nil else { return }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        guard let id = journey.id.addingPercentEncoding(withAllowedCharacters: allowed), !id.isEmpty else { return }
+        journalTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.session.revalidate()
+                let data = try await self.session.request("/api/journeys/\(id)/journal", "GET", nil)
+                let chapters = try JSONDecoder().decode(StoryJournalChapter.Envelope.self, from: data).journal.chapters
+                try Task.checkCancellation(); try await self.session.revalidate()
+                guard !self.closed else { return }
+                self.journal = chapters
+            } catch { /* The journal is optional reading; never a Story failure. */ }
+        }
     }
     public func beginPaging(_ index: Int) -> Int {
         foreground.setPaused(true)
@@ -143,7 +189,7 @@ import UIKit
     }
     public func retry() { loadCurrent() }
     public func invalidate() {
-        closed = true; cursor.cancel(); disappear(); failure = MediaFailure.accessChanged.localizedDescription
+        closed = true; cursor.cancel(); disappear(); journal = []; failure = MediaFailure.accessChanged.localizedDescription
     }
     public func update(_ value: MediaJourney) throws {
         guard value.id == journey.id else { throw MediaFailure.staleIntent }
@@ -158,6 +204,9 @@ import UIKit
         pageGeneration += 1
         cursor = refreshedCursor
         intent = refreshed; journey = value
+        let present = Set(value.media.map(\.id))
+        for id in libraryTasks.keys where !present.contains(id) { cancelLibraryImage(id) }
+        library = library.filter { present.contains($0.key) }; libraryOrder.removeAll { !present.contains($0) }
         playback = nil; clockTask?.cancel(); commitCurrent(); loadCurrent()
     }
     private func loadCurrent() {
@@ -205,7 +254,7 @@ import UIKit
             }
         }
     }
-    private func loadImage(_ asset: MediaAsset) async throws -> UIImage {
+    private func loadImage(_ asset: MediaAsset, maxPixel: Int = 2560) async throws -> UIImage {
         let url = try await session.mediaURL(asset.id)
         let (file, response) = try await session.imageTransport.download(from: url)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -215,7 +264,7 @@ import UIKit
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: 2560
+                kCGImageSourceThumbnailMaxPixelSize: maxPixel
               ] as CFDictionary) else { throw MediaFailure.unavailable }
         return UIImage(cgImage: image)
     }
