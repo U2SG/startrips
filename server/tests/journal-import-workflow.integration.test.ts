@@ -92,7 +92,7 @@ const model = { ...provider, apiKey: "mock-only", timeoutMs: 1000, fetcher: vi.f
   let args;
   if (name === "stage_journal_import") args = { chapters: [{ firstLine: 0, lastLine: 2, heading: true, dateStatus: "single", questions: [], date: "2028-06-03", dateEnd: null, dateEvidence: "2028年6月3日",
     events: source.split("\n").slice(1).map((_, i) => ({ line: i + 1, status: i ? "cancelled" : "actual", dateStatus: "absent", localDate: null, dateEvidence: null,
-      time: i ? "07:30" : "23:30", timeEnd: null, timeEvidence: i ? "07:30" : "23:30", placeName: null, questions: [] })) }] };
+      time: i ? "07:30" : "23:30", timeEnd: null, timeEvidence: i ? "07:30" : "23:30", placeName: null, pointRef: null, questions: [] })) }] };
   else if (name === "search_hotels") {
     const event = data.flatMap((c: any) => c.events).find((e: any) => e.source.includes("入住星桥酒店"));
     args = { stays: [{ eventId: event.id ?? event.eventId, name: "星桥酒店", searchName: "星桥酒店" }], questions: [] };
@@ -367,7 +367,7 @@ for (const path of ["sync", "job"] as const) {
       dateEnd: scenario === "range" ? "2028-06-05" : null,
       dateEvidence: quantity ? chapterHasValue ? singleQuote : null : evidence,
       events: [{ line: 0, status: "actual", dateStatus: quantity ? eventHasValue ? "single" : "absent" : "unknown", localDate: eventHasValue ? singleDate : null,
-        dateEvidence: quantity ? eventHasValue ? singleQuote : null : evidence, time: null, timeEnd: null, timeEvidence: null, placeName: null, questions: quantity ? [] : ["日期范围待确认"] }] }] };
+        dateEvidence: quantity ? eventHasValue ? singleQuote : null : evidence, time: null, timeEnd: null, timeEvidence: null, placeName: null, pointRef: null, questions: quantity ? [] : ["日期范围待确认"] }] }] };
     let calls = 0;
     journalImportDependencies.fetcher = async (_url, init) => {
       calls++;

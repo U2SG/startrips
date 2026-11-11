@@ -11,7 +11,7 @@ export function fictionalDraft() {
   return { chapters: [{ firstLine: 0, lastLine: 6, heading: true, dateStatus: "range", questions: [], date: "2028-06-03", dateEnd: "2028-06-05", dateEvidence: lines[0],
     events: lines.slice(1).map((_, i) => ({ line: i + 1, status: ["actual", "planned", "uncertain", "cancelled", "actual", "actual"][i],
       dateStatus: "absent", localDate: null, dateEvidence: null, time: times[i], timeEnd: i === 2 ? "13:30" : null,
-      timeEvidence: i === 2 ? "10:30–13:30" : times[i], placeName: null, questions: [] })) }] };
+      timeEvidence: i === 2 ? "10:30–13:30" : times[i], placeName: null, pointRef: null, questions: [] })) }] };
 }
 const input = { source: fictionalSource, sentence: "导入原稿并关联已入住酒店", fallbackDate: "2028-06-01" };
 const model = { baseUrl: "https://model.example.test/v1", apiKey: "mock-only", model: "mock", timeoutMs: 1000 };
@@ -67,7 +67,7 @@ it("covers fourteen synthetic chapters with list-first clocks and preserves date
   const source = blocks.flat().join("\n");
   const response = { chapters: blocks.map((lines, i) => ({ firstLine: i * 5, lastLine: i * 5 + 4, heading: true, dateStatus: "single", questions: [], date: `2028-06-${String(i + 1).padStart(2, "0")}`, dateEnd: null, dateEvidence: lines[0],
     events: lines.slice(1).map((_, j) => ({ line: i * 5 + j + 1, status: ["actual", "actual", "planned", "cancelled"][j], dateStatus: "absent", localDate: null, dateEvidence: null,
-      time: ["23:30", "18:20", "08:00", "09:00"][j], timeEnd: null, timeEvidence: ["23:30", "18:20", "08:00", "09:00"][j], placeName: null, questions: [] })) })) };
+      time: ["23:30", "18:20", "08:00", "09:00"][j], timeEnd: null, timeEvidence: ["23:30", "18:20", "08:00", "09:00"][j], placeName: null, pointRef: null, questions: [] })) })) };
   const result = await prepareJournalImport({ ...input, source }, { revision: 0, chapters: [] }, { ...model, fetcher: async () => toolResponse("stage_journal_import", response) });
   expect(result.chapters).toHaveLength(14); expect(result.chapters.map(c => c.source).join("\n")).toBe(source);
   for (const c of result.chapters) { expect(c.events.map(e => e.localTime)).toEqual(["23:30", "18:20", "08:00", "09:00"]); expect(c.events.map(e => e.status)).toEqual(["actual", "actual", "planned", "cancelled"]); }
@@ -332,5 +332,33 @@ describe("segmented staging", () => {
       });
     });
     await expect(prepareJournalImport({ ...input, source }, { revision: 0, chapters: [] }, { ...model, fetcher })).rejects.toMatchObject({ code: "INTENT_FAILED" });
+  });
+});
+
+describe("existing place references", () => {
+  const source = "实际：抵达拉斯维加斯。\n计划：去拉斯维加斯。\n住宿：星桥酒店\n实际：在河边散步。";
+  const points = [{ id: "vegas-point", label: "Las Vegas" }];
+  it("accepts a supplied ref only for actual, non-lodging events and sends the places list", async () => {
+    const c = mockChapter(source);
+    c.events.forEach(e => Object.assign(e, { pointRef: "p1" }));
+    c.events[1].status = "planned"; c.events[3].pointRef = "p9";
+    let sent: { places?: unknown } = {};
+    const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      sent = JSON.parse(JSON.parse(String(init?.body)).messages[1].content);
+      return toolResponse("stage_journal_import", { chapters: [c] });
+    });
+    const result = await prepareJournalImport({ source, sentence: "导入", fallbackDate: "2028-06-01" }, { revision: 0, chapters: [] }, { ...model, fetcher }, undefined, points);
+    expect(sent.places).toEqual([{ ref: "p1", label: "Las Vegas" }]);
+    const ids = result.chapters[0].events.map(e => e.id);
+    expect(result.placeClaims).toEqual([{ eventId: ids[0], name: "", pointId: "vegas-point", date: null }]);
+  });
+  it("omits the places list when the Journey has no points", async () => {
+    let sent: { places?: unknown } = { places: "unset" };
+    const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      sent = JSON.parse(JSON.parse(String(init?.body)).messages[1].content);
+      return toolResponse("stage_journal_import", { chapters: [mockChapter(source)] });
+    });
+    await prepareJournalImport({ source, sentence: "导入", fallbackDate: "2028-06-01" }, { revision: 0, chapters: [] }, { ...model, fetcher });
+    expect(sent.places).toBeUndefined();
   });
 });

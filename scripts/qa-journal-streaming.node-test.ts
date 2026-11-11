@@ -78,7 +78,7 @@ for (const fault of ['omitted-event', 'overlap', 'gap', 'duplicate-event', 'inva
 test('evidence: first-line omission leaves the line for review unless the model flags a heading', async () => {
   const source = '### 2028年6月3日 实际：她在虚构城入住星桥酒店。\n计划：次日离开。';
   const payload = { chapters: [{ firstLine: 0, lastLine: 1, heading: false, dateStatus: 'single', questions: [], date: '2028-06-03', dateEnd: null, dateEvidence: '2028年6月3日', events: [
-    { line: 1, status: 'planned', dateStatus: 'absent', localDate: null, dateEvidence: null, time: null, timeEnd: null, timeEvidence: null, placeName: null, questions: [] },
+    { line: 1, status: 'planned', dateStatus: 'absent', localDate: null, dateEvidence: null, time: null, timeEnd: null, timeEvidence: null, placeName: null, pointRef: null, questions: [] },
   ] }] };
   const result = await prepareJournalImport({ ...qaInput, source }, empty(), { ...qaModel, fetcher: qaAnswer(payload) });
   // Without heading=true the first line must be an event; the missing one is kept as a review event.

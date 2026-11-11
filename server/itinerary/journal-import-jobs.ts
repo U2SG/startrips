@@ -1,7 +1,8 @@
 import { isPersistedCalendarDate } from "../../src/journey/calendarDate";
 import { JOURNAL_MAX_TEXT } from "../../src/journey/dailyJournal";
 /** Durable preview jobs: the application owns the model request, not an SSH/client connection. */
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
+import { journeyRoutePoints } from '../db/app-schema';
 import { randomUUID } from 'node:crypto';
 import { pool, db } from '../db/client';
 import { hash, lockedTarget, sealJournalDraft, type Target, type Envelope } from '../admin/journal-import';
@@ -81,7 +82,9 @@ export async function runJournalJob(signal?:AbortSignal) {
       if(hash(await db.transaction(tx=>lockedTarget(tx,target)))!==hash(before))fail('JOURNAL_CHANGED');
     };
     // Segment counts merge into stream progress; neither replaces the other.
-    const draft=await prepareJournalImport(input,before,model,s=>{progress={...progress,...s};});
+    // Existing places let the model link events across languages; it can only choose among them.
+    const points=await db.select({id:journeyRoutePoints.id,label:journeyRoutePoints.label}).from(journeyRoutePoints).where(eq(journeyRoutePoints.journeyId,target.journeyId));
+    const draft=await prepareJournalImport(input,before,model,s=>{progress={...progress,...s};},points);
     progress={...progress,phase:'validating'};
     const finalModel=journalImportModel(input.provider);
     if(hash({baseUrl:finalModel.baseUrl,model:finalModel.model,apiKey:finalModel.apiKey})!==configDigest)fail('JOURNAL_PROVIDER_CHANGED');
