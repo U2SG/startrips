@@ -320,6 +320,23 @@ final class AtlasUITests: XCTestCase {
     }
 
     @MainActor
+    func testPinchReachesTheGlobeThroughTheNativeChrome() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture"]
+        app.launch()
+        XCTAssertTrue(card(app).waitForExistence(timeout: 30))
+        choosePoint(app, "point-a")
+        let rendered = app.staticTexts["earth-rendered"]
+        XCTAssertTrue(rendered.waitForExistence(timeout: 30))
+        // A two-finger pinch over the globe must reach the scene (it claims the
+        // camera, which drops the focus acknowledgement); no native layer may eat it.
+        app.webViews.firstMatch.pinch(withScale: 2.5, velocity: 2)
+        XCTAssertTrue(rendered.waitForNonExistence(timeout: 10))
+        capture(app, "globe-after-pinch")
+        XCTAssertTrue(card(app).isHittable)
+    }
+
+    @MainActor
     func testNativeSceneRecoveryDoesNotDependOnWebViewControls() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture", "-atlas-scene-recovery-probe"]

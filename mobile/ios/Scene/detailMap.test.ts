@@ -6,8 +6,12 @@ describe("iPhone detail map labels", () => {
   it("never draws a label under 15pt", () => {
     expect(minimumTextSize(11)).toBe(15);
     expect(minimumTextSize(18)).toBe(18);
-    const zoom = ["interpolate", ["linear"], ["zoom"], 4, 10, 12, 16];
-    expect(minimumTextSize(zoom)).toEqual(["max", 15, zoom]);
+    // ["zoom"] must stay the input of a top-level curve: raise its outputs, never wrap it.
+    expect(minimumTextSize(["interpolate", ["linear"], ["zoom"], 4, 10, 12, 16]))
+      .toEqual(["interpolate", ["linear"], ["zoom"], 4, 15, 12, 16]);
+    expect(minimumTextSize(["step", ["zoom"], 9, 8, 12, 14, 18])).toEqual(["step", ["zoom"], 15, 8, 15, 14, 18]);
+    expect(minimumTextSize(["get", "size"])).toEqual(["max", 15, ["get", "size"]]);
+    expect(minimumTextSize(["*", ["zoom"], 2])).toBe(15);
     expect(minimumTextSize({ stops: [[4, 10]] })).toBe(15);
     expect(minimumTextSize(undefined)).toBe(15);
   });
@@ -37,12 +41,11 @@ describe("iPhone detail map labels", () => {
     ] };
     const added: unknown[] = [];
     class FakeMap {
-      listeners: (() => void)[] = [];
       getStyle() { return style; }
       getLayoutProperty(id: string, name: string) { return style.layers.find((layer) => layer.id === id)?.layout[name]; }
-      getPaintProperty() { return undefined; }
-      setPaintProperty(id: string, name: string, value: unknown) { calls.push([id, name, value]); }
-      on(_type: string, listener: () => void) { this.listeners.push(listener); }
+      paint = new Map<string, unknown>();
+      getPaintProperty(id: string, name: string) { return this.paint.get(id + name); }
+      setPaintProperty(id: string, name: string, value: unknown) { calls.push([id, name, value]); this.paint.set(id + name, value); }
       addLayer(layer: unknown) { added.push(layer); }
       setLayoutProperty(id: string, name: string, value: unknown) {
         calls.push([id, name, value]);
@@ -66,9 +69,12 @@ describe("iPhone detail map labels", () => {
     map.setLayoutProperty("place", "text-field", createDetailedEarthLabelExpression("zh"));
     expect(style.layers[0].layout["text-field"]).toEqual(placeNameField("bilingual"));
 
+    // A settled style is never written again: a second language pass is a no-op,
+    // otherwise MapLibre never settles and the dive from the globe stalls.
     calls.length = 0;
-    map.listeners.forEach((listener) => listener());
-    expect(calls.filter(([, name]) => name === "text-field")).toEqual([]);
+    map.setLayoutProperty("place", "text-field", createDetailedEarthLabelExpression("zh"));
+    setDetailLabelPreferences({ language: "bilingual", showPlaceNames: true });
+    expect(calls).toEqual([]);
     setDetailLabelPreferences({ language: "zh", showPlaceNames: false });
     expect(style.layers[0].layout["text-field"]).toEqual(createDetailedEarthLabelExpression("zh"));
   });

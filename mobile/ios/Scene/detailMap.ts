@@ -4,6 +4,12 @@ import type { LabelPreferences } from "./bridge";
 // iPhone-only overrides for the zoomed detail map (MapLibre). The shared
 // DetailedEarthMap keeps its Web behaviour; this bundle patches the MapLibre
 // prototype it loads so labels follow native Settings and low-vision sizing.
+//
+// The overrides piggyback on DetailedEarthMap's own label calls (addLayer and
+// its per-style-load language pass). They never listen to `styledata`: writing
+// style properties on every style event keeps MapLibre's style "changed", so
+// the detail surface never settles and the dive from the particle globe never
+// completes (the "globe stops zooming" regression).
 
 /** The Journey Route Point label layer DetailedEarthMap adds at runtime. */
 export const JOURNEY_LABEL_LAYER = "startrips-active-journey-labels";
@@ -16,17 +22,31 @@ type MapLike = {
   getPaintProperty(id: string, name: string): unknown;
   setLayoutProperty(id: string, name: string, value: unknown): unknown;
   setPaintProperty(id: string, name: string, value: unknown): unknown;
-  on(type: string, listener: () => void): unknown;
 };
 
 let preferences: LabelPreferences = { language: "zh", showPlaceNames: false };
 const maps = new Set<MapLike>();
 let applying = false;
 
-/** At least 15pt: constants are raised; zoom expressions get a floor. */
+const isZoomCurve = (value: unknown): value is unknown[] => Array.isArray(value)
+  && (value[0] === "interpolate" || value[0] === "step")
+  && JSON.stringify(value[value[0] === "step" ? 1 : 2]) === "[\"zoom\"]";
+
+/**
+ * At least 15pt. MapLibre only allows `["zoom"]` as the input of a top-level
+ * interpolate/step, so a zoom curve keeps its shape and has its outputs raised;
+ * other expressions get a `max` floor; anything unreadable becomes 15.
+ */
 export function minimumTextSize(size: unknown): unknown {
   if (typeof size === "number") return Math.max(MIN_LABEL_SIZE, size);
-  if (Array.isArray(size)) return ["max", MIN_LABEL_SIZE, size];
+  if (isZoomCurve(size)) {
+    const first = size[0] === "step" ? 2 : 3;
+    return size.map((value, index) => {
+      const output = size[0] === "step" ? (index - first) % 2 === 0 : (index - first) % 2 === 1;
+      return index >= first && output ? minimumTextSize(value) : value;
+    });
+  }
+  if (Array.isArray(size) && !JSON.stringify(size).includes("\"zoom\"")) return ["max", MIN_LABEL_SIZE, size];
   return MIN_LABEL_SIZE;
 }
 
@@ -45,32 +65,29 @@ export function legibleJourneyLabels<T extends Layer>(layer: T): T {
 
 const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
 
-function restyle(map: MapLike) {
-  const layers = map.getStyle()?.layers ?? [];
-  applying = true;
-  try {
-    for (const layer of layers) {
-      if (layer.type !== "symbol" || !isDetailedEarthNameLabel(layer.layout?.["text-field"])) continue;
-      const updates: [string, unknown][] = [
-        ["text-field", placeNameField(preferences.language)],
-        ["text-size", minimumTextSize(map.getLayoutProperty(layer.id, "text-size"))],
-      ];
-      for (const [name, value] of updates) {
-        if (!same(map.getLayoutProperty(layer.id, name), value)) map.setLayoutProperty(layer.id, name, value);
-      }
-      for (const [name, value] of [["text-halo-width", 2], ["text-halo-color", "#07090f"]] as const) {
-        if (!same(map.getPaintProperty(layer.id, name), value)) map.setPaintProperty(layer.id, name, value);
-      }
-    }
-  } catch {
-    // The style can be mid-load; the next styledata event applies the overrides.
-  } finally { applying = false; }
+/** Writes only values that differ, so a settled style is never marked changed again. */
+function legiblePlaceNames(map: MapLike, id: string) {
+  const layout: [string, unknown][] = [
+    ["text-field", placeNameField(preferences.language)],
+    ["text-size", minimumTextSize(map.getLayoutProperty(id, "text-size"))],
+  ];
+  for (const [name, value] of layout) {
+    if (!same(map.getLayoutProperty(id, name), value)) map.setLayoutProperty(id, name, value);
+  }
+  for (const [name, value] of [["text-halo-width", 2], ["text-halo-color", "#07090f"]] as const) {
+    if (!same(map.getPaintProperty(id, name), value)) map.setPaintProperty(id, name, value);
+  }
 }
 
-function track(map: MapLike) {
-  if (maps.has(map)) return;
-  maps.add(map);
-  map.on("styledata", () => { if (!applying) restyle(map); });
+function restyle(map: MapLike) {
+  applying = true;
+  try {
+    for (const layer of map.getStyle()?.layers ?? []) {
+      if (layer.type === "symbol" && isDetailedEarthNameLabel(layer.layout?.["text-field"])) legiblePlaceNames(map, layer.id);
+    }
+  } catch {
+    // A style mid-load is restyled by DetailedEarthMap's next language pass.
+  } finally { applying = false; }
 }
 
 /** Patch once; DetailedEarthMap's own language calls become the native choice. */
@@ -86,13 +103,16 @@ export function installDetailMapOverrides(prototype: {
   const setLayout = prototype.setLayoutProperty as unknown as (this: MapLike, id: string, name: string, value: unknown) => unknown;
   const remove = prototype.remove as unknown as (this: MapLike) => unknown;
   (prototype as Record<string, unknown>).addLayer = function (this: MapLike, layer: Layer, before?: string) {
-    track(this);
+    maps.add(this);
     return addLayer.call(this, legibleJourneyLabels(layer), before);
   };
   (prototype as Record<string, unknown>).setLayoutProperty = function (this: MapLike, id: string, name: string, value: unknown) {
-    track(this);
-    const replaced = !applying && name === "text-field" && isDetailedEarthNameLabel(value) ? placeNameField(preferences.language) : value;
-    return setLayout.call(this, id, name, replaced);
+    if (applying || name !== "text-field" || !isDetailedEarthNameLabel(value)) return setLayout.call(this, id, name, value);
+    // DetailedEarthMap's language pass (once per style load): apply every override to this layer.
+    maps.add(this);
+    applying = true;
+    try { legiblePlaceNames(this, id); } finally { applying = false; }
+    return this;
   };
   (prototype as Record<string, unknown>).remove = function (this: MapLike) {
     maps.delete(this);
@@ -101,6 +121,7 @@ export function installDetailMapOverrides(prototype: {
 }
 
 export function setDetailLabelPreferences(next: LabelPreferences) {
+  if (same(next, preferences)) return;
   preferences = next;
   maps.forEach(restyle);
 }
