@@ -219,49 +219,93 @@ private struct StoryBookPageView: View {
 
 // MARK: - 旅程之流
 
+/// Port of the web stream (`journey-stream.css`): one gold thread down the
+/// centre is the spine every picture hangs on. Pictures cover it, so it shows
+/// as connectors in the gaps; headings and notes sit on a small break in it.
+/// The thread fills downward as the reader scrolls; Reduce Motion shows it whole.
 struct StoryStream: View {
     @ObservedObject var model: StoryModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var viewport: CGFloat = 0
+    @State private var scrolled: CGFloat = 0
+    @State private var poured = false
 
     var body: some View {
         let entries = Array(model.cursor.entries.enumerated()).filter { $0.element.role != .journeyCover }
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: StoryTheme.grid(5)) {
-                    Text(model.journey.title).font(StoryTheme.serif(.largeTitle)).accessibilityAddTraits(.isHeader)
+                LazyVStack(alignment: .center, spacing: StoryTheme.grid(5)) {
+                    Text(model.journey.title).font(StoryTheme.serif(.largeTitle)).multilineTextAlignment(.center)
+                        .accessibilityAddTraits(.isHeader).onThread()
                     let journeyNote = model.journey.note.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !journeyNote.isEmpty {
                         Text(journeyNote).font(StoryTheme.serif(.body)).lineSpacing(6).foregroundStyle(StoryTheme.muted)
+                            .multilineTextAlignment(.center).onThread()
                     }
                     ForEach(entries, id: \.element.id) { index, entry in
                         row(index, entry, previous: index > 0 ? model.cursor.entries[index - 1] : nil).id(entry.id)
                     }
-                    if !model.journal.isEmpty { journal }
+                    if !model.journal.isEmpty { journal.background(StoryTheme.background) }
                 }
                 .padding(.horizontal, StoryTheme.edge).padding(.vertical, StoryTheme.grid(4))
-                .frame(maxWidth: 680).frame(maxWidth: .infinity)
+                .frame(maxWidth: 680)
+                .background { thread }
+                .frame(maxWidth: .infinity)
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: StreamOffsetKey.self, value: -geometry.frame(in: .named("story.stream")).minY)
+                })
             }
+            .coordinateSpace(name: "story.stream")
+            .background(GeometryReader { geometry in Color.clear.onAppear { viewport = geometry.size.height }
+                .onChange(of: geometry.size.height) { viewport = $0 } })
+            .onPreferenceChange(StreamOffsetKey.self) { scrolled = $0 }
             .accessibilityElement(children: .contain).accessibilityIdentifier("story.stream")
             .onAppear {
                 model.loadJournal()
                 if let current = model.cursor.current, current.role != .journeyCover { proxy.scrollTo(current.id, anchor: .top) }
+                if reduceMotion { poured = true } else { withAnimation(.easeOut(duration: 0.6)) { poured = true } }
             }
         }
     }
 
+    /// The spine: a faint full-length line plus a gold fill down to the reading point.
+    private var thread: some View {
+        GeometryReader { geometry in
+            let height = geometry.size.height
+            let reach = reduceMotion ? height : min(height, max(0, scrolled + viewport * 0.6))
+            let fade = Gradient(stops: [.init(color: .clear, location: 0), .init(color: StoryTheme.accent, location: 0.04),
+                                        .init(color: StoryTheme.accent, location: 0.96), .init(color: .clear, location: 1)])
+            ZStack(alignment: .top) {
+                LinearGradient(gradient: fade, startPoint: .top, endPoint: .bottom).opacity(0.32)
+                LinearGradient(gradient: fade, startPoint: .top, endPoint: .bottom).opacity(0.9)
+                    .frame(height: height)
+                    .mask(alignment: .top) { Rectangle().frame(height: poured ? reach : 0) }
+            }
+            .frame(width: 1, height: height)
+            .frame(maxWidth: .infinity)
+        }
+        .allowsHitTesting(false)
+        .streamThreadIdentifier()
+    }
+
     private func point(_ id: String?) -> MediaRoutePoint? { id.flatMap { id in model.journey.routePoints.first { $0.id == id } } }
 
-    /// A route point's place and note are said once, at its first row.
+    /// A route point's place and note are said once, at its first row, as a mark on the thread.
     @ViewBuilder private func row(_ index: Int, _ entry: StoryEntry, previous: StoryEntry?) -> some View {
         let opensPoint = entry.routePointId != nil && entry.routePointId != previous?.routePointId
-        VStack(alignment: .leading, spacing: StoryTheme.grid(3)) {
+        VStack(alignment: .center, spacing: StoryTheme.grid(3)) {
             if opensPoint, let point = point(entry.routePointId) {
-                Text(point.label).font(StoryTheme.serif(.title3)).foregroundStyle(StoryTheme.ink)
-                    .accessibilityAddTraits(.isHeader).padding(.top, StoryTheme.grid(3))
+                VStack(spacing: StoryTheme.grid(2)) {
+                    Capsule().fill(StoryTheme.accent).frame(width: StoryTheme.grid(4), height: 1)
+                        .accessibilityHidden(true)
+                    Text(point.label).font(StoryTheme.serif(.title3)).foregroundStyle(StoryTheme.ink)
+                        .multilineTextAlignment(.center).accessibilityAddTraits(.isHeader)
+                }
+                .onThread().padding(.top, StoryTheme.grid(3))
             }
             if let asset = entry.asset { StoryStreamMedia(model: model, asset: asset, index: index, entryID: entry.id) }
             if opensPoint, let note = point(entry.routePointId)?.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
-                Text(note).font(StoryTheme.serif(.body)).lineSpacing(6)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(note).font(StoryTheme.serif(.body)).lineSpacing(6).multilineTextAlignment(.center).onThread()
             }
         }
     }
@@ -287,6 +331,27 @@ struct StoryStream: View {
                 }
             }
         }.accessibilityElement(children: .contain).accessibilityIdentifier("story.journal")
+    }
+}
+
+private struct StreamOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private extension View {
+    /// Text breaks the thread instead of being struck through by it.
+    func onThread() -> some View {
+        padding(.vertical, StoryTheme.grid(1)).padding(.horizontal, StoryTheme.grid(2)).background(StoryTheme.background)
+    }
+
+    /// Exposed to UI tests only; the thread is decoration for VoiceOver.
+    @ViewBuilder func streamThreadIdentifier() -> some View {
+        #if DEBUG
+        accessibilityElement().accessibilityIdentifier("story.stream.thread")
+        #else
+        accessibilityHidden(true)
+        #endif
     }
 }
 

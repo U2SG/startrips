@@ -49,8 +49,15 @@ final class StoryPresentationUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
 
         choose(app, "旅程之流")
-        XCTAssertTrue(element(app, "story.stream.media:asset-fixture").waitForExistence(timeout: 10))
+        let streamed = element(app, "story.stream.media:asset-fixture")
+        XCTAssertTrue(streamed.waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["story.next"].exists)
+        // One thread down the centre, running through every picture (web journey-stream).
+        let thread = element(app, "story.stream.thread")
+        XCTAssertTrue(thread.waitForExistence(timeout: 10))
+        XCTAssertEqual(thread.frame.midX, app.windows.firstMatch.frame.midX, accuracy: 1)
+        XCTAssertLessThanOrEqual(thread.frame.minY, streamed.frame.minY)
+        XCTAssertGreaterThanOrEqual(thread.frame.maxY, streamed.frame.maxY)
         capture(app, "story-style-stream")
 
         // The choice is remembered: closing and reopening the Story keeps the stream.
