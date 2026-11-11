@@ -135,21 +135,52 @@ final class AtlasUITests: XCTestCase {
     }
 
     @MainActor
-    func testAccountMenuOffersSwitchShareAndSignOut() throws {
+    func testSettingsOffersAccountActionsAndSignOut() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture"]
         app.launch()
         let account = app.buttons["atlas.account"]
         XCTAssertTrue(account.waitForExistence(timeout: 30))
-        XCTAssertEqual(account.label, "账户")
+        XCTAssertEqual(account.label, "设置")
         account.tap()
         XCTAssertTrue(app.buttons["切换图谱"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.buttons["settings.switch-atlas"].label, "切换图谱")
         XCTAssertTrue(app.buttons["粘贴分享链接"].exists)
         let signOut = app.buttons["退出登录"]
         XCTAssertTrue(signOut.exists)
-        capture(app, "shell-account-menu")
+        XCTAssertTrue(signOut.isHittable)
+        capture(app, "settings")
         signOut.tap()
         XCTAssertTrue(app.buttons["welcome.sign-in"].waitForExistence(timeout: 15))
+    }
+
+    @MainActor
+    func testSettingsLabelPreferencesPersistAcrossReopen() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture"]
+        app.launch()
+        let account = app.buttons["atlas.account"]
+        XCTAssertTrue(account.waitForExistence(timeout: 30))
+        account.tap()
+        let placeNames = app.switches["settings.place-names"]
+        XCTAssertTrue(placeNames.waitForExistence(timeout: 10))
+        XCTAssertEqual(placeNames.value as? String, "0")
+        placeNames.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertTrue(waitForValue(placeNames, "1"))
+        let language = app.buttons["settings.label-language"]
+        XCTAssertTrue(language.exists)
+        language.tap()
+        let bilingual = app.buttons["双语"]
+        XCTAssertTrue(bilingual.waitForExistence(timeout: 5))
+        bilingual.tap()
+        capture(app, "settings-labels")
+        app.buttons["settings.done"].tap()
+        XCTAssertTrue(card(app).waitForExistence(timeout: 10))
+        account.tap()
+        XCTAssertTrue(waitForValue(app.switches["settings.place-names"], "1"))
+        XCTAssertTrue(app.buttons["settings.label-language"].label.contains("双语")
+                      || (app.buttons["settings.label-language"].value as? String) == "双语")
+        app.buttons["settings.done"].tap()
     }
 
     @MainActor

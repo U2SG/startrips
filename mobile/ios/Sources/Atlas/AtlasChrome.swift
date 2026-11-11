@@ -109,7 +109,7 @@ struct AtlasChrome: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("账户")
+            .accessibilityLabel("设置")
             .accessibilityIdentifier("atlas.account")
         }
         .padding(.horizontal, NightFlight.grid(4))

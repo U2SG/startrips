@@ -11,7 +11,8 @@ struct AtlasRootView: View {
     @State private var fixtureMode = false
     @State private var googleLoginFailed = false
     @State private var sceneRecoveryRequired = false
-    @State private var accountMenuPresented = false
+    @State private var settingsPresented = false
+    @State private var pendingSettingsAction: SettingsAction?
     @StateObject private var covers = JourneyCoverStore()
     @Namespace private var storyNamespace
 
@@ -33,7 +34,7 @@ struct AtlasRootView: View {
                         .ignoresSafeArea()
                     if router.presentation.globeOnly && router.installed {
                         AtlasChrome(router: router, session: session, covers: covers,
-                                    storyNamespace: storyNamespace) { accountMenuPresented = true }
+                                    storyNamespace: storyNamespace) { settingsPresented = true }
                     }
                 } else if !launching {
                     #if DEBUG
@@ -83,17 +84,12 @@ struct AtlasRootView: View {
             }
         }
         .tint(NightFlight.ink)
-        .confirmationDialog("账户", isPresented: $accountMenuPresented, titleVisibility: .hidden) {
-            if router.snapshot.access == .owner {
-                Button("切换图谱") { signIn() }
-                Button("粘贴分享链接") { pasteShare() }
-                Button("退出登录", role: .destructive) { signOut() }
-            } else {
-                Button("登录") { signIn() }
-                Button("粘贴分享链接") { pasteShare() }
-                Button("退出分享", role: .destructive) { signOut() }
+        // Settings closes before an account action runs, so sign-in can present its own sheet.
+        .sheet(isPresented: $settingsPresented, onDismiss: runSettingsAction) {
+            SettingsView(router: router) { action in
+                pendingSettingsAction = action
+                settingsPresented = false
             }
-            Button("取消", role: .cancel) { }
         }
         .sheet(isPresented: $session.loginPresented, onDismiss: { connectOwner() }) {
             if let origin = session.origin {
@@ -134,7 +130,7 @@ struct AtlasRootView: View {
         }
         .task {
             router.onInvalidation = { refresh() }
-            router.onSwitchAccess = { accountMenuPresented = true }
+            router.onSwitchAccess = { settingsPresented = true }
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-atlas-loading-probe") {
                 // Test-only: hold the branded launch state for a screenshot.
@@ -167,6 +163,10 @@ struct AtlasRootView: View {
                     }
                     router.install(fixtureJourneys, identity: "synthetic-ci", access: .owner, earthExperience: "default")
                     connected = true
+                    if ProcessInfo.processInfo.arguments.contains("-atlas-open-settings") {
+                        // Screenshot probe only: open Settings without a tap.
+                        settingsPresented = true
+                    }
                     if ProcessInfo.processInfo.arguments.contains("-atlas-open-story") {
                         // Screenshot probe only: open Story without a gesture.
                         router.openStory(journeyId: fixture.snapshot.journeys[0].id, routePointId: "point-a")
@@ -208,6 +208,16 @@ struct AtlasRootView: View {
         guard await session.hasOwnerCredentials() else { session.disconnect(); return }
         router.clear(); connected = true; sceneIdentity = UUID()
         refresh()
+    }
+
+    private func runSettingsAction() {
+        guard let action = pendingSettingsAction else { return }
+        pendingSettingsAction = nil
+        switch action {
+        case .signIn: signIn()
+        case .pasteShare: pasteShare()
+        case .signOut: signOut()
+        }
     }
 
     private func signIn() {
