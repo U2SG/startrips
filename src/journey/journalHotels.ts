@@ -82,9 +82,9 @@ export const isLodgingLabelLine = (source: string) => /^\s*(?:[-*•]\s*)?(?:住
  * lodging lines the importer read as planned. Cancelled events never qualify. */
 export const isHotelEligible = (event: { status: string; source: string }) =>
   event.status === "actual" || event.status === "uncertain" || event.status === "planned" && isLodgingLabelLine(event.source);
-/** Lodging features only; an unclassified provider result is left to the model and member. */
+/** Lodging features only. A result without a feature class fails closed. */
 export const isLodgingCategory = (category: string | undefined) =>
-  category === undefined || /^(?:tourism:(?:hotel|motel|guest_house|hostel|apartment|chalet|alpine_hut|resort)|building:hotel|leisure:resort)$/.test(category);
+  category !== undefined && /^(?:tourism:(?:hotel|motel|guest_house|hostel|apartment|chalet|alpine_hut|resort)|building:hotel|leisure:resort)$/.test(category);
 /** Great-circle distance in kilometres. */
 export function distanceKm(a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }) {
   const r = Math.PI / 180, dLat = (b.latitude - a.latitude) * r, dLon = (b.longitude - a.longitude) * r;

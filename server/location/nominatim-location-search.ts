@@ -21,6 +21,10 @@ type NominatimPlace = {
   lon?: string;
   namedetails?: Record<string, unknown>;
   address?: Record<string, unknown>;
+  /** `class` in json output, `category` in jsonv2; with `type` it is the feature class. */
+  class?: string;
+  category?: string;
+  type?: string;
 };
 
 type CachedPayload = {
@@ -96,6 +100,7 @@ function toLocationResult(place: NominatimPlace): LocationSearchResult | null {
   const label = chineseLabel || localLabel;
   const labelEnglish = firstText(nameDetails, ["name:en", "int_name", "official_name:en"]);
   const context = parts.filter((part, index) => index > 0 && part !== label).join(", ");
+  const featureKey = text(place.category) || text(place.class);
   const sourceId = place.osm_type && place.osm_id !== undefined
     ? `${place.osm_type}:${place.osm_id}`
     : `place:${place.place_id ?? `${latitude}:${longitude}`}`;
@@ -109,6 +114,7 @@ function toLocationResult(place: NominatimPlace): LocationSearchResult | null {
     countryCode: text(place.address?.country_code).toUpperCase(),
     latitude,
     longitude,
+    ...(featureKey && text(place.type) ? { category: `${featureKey}:${text(place.type)}` } : {}),
   };
 }
 

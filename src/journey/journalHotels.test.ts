@@ -98,7 +98,8 @@ describe("hotel name similarity and lodging categories", () => {
     expect(similarHotelName(b, a)).toBe(expected);
   });
   it("accepts lodging features and unclassified results only", () => {
-    for (const category of [undefined, "tourism:hotel", "tourism:guest_house", "building:hotel", "leisure:resort"]) expect(isLodgingCategory(category)).toBe(true);
+    expect(isLodgingCategory(undefined)).toBe(false);
+    for (const category of ["tourism:hotel", "tourism:guest_house", "building:hotel", "leisure:resort"]) expect(isLodgingCategory(category)).toBe(true);
     for (const category of ["highway:bus_stop", "amenity:restaurant", "tourism:attraction"]) expect(isLodgingCategory(category)).toBe(false);
   });
   it("measures great-circle distance in kilometres", () => {
