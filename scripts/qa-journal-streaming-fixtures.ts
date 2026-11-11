@@ -15,7 +15,7 @@ export const qaInput = { sentence: '导入这份流水账并关联已入住酒�
 export function qaDraft() {
   const event = (line: number, status: string, time: string, timeEnd: string | null = null, timeEvidence = time) => ({
     line, status, dateStatus: "absent", localDate: null, dateEvidence: null,
-    time: time as string | null, timeEnd, timeEvidence, placeName: null, questions: [] as string[],
+    time: time as string | null, timeEnd, timeEvidence, placeName: null, pointRef: null, questions: [] as string[],
   });
   return { chapters: [
     { firstLine: 0, lastLine: 5, heading: true, dateStatus: 'range', questions: [], date: '2028-06-03', dateEnd: '2028-06-05', dateEvidence: qaLines[0], events: [

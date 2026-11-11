@@ -1,4 +1,6 @@
 import { db } from "../db/client";
+import { eq } from "drizzle-orm";
+import { journeyRoutePoints } from "../db/app-schema";
 import { configuredJournalModel, journalProviderInfo } from "./journal-model";
 export { journalProviderInfo } from "./journal-model";
 import { hash, lockedTarget, sealJournalDraft, type Target } from "../admin/journal-import";
@@ -22,7 +24,8 @@ export async function prepareAuthorizedJournalImport(target: Target, input: { se
     if (hash([currentModel.baseUrl, currentModel.model, currentModel.apiKey]) !== hash([model.baseUrl, model.model, model.apiKey])) throw new Error("JOURNAL_PROVIDER_CHANGED");
     if (hash(await db.transaction(tx => lockedTarget(tx, target))) !== hash(before)) throw new Error("JOURNAL_CHANGED");
   };
-  const draft = await prepareJournalImport(input, before, { ...model, signal: signal ?? model.signal, checkCurrent });
+  const points = await db.select({ id: journeyRoutePoints.id, label: journeyRoutePoints.label }).from(journeyRoutePoints).where(eq(journeyRoutePoints.journeyId, target.journeyId));
+  const draft = await prepareJournalImport(input, before, { ...model, signal: signal ?? model.signal, checkCurrent }, undefined, points);
   return db.transaction(async tx => {
     if (hash(await lockedTarget(tx, target)) !== hash(before)) throw new Error("JOURNAL_CHANGED");
     const chapters = await normalizeJournalReferences(target.journeyId, before.chapters, draft.chapters, tx, draft.placeClaims);

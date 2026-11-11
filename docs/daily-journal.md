@@ -55,3 +55,8 @@ Saving blocks close/discard controls until the request resolves; aborting a brow
 `pnpm test` includes model, parser and real PostgreSQL API tests. Run with the repository's normal isolated test database environment. `pnpm qa:daily-journal` uses the production Stream and journal components with synthetic data and an intercepted API at `QA_ORIGIN` (default `http://127.0.0.1:4173`). It checks desktop/mobile import, cancellation, duplicate clicking/import, manual-edit protection, late model results, account switch, long text, and linked place navigation, and writes screenshots under ignored `artifacts/daily-journal/`.
 
 The browser harness is not production data. Private journey source must never be checked into this repository or passed to a model during development.
+
+## Linking existing places
+
+The AI import receives the Journey's existing places (name only, as short refs) and may link an actual event to one of them across languages and aliases (拉斯维加斯 → Las Vegas). The server accepts only refs from that list, only for actual events, and never for labelled lodging lines (the hotel step handles those and can create the hotel point). Unknown refs are dropped. The existing date-conflict check still applies, links appear in the preview and can be cleared before saving. Exact-name matching remains as a fallback. Other places are never created by the import.
+

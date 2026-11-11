@@ -96,3 +96,12 @@ it("uses an explicit single-day heading only to check the link, never to fill ev
   expect(linked[0].events[0]).toMatchObject({ routePointId: null, localDate: null });
   expect(linked[0].suggestions[0].questions.join()).toContain("记录时间不一致");
 });
+
+describe("model-selected existing places", () => {
+  it("links a model-selected existing point across languages and ignores unknown ids", () => {
+    const chapters = previewJournalImport("实际：抵达拉斯维加斯。", "2028-06-03"), event = chapters[0].events[0];
+    const points = [{ id: "vegas", label: "Las Vegas" }];
+    expect(linkJournalPlaces([], chapters, [{ eventId: event.id, name: "", pointId: "vegas" }], points)[0].events[0].routePointId).toBe("vegas");
+    expect(linkJournalPlaces([], chapters, [{ eventId: event.id, name: "", pointId: "elsewhere" }], points)[0].events[0].routePointId).toBeNull();
+  });
+});

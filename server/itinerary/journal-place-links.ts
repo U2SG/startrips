@@ -1,6 +1,7 @@
 import type { JournalChapter } from "../../src/journey/dailyJournal";
 
-export type JournalPlaceClaim = { eventId: string; name: string; date?: string | null };
+/** `pointId` is a model-selected existing point (validated against the supplied list); otherwise `name` must equal a point label exactly. */
+export type JournalPlaceClaim = { eventId: string; name: string; date?: string | null; pointId?: string | null };
 /** Match only source-grounded, single-place claims. Existing events belong to the member. */
 export function linkJournalPlaces(previous: JournalChapter[], chapters: JournalChapter[], claims: JournalPlaceClaim[], points: { id: string; label: string; occurredAt?: Date | string | null }[]): JournalChapter[] {
   const existing = new Set(previous.flatMap(c => c.events.map(e => e.id)));
@@ -11,8 +12,10 @@ export function linkJournalPlaces(previous: JournalChapter[], chapters: JournalC
     const events = chapter.events.map(event => {
       const claim = evidence.get(event.id), name = claim?.name;
       const date = event.localDate ?? claim?.date;
-      if (existing.has(event.id) || event.routePointId || event.status !== "actual" || !name?.trim() || !event.source.includes(name)) return event;
-      const matches = points.filter(point => normalize(point.label) === normalize(name));
+      if (existing.has(event.id) || event.routePointId || event.status !== "actual") return event;
+      const chosen = claim?.pointId ? points.filter(point => point.id === claim.pointId) : [];
+      if (!chosen.length && (!name?.trim() || !event.source.includes(name))) return event;
+      const matches = chosen.length ? chosen : points.filter(point => normalize(point.label) === normalize(name!));
       if (matches.length > 1) questions.set(event.id, "旅程中有多个同名地点，请确认本次对应哪一个；暂未关联媒体。");
       if (matches.length === 1 && date && matches[0].occurredAt) {
         const instant = new Date(matches[0].occurredAt).getTime(), day = Date.parse(`${date}T00:00:00Z`);
