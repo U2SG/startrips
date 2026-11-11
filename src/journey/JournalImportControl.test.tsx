@@ -15,8 +15,8 @@ describe("journal import controls", () => {
     expect(html).not.toContain("<input");
     expect(html.match(/<button/g)).toHaveLength(1);
     expect(html).toContain("用 AI 导入");
-    expect(html).toContain("不代表事件发生日期");
-    expect(html).toContain("2027-04-03");
+    // The helper paragraph was removed (owner rule: no secondary labels).
+    expect(html).not.toContain("不代表事件发生日期");
     expect(html).not.toContain("provider:");
     expect(html).not.toContain("synthetic-atlas");
     expect(html).not.toContain("disabled");
