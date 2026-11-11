@@ -4,21 +4,21 @@
   box-sizing: border-box;
   --story-safe-bottom: env(safe-area-inset-bottom, 0px);
   --classic-aperture: clamp(150px, 30svh, 320px);
-  --journey-story-sheet-extent: min(72svh, 680px);
+  --journey-story-sheet-extent: min(100svh, calc(min(72svh, 680px) + var(--story-action-row-height, 0px)));
   padding-bottom: var(--story-safe-bottom);
   scroll-padding-block: 112px 24px;
 }
 .journey-story[data-classic-view="thumb"] {
   --classic-aperture: clamp(160px, 34svh, 350px);
-  --journey-story-sheet-extent: min(78svh, 740px);
+  --journey-story-sheet-extent: min(100svh, calc(min(78svh, 740px) + var(--story-action-row-height, 0px)));
 }
 .journey-story[data-classic-view="photo"] {
   --classic-aperture: clamp(190px, 44svh, 470px);
-  --journey-story-sheet-extent: min(86svh, 840px);
+  --journey-story-sheet-extent: min(100svh, calc(min(86svh, 840px) + var(--story-action-row-height, 0px)));
 }
 .journey-story[data-classic-view="earth"] {
   --classic-aperture: clamp(130px, 21svh, 230px);
-  --journey-story-sheet-extent: min(56svh, 540px);
+  --journey-story-sheet-extent: min(100svh, calc(min(56svh, 540px) + var(--story-action-row-height, 0px)));
 }
 .journey-story[data-classic-view] > header {
   display: flex; gap: var(--control-gap); height: 56px; padding-inline: 12px;
@@ -132,7 +132,7 @@
   .journey-story[data-classic-view] {
     --journey-story-sheet-extent: 92svh;
     /* Preserve a picture area above the native video controls on short phones. */
-    --classic-aperture: max(180px, calc(92svh - 192px - var(--story-action-row-height, 0px)));
+    --classic-aperture: max(180px, calc(92svh - 192px));
   }
   .journey-story[data-classic-view] .journey-story__classic-context { display: none; }
 }

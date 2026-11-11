@@ -303,17 +303,39 @@
 }
 .journey-story[data-story-layout="desktop"]:has(> .journey-story__editor-actions) > .journey-story__layout { grid-row: 3; }
 .journey-story[data-story-layout="desktop"]:has(> .journey-story__editor-actions) > footer { grid-row: 4; }
-/* Phones: one Story action row under the header, on the copy's gutter. Export
-   leads; quick recap and management trail, right-aligned with or without it. */
+/* The same action buttons occupy a second header row on taller phones and
+   share the title row when vertical space is limited. */
 .journey-story[data-story-layout="mobile"] { --story-mobile-gutter: 22px; }
 .journey-story[data-story-layout="mobile"][data-classic-view] { --story-mobile-gutter: 18px; }
-/* The media gives the row's height back so the picture keeps its first-screen fit. */
-.journey-story[data-story-layout="mobile"]:has(> .journey-story__editor-actions) { --story-action-row-height: 60px; }
-.journey-story[data-story-layout="mobile"] > .journey-story__editor-actions {
-  position: sticky; top: 106px; z-index: var(--z-content-3);
-  flex-wrap: nowrap; margin: 0; padding: 8px var(--story-mobile-gutter); background: var(--archive-bg);
+.journey-story[data-story-layout="mobile"]:has(> header > .journey-story__editor-actions) {
+  --story-action-row-height: 60px;
+  scroll-padding-block-start: calc(114px + var(--story-action-row-height) + env(safe-area-inset-top, 0px));
 }
-.journey-story[data-story-layout="mobile"] > .journey-story__editor-actions > button { flex: 0 0 auto; white-space: nowrap; }
+.journey-story[data-story-layout="mobile"] > header:has(> .journey-story__editor-actions) {
+  --story-heading-height: 62px;
+  box-sizing: border-box;
+  display: grid;
+  grid-template: "title presentation close" calc(var(--story-heading-height) - 1px)
+                 "actions actions actions" var(--story-action-row-height) / minmax(0, 1fr) auto auto;
+  gap: 0 var(--control-gap);
+  height: calc(var(--story-heading-height) + var(--story-action-row-height));
+}
+.journey-story[data-classic-view] > header:has(> .journey-story__editor-actions) {
+  --story-heading-height: 56px;
+  grid-template-areas: "close title presentation" "actions actions actions";
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.journey-story__heading { grid-area: title; min-width: 0; }
+.journey-story__heading h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.journey-story[data-story-layout="mobile"] > header > .story-presentation-picker { grid-area: presentation; }
+.journey-story[data-story-layout="mobile"] > header > .journey-story__close { grid-area: close; }
+.journey-story[data-story-layout="mobile"] > header > .journey-story__editor-actions {
+  grid-area: actions;
+  flex-wrap: nowrap;
+  margin: 0;
+  padding: 8px calc(var(--story-mobile-gutter) - 12px);
+}
+.journey-story[data-story-layout="mobile"] .journey-story__editor-actions > button { flex: 0 0 auto; white-space: nowrap; }
 .journey-story__editor-actions-end {
   display: flex; gap: 8px; align-items: center; justify-content: flex-end;
   min-width: 0; margin-inline-start: auto;
@@ -342,19 +364,28 @@
 .journey-story[data-story-layout="mobile"] .journey-story__editor-actions-end > button:disabled {
   cursor: default; opacity: var(--control-disabled-opacity);
 }
-.journey-story[data-classic-view] > .journey-story__editor-actions { top: 100px; }
-.journey-story[data-story-layout="mobile"][data-mobile-presentation="expanded"] > .journey-story__editor-actions {
-  top: calc(106px + env(safe-area-inset-top, 0px));
-}
-.journey-story[data-classic-view][data-mobile-presentation="expanded"] > .journey-story__editor-actions {
-  top: calc(100px + env(safe-area-inset-top, 0px));
-}
-
-.journey-story[data-story-layout="mobile"]:has(> .journey-story__editor-actions) {
-  scroll-padding-block-start: calc(174px + env(safe-area-inset-top, 0px));
+@media (max-height: 480px) {
+  .journey-story[data-story-layout="mobile"]:has(> header > .journey-story__editor-actions) {
+    --story-action-row-height: 0px;
+  }
+  .journey-story[data-story-layout="mobile"] > header:has(> .journey-story__editor-actions) {
+    grid-template: "title actions presentation close" 1fr / minmax(0, 1fr) auto auto auto;
+  }
+  .journey-story[data-classic-view] > header:has(> .journey-story__editor-actions) {
+    grid-template-areas: "close title actions presentation";
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+  }
+  .journey-story[data-story-layout="mobile"] > header > .journey-story__editor-actions { padding: 0; }
+  .journey-story[data-story-layout="mobile"] .journey-story__editor-actions button {
+    box-sizing: border-box;
+    width: 44px;
+    min-width: 44px;
+    padding: 0;
+  }
+  .journey-story[data-story-layout="mobile"] .journey-story__editor-actions button > span { display: none; }
 }
 
 /* Keep picture/tool overlays below the sticky editor controls while scrolling. */
-.journey-story[data-story-layout="mobile"]:is([data-story-editing="true"], :has(> .journey-story__editor-actions)) > .journey-story__layout {
+.journey-story[data-story-layout="mobile"]:is([data-story-editing="true"], :has(> header > .journey-story__editor-actions)) > .journey-story__layout {
   position: relative; isolation: isolate;
 }

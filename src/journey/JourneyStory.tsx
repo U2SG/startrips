@@ -4957,14 +4957,52 @@ export function JourneyStory({
     <span className="journey-story__classic-toolbar-break" aria-hidden="true" />
   </> : null;
 
-  // Mobile Story keeps its Story-level actions in one row under the header in
-  // every mode: export leads, quick recap then management trail. Only media
-  // transport (play, immersive, video steps) stays on the picture.
+  // Export, recap and management share the mobile header. Media transport
+  // (play, immersive, video steps) stays with the picture.
   const storyExportAvailable = canExportJourney && mediaEditing;
   const mobileRowQuickRecap = Boolean(mobileLayout && quickRecap && quickRecap.state !== "over-budget"
     && hasStoryMedia && !overview && activeEntry);
   const mobileRowManage = Boolean(mobileLayout && manageMedia && !overview
     && (hasStoryMedia ? activeEntry : !mobileManageMode));
+
+  const storyActions = storyExportAvailable || mobileRowQuickRecap || mobileRowManage ? <div className="journey-story__editor-actions" role="group" aria-label="故事操作" inert={presentationBusy || undefined}>
+    {storyExportAvailable ? <button ref={filmExportTriggerRef} data-story-film-export-trigger="true" type="button" aria-label="导出短片" disabled={mutationPending || deleteState !== "idle"} onClick={() => {
+      if (notesPreventAction("请先保存或放弃感想更改，再导出旅程。")) return;
+      setPlaying(false); setFilmExportTarget(filmExportKey);
+    }}><IconDownload size={16} stroke={1.35} aria-hidden="true" /><span>导出短片</span></button> : null}
+    {mobileRowQuickRecap || mobileRowManage ? <div className="journey-story__editor-actions-end">
+      {mobileRowQuickRecap ? <button type="button"
+        className="journey-story__mobile-quick-recap"
+        data-story-primary-playback="quick-recap"
+        disabled={quickRecapBusy}
+        {...mediaButtonInput("quick-recap", beginQuickRecap)}
+        aria-label={quickRecapLabel}>
+        <IconPlayerPlay size={17} stroke={1.5} aria-hidden="true" />
+        <span>{quickRecapLabel}</span>
+      </button> : null}
+      {mobileRowManage ? <IconActionButton
+        type="button"
+        className="journey-story__mobile-media-menu-trigger"
+        buttonRef={classicActive ? undefined : mobileManageViewerTriggerRef}
+        label={mobileManageMode ? "管理当前媒体" : "管理旅程"}
+        tooltip={mobileManageMode ? "管理媒体" : "管理旅程"}
+        aria-expanded={mobileManageMode ? mobileMediaMenuOpen : undefined}
+        aria-hidden={mediaDeleteState !== "idle"}
+        tabIndex={mediaDeleteState === "idle" ? 0 : -1}
+        style={mediaDeleteState === "idle" ? undefined : { visibility: "hidden", pointerEvents: "none" }}
+        disabled={mutationPending}
+        onClick={() => {
+          if (!mobileManageMode) {
+            enterMobileManageMode();
+            return;
+          }
+          setMobileMediaMenuOpen((open) => !open);
+        }}
+      >
+        <IconDots size={19} stroke={1.5} aria-hidden="true" />
+      </IconActionButton> : null}
+    </div> : null}
+  </div> : null;
 
   const content = (
     <div
@@ -5024,7 +5062,7 @@ export function JourneyStory({
         ) : null}
         <header>
           {showDesktopChapterRail ? routePointNavigation : null}
-          {mobileLayout ? <div>
+          {mobileLayout ? <div className="journey-story__heading">
             <p>{journeyRange(journey)}</p>
             <h2 id="journey-story-title">{journey.title}</h2>
           </div> : canEditStory ? <button
@@ -5065,6 +5103,7 @@ export function JourneyStory({
             ) : null}
             <IconX size={19} stroke={1.35} aria-hidden="true" />
           </button>
+          {mobileLayout ? storyActions : null}
         </header>
 
         {closeBlocked && (uploading || notesSaveState === "saving" || placementAnalyzing || placementReview !== null) ? (
@@ -5073,44 +5112,7 @@ export function JourneyStory({
           </p>
         ) : null}
 
-        {storyExportAvailable || mobileRowQuickRecap || mobileRowManage ? <div className="journey-story__editor-actions" role="group" aria-label="故事操作" inert={presentationBusy || undefined}>
-          {storyExportAvailable ? <button ref={filmExportTriggerRef} data-story-film-export-trigger="true" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => {
-            if (notesPreventAction("请先保存或放弃感想更改，再导出旅程。")) return;
-            setPlaying(false); setFilmExportTarget(filmExportKey);
-          }}><IconDownload size={16} stroke={1.35} aria-hidden="true" />导出短片</button> : null}
-          {mobileRowQuickRecap || mobileRowManage ? <div className="journey-story__editor-actions-end">
-            {mobileRowQuickRecap ? <button type="button"
-              className="journey-story__mobile-quick-recap"
-              data-story-primary-playback="quick-recap"
-              disabled={quickRecapBusy}
-              {...mediaButtonInput("quick-recap", beginQuickRecap)}
-              aria-label={quickRecapLabel}>
-              <IconPlayerPlay size={17} stroke={1.5} aria-hidden="true" />
-              <span>{quickRecapLabel}</span>
-            </button> : null}
-            {mobileRowManage ? <IconActionButton
-              type="button"
-              className="journey-story__mobile-media-menu-trigger"
-              buttonRef={classicActive ? undefined : mobileManageViewerTriggerRef}
-              label={mobileManageMode ? "管理当前媒体" : "管理旅程"}
-              tooltip={mobileManageMode ? "管理媒体" : "管理旅程"}
-              aria-expanded={mobileManageMode ? mobileMediaMenuOpen : undefined}
-              aria-hidden={mediaDeleteState !== "idle"}
-              tabIndex={mediaDeleteState === "idle" ? 0 : -1}
-              style={mediaDeleteState === "idle" ? undefined : { visibility: "hidden", pointerEvents: "none" }}
-              disabled={mutationPending}
-              onClick={() => {
-                if (!mobileManageMode) {
-                  enterMobileManageMode();
-                  return;
-                }
-                setMobileMediaMenuOpen((open) => !open);
-              }}
-            >
-              <IconDots size={19} stroke={1.5} aria-hidden="true" />
-            </IconActionButton> : null}
-          </div> : null}
-        </div> : null}
+        {!mobileLayout ? storyActions : null}
         {classicActive ? <p className="journey-story__classic-context">
           <span>{activeChapterRoutePoint?.label || (activeChapterRoutePoint ? "途径点" : "整段旅程")}</span>
           <small>{classicViewDefinition.label}</small>

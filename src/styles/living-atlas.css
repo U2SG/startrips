@@ -7053,7 +7053,7 @@ button.living-atlas__globe-focus-exit {
      then commits the collapsed height under an offset that is again 0. A
      reversal mid-way is an ordinary transition from the current position. */
   .journey-story {
-    --journey-story-sheet-extent: min(72svh, 680px);
+    --journey-story-sheet-extent: min(100svh, calc(min(72svh, 680px) + var(--story-action-row-height, 0px)));
     position: relative;
     display: block;
     height: var(--journey-story-sheet-extent);
@@ -7137,13 +7137,13 @@ button.living-atlas__globe-focus-exit {
   }
 
   .journey-story__media {
-    height: calc(38svh - var(--story-action-row-height, 0px));
-    min-height: calc(240px - var(--story-action-row-height, 0px));
+    height: 38svh;
+    min-height: 240px;
   }
 
   .journey-story[data-mobile-presentation="expanded"] .journey-story__media {
-    height: calc(47svh - var(--story-action-row-height, 0px));
-    min-height: calc(300px - var(--story-action-row-height, 0px));
+    height: 47svh;
+    min-height: 300px;
   }
 
   /* #489 acceptance 2 / #531: on a short (landscape) phone the sheet was 72svh
@@ -7164,8 +7164,8 @@ button.living-atlas__globe-focus-exit {
 
     .journey-story__media,
     .journey-story[data-mobile-presentation="expanded"] .journey-story__media {
-      height: calc(92svh - 106px - var(--story-action-row-height, 0px));
-      max-height: calc(92svh - 106px - var(--story-action-row-height, 0px));
+      height: calc(92svh - 106px);
+      max-height: calc(92svh - 106px);
       min-height: 0;
     }
   }

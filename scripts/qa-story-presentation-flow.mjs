@@ -131,12 +131,15 @@ async function assertIcon(button, label) {
 // Mobile Story keeps its Story actions in one row under the header, on the
 // chips row's gutter: 导出短片 leads, 快速回顾 then … trail; nothing floats on
 // the media. Reading states without the chips row use the copy's content edge.
-async function assertStoryActionRow(label, {editing}) {
+async function assertStoryActionRow(label, {editing, compact = false}) {
  const g=await story.evaluate(root=>{
   const rect=el=>{if(!el||!el.getClientRects().length) return null;const r=el.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
-  const row=root.querySelector(':scope > .journey-story__editor-actions');
+  const row=root.querySelector(':scope > header > .journey-story__editor-actions');
   const copy=root.querySelector('.journey-story__copy'), copyStyle=copy && getComputedStyle(copy), copyBox=copy?.getBoundingClientRect();
   return {row:rect(row),header:rect(root.querySelector(':scope > header')),
+   title:rect(root.querySelector('.journey-story__heading')),
+   presentation:rect(root.querySelector('.story-presentation-picker__navigation')),
+   visibleLabels:[...row?.querySelectorAll('button > span') ?? []].filter(el=>el.getClientRects().length).length,
    export:rect(row?.querySelector('[data-story-film-export-trigger]')),
    recap:rect(row?.querySelector('[data-story-primary-playback="quick-recap"]')),
    more:rect(row?.querySelector('.journey-story__mobile-media-menu-trigger')),
@@ -161,11 +164,19 @@ async function assertStoryActionRow(label, {editing}) {
   assert.ok(Math.abs(box.top-g.more.top)<=2,why(`${name} leaves the action row`));
   assert.ok(box.left>=-1 && box.right<=g.viewport+1,why(`${name} is clipped`));
  }
- if (g.export) assert.ok(Math.abs(g.export.left-edge.left)<=2,why('导出短片 is off the chips row left edge'));
- assert.ok(Math.abs(g.more.right-edge.right)<=2,why('… is off the chips row right edge'));
  if (g.recap) assert.ok(Math.abs(g.more.left-g.recap.right-8)<=1,why('快速回顾 and … are not 8px apart'));
  if (g.export && g.recap) assert.ok(g.recap.left-g.export.right>=8-1,why('导出短片 and 快速回顾 collide'));
- assert.ok(Math.abs(g.row.top-g.header.bottom)<=2,why('the action row is not directly under the header'));
+ if (compact) {
+  assert.equal(g.visibleLabels,0,why('compact actions must be icon-only'));
+  assert.ok(g.row.left>=g.title.right-1 && g.row.right<=g.presentation.left+1,why('actions overlap the title or presentation control'));
+  assert.ok(g.row.top>=g.header.top && g.row.bottom<=g.header.bottom,why('actions do not fit inside the header'));
+  assert.ok(Math.abs(g.more.top-g.presentation.top)<=2,why('actions are not aligned with the header controls'));
+  for (const [name,box] of controls) assert.ok(Math.abs(box.width-44)<=1,why(`${name} is not a 44px-wide icon control`));
+ } else {
+  if (g.export) assert.ok(Math.abs(g.export.left-edge.left)<=2,why('导出短片 is off the chips row left edge'));
+  assert.ok(Math.abs(g.more.right-edge.right)<=2,why('… is off the chips row right edge'));
+  assert.ok(g.row.top>=g.title.bottom && Math.abs(g.row.bottom-g.header.bottom)<=2,why('the action row is not directly under the title'));
+ }
  return g;
 }
 async function assertEditor() {
@@ -303,6 +314,13 @@ try {
   const management=story.getByRole('button',{name:'管理当前媒体',exact:true});
   assert.equal(await management.evaluate(el=>Boolean(el.closest('.journey-story__editor-actions'))),true,`${layout} media management left the action row`);
   await page.screenshot({path:`${out}/layout-${layout}-controls.png`});
+  if (layout==='light' && width===390) {
+   await page.setViewportSize({width:844,height:390});
+   result.actionRows.push({state:'editor-landscape',...await assertStoryActionRow('landscape',{editing:true,compact:true})});
+   await page.screenshot({path:`${out}/action-row-editor-landscape.png`});
+   await page.setViewportSize({width,height:844});
+   await assertStoryActionRow('portrait after rotation',{editing:true});
+  }
   await management.click();
   const mediaMenu=story.getByRole('dialog',{name:'媒体管理',exact:true});
   await mediaMenu.waitFor({state:'visible'});
