@@ -31,3 +31,14 @@ The relationship audit also rejects missing/duplicate plan event IDs. Date/time 
 The independent pass additionally reproduced `York` incorrectly matching `New York` in provider/owned-point addresses. Preview and apply now share exact matching against complete delimited address components; opaque or ambiguous addresses remain questions. Dedicated synthetic guard, provider/owned-preview and signed-apply tests reject that collision. This deliberately rejects undelimited composite addresses instead of guessing their geographic structure.
 
 Final independent read-only follow-up found no remaining blocking issue in this geography correction and independently passed two files / 44 tests plus diff checks. PostgreSQL and full CI are separate owner validation. No GitHub APPROVE or Maintainer clearance is claimed.
+
+## Owner relaxation for labelled itineraries (2026-11-10)
+
+On a real 14-day itinerary written as day summaries (`住宿：<hotel>`, often a Chinese name with the English name in parentheses), the gates above produced zero hotels: the stay-clause and geography constructions never matched, exact name equality rejected provider names with brand prefixes or suffixes, Chinese-only names returned no or wrong results (one matched a bakery in another country), and one bad quotation failed the whole batch. The owner explicitly approved relaxing them. Each hotel is still previewed with its full source and provider address and written only after confirmation.
+
+- A labelled lodging line counts as an explicit stay; the negative markers above still fail closed, plus `无酒店/无住宿`.
+- The source area is no longer required or signed. Geography is checked against the trip instead: a candidate must be within 300 km of an existing Journey point. This replaces the "borrowed city" guard; a wrong-city candidate is now excluded by distance rather than by clause grammar.
+- The model proposes a `searchName` used only as the search query. Provider names are matched by containment, by all words of the shorter name, or by a shared distinctive word, and only lodging features are accepted.
+- Each stay is judged independently; failures become questions. A single plausible candidate needs no selection call.
+
+With the owner's permission the change was checked locally against that itinerary on the production model and location service: 11 of 13 nightly hotels were proposed, each the correct property; the remaining two (an untranslatable nickname and an ambiguous branch) became questions, and the "return flight, no hotel" line was excluded.

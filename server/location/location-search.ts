@@ -9,6 +9,8 @@ export type LocationSearchResult = {
   countryCode: string;
   latitude: number;
   longitude: number;
+  /** Optional provider feature class, e.g. `tourism:hotel` (Photon osm_key:osm_value). */
+  category?: string;
 };
 
 /**

@@ -95,11 +95,11 @@ const model = { ...provider, apiKey: "mock-only", timeoutMs: 1000, fetcher: vi.f
       time: i ? "07:30" : "23:30", timeEnd: null, timeEvidence: i ? "07:30" : "23:30", placeName: null, questions: [] })) }] };
   else if (name === "search_hotels") {
     const event = data.flatMap((c: any) => c.events).find((e: any) => e.source.includes("入住星桥酒店"));
-    args = { stays: [{ eventId: event.id ?? event.eventId, evidence: "在虚构城入住星桥酒店", name: "星桥酒店", area: "虚构城" }], questions: [] };
-  } else { expect(name).toBe("stage_hotel_links"); args = { matches: data.map((e: any) => ({ eventId: e.eventId, candidateId: e.candidates[0].candidateId })) }; }
+    args = { stays: [{ eventId: event.id ?? event.eventId, name: "星桥酒店", searchName: "星桥酒店" }], questions: [] };
+  } else { expect(name).toBe("stage_hotel_links"); args = { matches: data.map((e: any) => ({ eventId: e.eventId, candidateId: null })) }; }
   return Response.json({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ id: `mock-${randomUUID()}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
 }) };
-const point = { id: "provider-hotel", label: "星桥酒店", context: "虚构城，中心路", latitude: 10, longitude: 20, countryCode: "ZZ" };
+const point = { id: "provider-hotel", label: "星桥酒店", context: "虚构城，中心路", latitude: 1, longitude: 2.5, countryCode: "ZZ" };
 const search: LocationSearch = { driver: "mock", attribution: null, search: vi.fn(async () => [point]), reverse: vi.fn() };
 beforeAll(async () => {
   owner = await createAuthenticatedAtlas("llm-journal-owner"); other = await createAuthenticatedAtlas("llm-journal-other");
