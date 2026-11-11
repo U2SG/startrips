@@ -1,15 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// Native shell colours, matching the scene's `--archive-bg` / `--archive-ink`
-/// tokens so no light system surface shows around or before the Atlas.
-enum AtlasPalette {
-    static let background = Color(red: 2 / 255, green: 7 / 255, blue: 6 / 255)
-    static let ink = Color(red: 230 / 255, green: 238 / 255, blue: 233 / 255)
-    static let accent = Color(red: 118 / 255, green: 198 / 255, blue: 188 / 255)
-    static let line = Color(red: 118 / 255, green: 198 / 255, blue: 188 / 255).opacity(0.32)
-}
-
 struct AtlasRootView: View {
     @ObservedObject var router: AppRouter
     @ObservedObject var session: AtlasSession
@@ -274,33 +265,25 @@ private struct WelcomeView: View {
                                 .textContentType(.URL).keyboardType(.URL)
                                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                                 .padding(12)
-                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(AtlasPalette.line))
+                                .nightFlightSurface(radius: NightFlight.radiusSmall)
                         }
                         #endif
                         Button(action: signIn) {
-                            Text("登录")
-                                .padding(.vertical, 8).padding(.horizontal, 20)
-                                .frame(maxWidth: .infinity, minHeight: 52).contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                            Text("登录").padding(.vertical, NightFlight.grid(2))
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(AtlasPalette.background)
-                        .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(AtlasPalette.accent))
+                        .buttonStyle(NightFlightPillButtonStyle())
                         .accessibilityIdentifier("welcome.sign-in")
                         Button(action: pasteShare) {
                             Label("粘贴分享链接", systemImage: "doc.on.clipboard")
                                 .multilineTextAlignment(.center)
-                                .padding(.vertical, 8).padding(.horizontal, 20)
-                                .frame(maxWidth: .infinity, minHeight: 52).contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                                .padding(.vertical, NightFlight.grid(2))
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(AtlasPalette.ink)
-                        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(AtlasPalette.line))
+                        .buttonStyle(NightFlightPillButtonStyle(prominent: false))
                         .accessibilityIdentifier("welcome.paste-share")
                     }
-                    .font(.headline)
-                    .padding(.bottom, 24)
+                    .padding(.bottom, NightFlight.grid(6))
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, NightFlight.grid(6))
                 .frame(maxWidth: 520)
                 .frame(maxWidth: .infinity, minHeight: proxy.size.height)
             }
