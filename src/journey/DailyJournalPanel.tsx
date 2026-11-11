@@ -120,14 +120,14 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
   const visual = journey.media.filter((m) => /^(image|video)\//.test(m.mimeType));
   const firstPlaceMedia = firstJournalPlaceMediaEvents(ordered.flatMap(({ c }) => c.events), visual);
   return <div className="daily-journal" role="dialog" aria-modal="true" aria-label="每日手记" ref={root} tabIndex={-1}>
-    <header><div><span>私有手记 · 不随分享链接公开</span><h1>{journey.title}</h1></div><button disabled={busy === "保存"} onClick={requestClose}>返回 Stream</button></header>
-    {confirmClose ? <div role="alert"><p>当前有未保存内容，离开会丢弃草稿。</p><button onClick={() => setConfirmClose(false)}>继续编辑</button><button disabled={busy === "保存"} onClick={() => { void discardAndClose(); }}>丢弃并返回</button></div> : null}
+    <header><div><h1>{journey.title}</h1></div><button disabled={busy === "保存"} onClick={requestClose}>返回 Stream</button></header>
+    {confirmClose ? <div role="alert" className="daily-journal__confirm"><p>当前有未保存内容，离开会丢弃草稿。</p><div className="daily-journal__confirm-actions"><button onClick={() => setConfirmClose(false)}>继续编辑</button><button className="is-destructive" disabled={busy === "保存"} onClick={() => { void discardAndClose(); }}>丢弃并返回</button></div></div> : null}
     {error ? <p role="alert">{error}</p> : null}{notice ? <p role="status">{notice}</p> : null}
     {busy && busy !== "导入" ? <JournalOperationStatus label={`正在${busy}…`} onStop={busy === "保存" || busy === "读取" || busy === "撤销" ? undefined : stopOperation} /> : null}
     {saved ? <>
       <section className="daily-journal__import" aria-label="导入手记">
         <label>原始流水账<textarea aria-describedby={sourceCountId} value={source} maxLength={200000} placeholder="粘贴整份游记，AI 会识别日期、钟点与事件状态。" disabled={!!busy || !!draft} onChange={(e) => setSource(e.target.value)} /></label>
-        <p id={sourceCountId} className="daily-journal__source-count">原文 {sourceCharacters.toLocaleString("zh-CN")} 字符<span>不含空白 · 仅在本地统计</span></p>
+        <p id={sourceCountId} className="daily-journal__source-count">原文 {sourceCharacters.toLocaleString("zh-CN")} 字符</p>
         <JournalImportControl client={client.importJournal}
           input={{ journeyId: journey.id, atlasId: journey.atlasId, source, fallbackDate: journey.startedOn }}
           disabled={!!draft || (!!busy && busy !== "导入")} control={importControl}
@@ -139,14 +139,16 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
       </section>
       {!draft && saved.chapters.length > 0 ? <button disabled={!!busy || !!hotels} onClick={() => { setDraft(structuredClone(saved)); setEditing(true); }}>编辑已有手记</button> : null}
       {!draft && !source && latestImport && client.undoImport ? <button disabled={!!busy || confirmUndo !== null} onClick={() => setConfirmUndo(0)}>撤销这次导入</button> : null}
-      {!draft && latestImport && confirmUndo !== null ? <div role="alert">
+      {!draft && latestImport && confirmUndo !== null ? <div role="alert" className="daily-journal__confirm">
         <p>{confirmUndo ? `其中 ${confirmUndo} 章导入后有修改，撤销会一并丢失。` : `撤销这次导入会移除 ${latestImport.chapters} 章。`}</p>
-        <button disabled={!!busy} onClick={() => void undoImport(confirmUndo > 0)}>确认撤销</button>
-        <button disabled={!!busy} onClick={() => setConfirmUndo(null)}>取消</button>
+        <div className="daily-journal__confirm-actions">
+          <button disabled={!!busy} onClick={() => setConfirmUndo(null)}>取消</button>
+          <button className="is-destructive" disabled={!!busy} onClick={() => void undoImport(confirmUndo > 0)}>确认撤销</button>
+        </div>
       </div> : null}
       {!draft && !source && saved.chapters.length > 0 && client.previewHotels && client.applyHotels ? <section aria-label="酒店工具导入">
         <button disabled={!!busy} onClick={() => void searchHotels()}>用 AI 查找已入住酒店</button>
-        {hotels ? <><ul>{hotels.hotels.map(h => <li key={h.eventId}><strong>{h.label}</strong> · {h.context}<p>原文：{h.evidence}</p><span>{h.existingPointId ? "复用已有地点" : "新增住宿地点"}；确认后记为实际入住</span></li>)}</ul>
+        {hotels ? <><ul>{hotels.hotels.map(h => <li key={h.eventId}><strong>{h.label}</strong> · {h.context}<p>原文：{h.evidence}</p><span>{h.existingPointId ? "复用已有地点" : "新增地点"}</span></li>)}</ul>
           {hotels.questions.map((q, i) => <p key={i}>{q}</p>)}
           {!hotels.hotels.length ? <p>没有可可靠确认的住宿地点；未写入。</p> : null}
           <button disabled={!!busy || !hotels.hotels.length} onClick={() => run("保存", async signal => {
@@ -165,9 +167,7 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
           if (!signal.aborted) { setSaved(result); setDraft(null); setEditing(false); setSource(""); setNotice("手记已保存。"); setFindHotels(fromImport && !!client.previewHotels && !!client.applyHotels); setFromImport(false); }
         })}>确认保存</button>
         <button disabled={busy === "保存"} onClick={cancelDraft}>取消预览</button>
-        <p>当前内容尚未保存。选填字段可以留空；不会自动添加地图点。</p>
       </div> : null}
-      {!ordered.length ? <p>还没有每日手记。可以先导入文字，无照片和坐标也能保存阅读。</p> : null}
       {draft && editing ? <>
       <nav aria-label="手记日期目录">{ordered.map(({ c }) => <a key={c.id} href={`#journal-${c.id}`}>{c.date} {c.title}</a>)}</nav>
       {ordered.map(({ c }) => <article key={c.id} id={`journal-${c.id}`}>
@@ -192,7 +192,6 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
               <label>已确认的实际地点<select aria-label="已确认的实际地点" disabled={event.status !== "actual"} value={event.routePointId ?? ""} onChange={(e) => updateEvent(c.id, event.id, { routePointId: e.target.value || null })}><option value="">无 / 待确认</option>{journey.routePoints.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</select></label>
               {event.mediaIds.length ? <button type="button" onClick={() => updateEvent(c.id, event.id, { mediaIds: [] })}>清除手动照片或视频关联</button> : null}
               {visual.length ? <label>额外关联照片或视频（可多选）<select aria-label="关联照片或视频（可多选）" multiple value={event.mediaIds} onChange={(e) => updateEvent(c.id, event.id, { mediaIds: Array.from(e.target.selectedOptions, (option) => option.value) })}>{visual.map((m) => <option key={m.id} value={m.id}>{m.fileName}</option>)}</select></label> : null}
-              {point ? <p>清除手动关联只移除本事件的选择；该地点已有照片/视频仍会在下方单独展示，不代表本次拍摄。</p> : null}
               </details>
             </fieldset> : <p className="daily-journal__prose">{event.text}</p>}
             {point && !draft ? <button disabled={!!busy} onClick={() => onPoint(point.id)}>在 Stream 中查看地点：{point.label}</button> : null}

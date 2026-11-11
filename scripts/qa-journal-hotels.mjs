@@ -60,7 +60,7 @@ try {
     await preview().click(); await page.getByText("正在检索酒店…", { exact: true }).waitFor();
     await page.evaluate(() => window.dispatchEvent(new Event("qa-account-switch")));
     releasePreview(); await page.getByRole("button", { name: "每日手记", exact: true }).click();
-    await page.getByText("还没有每日手记。可以先导入文字，无照片和坐标也能保存阅读。", { exact: true }).waitFor();
+    await page.getByLabel("原始流水账").waitFor();
     assert.equal(await page.getByRole("button", { name: "确认批量添加及关联" }).count(), 0);
     assert.equal(previews, 3); assert.deepEqual(errors, []);
     await context.close();

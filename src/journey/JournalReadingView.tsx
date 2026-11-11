@@ -57,7 +57,7 @@ export function JournalReadingView({ chapters, journey, busy, onPoint, renderMed
         <button aria-pressed={view === "reading"} onClick={() => setView("reading")}>按日阅读</button>
         <button aria-pressed={view === "table"} onClick={() => setView("table")}>表格浏览</button>
       </div>
-      <details className="daily-journal__status-help"><summary tabIndex={0}>地点和照片如何关联？</summary><p>新导入的实际事件，仅在原文地点名称与旅程中一个已有地点完整对应时自动关联。简称、别名、多个地点或同名多次停留不会猜测对应；未匹配时显示“未关联地图点”。日期明显冲突会提示核实。地点照片单独展示，不代表在本次事件拍摄；已有手动选择不会被覆盖。</p></details>
+      <details className="daily-journal__status-help"><summary tabIndex={0}>地点和照片如何关联？</summary><p>AI 导入时，实际发生的事件会关联到旅程里的同一个已有地点，中英文名称和常用别名都能对应；出发、途经和计划不关联。住宿由酒店查找单独确认，可新建地点。日期明显冲突会提示核实，已有手动选择不会被覆盖；未关联时显示“未关联地图点”。</p></details>
       <p>{dates.length} 天 · {allRows.length} 条记录{unconfirmed ? ` · ${unconfirmed} 条状态未确认` : ""}</p>
       {unconfirmed ? <details className="daily-journal__status-help"><summary tabIndex={0}>“状态未确认”是什么意思？</summary><p>这些记录尚未确定是实际发生、计划还是取消，不代表正文有错。可以先阅读，核实后再到编辑中调整状态；不会自动新增地图点。</p></details> : null}
       <div className="daily-journal__filters">
