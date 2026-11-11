@@ -1,4 +1,5 @@
 import SwiftUI
+import StartripsMedia
 
 @main
 struct StartripsApp: App {
@@ -7,7 +8,8 @@ struct StartripsApp: App {
     init() {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-atlas-fixture") {
-            // Each simulator case starts at Atlas; real navigation restoration stays enabled.
+            // Each simulator case starts at Atlas and the default Story style; real navigation restoration stays enabled.
+            UserDefaults.standard.removeObject(forKey: StoryPresentationStyle.defaultsKey)
             let defaults = UserDefaults(suiteName: "app.startrips.fixture." + UUID().uuidString)!
             _router = StateObject(wrappedValue: AppRouter(defaults: defaults))
             return
