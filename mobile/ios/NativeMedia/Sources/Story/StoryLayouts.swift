@@ -201,7 +201,8 @@ private struct StoryBookPageView: View {
             }
         }
         .padding(.horizontal, fill ? 0 : 18)
-        .onAppear { model.requestLibraryImage(asset) }
+        // Re-request when the Story pager prunes its own copy of this picture.
+        .task(id: model.image(for: asset.id) == nil) { if model.image(for: asset.id) == nil { model.requestLibraryImage(asset) } }
         .onDisappear { model.cancelLibraryImage(asset.id) }
     }
 
@@ -318,7 +319,9 @@ private struct StoryStreamMedia: View {
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .accessibilityIdentifier("story.stream.\(entryID)")
-        .onAppear { if !asset.isVideo { model.requestLibraryImage(asset) } }
+        .task(id: model.image(for: asset.id) == nil) {
+            if !asset.isVideo, model.image(for: asset.id) == nil { model.requestLibraryImage(asset) }
+        }
         .onDisappear { model.cancelLibraryImage(asset.id) }
     }
 }
