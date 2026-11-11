@@ -26,11 +26,16 @@ final class StoryPresentationUITests: XCTestCase {
 
         let photo = element(app, "story.photo.media:asset-fixture")
         XCTAssertTrue(photo.waitForExistence(timeout: 10))
+        let note = app.staticTexts["Synthetic bridge fixture"].firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 10))
+        XCTAssertFalse(photo.frame.intersects(note.frame), "默认 keeps the note below the picture")
         capture(app, "story-style-classic")
 
         choose(app, "图上感想")
         XCTAssertTrue(element(app, "story.overlay").waitForExistence(timeout: 10))
         XCTAssertTrue(photo.waitForExistence(timeout: 10))
+        XCTAssertTrue(note.waitForExistence(timeout: 10))
+        XCTAssertTrue(photo.frame.intersects(note.frame), "图上感想 lays the note on the picture")
         capture(app, "story-style-note-overlay")
 
         choose(app, "旅程之书")

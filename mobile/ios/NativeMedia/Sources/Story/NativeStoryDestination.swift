@@ -158,7 +158,7 @@ private struct StoryPage: View {
             if let asset {
                 if overlay {
                     ZStack(alignment: .bottom) {
-                        media(asset)
+                        media(asset).frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
                         if !text.isEmpty { overlayNote }
                     }
                 } else {
@@ -183,7 +183,7 @@ private struct StoryPage: View {
     @ViewBuilder private func media(_ asset: MediaAsset) -> some View {
         if asset.isVideo {
             if current {
-                ForegroundVideo(playback: model.foreground)
+                ForegroundVideo(playback: model.foreground, fill: overlay)
                 if model.foreground.failure != nil { Button("重试视频") { model.retry() }.frame(minHeight: 44) }
             } else {
                 Image(systemName: "play.rectangle").font(.largeTitle).foregroundStyle(StoryTheme.muted)
@@ -191,7 +191,7 @@ private struct StoryPage: View {
             }
         } else if let image = model.images[asset.id] {
             ZoomPhoto(image: image, entryID: entry?.id ?? "media:\(asset.id)",
-                      label: asset.fileName, current: current, onPullDown: { model.leave() })
+                      label: asset.fileName, current: current, onPullDown: { model.leave() }, fill: overlay)
         } else {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -245,9 +245,10 @@ private struct StoryPage: View {
 
 struct ForegroundVideo: View {
     @ObservedObject var playback: ForegroundPlayback
+    var fill = false
     var body: some View {
         ZStack {
-            PlayerSurface(player: playback.player)
+            PlayerSurface(player: playback.player, fill: fill)
             if !playback.ready && playback.failure == nil { ProgressView() }
             if let failure = playback.failure { Text(failure).padding(24) }
         }
@@ -259,10 +260,11 @@ private final class PlayerUIView: UIView {
 }
 private struct PlayerSurface: UIViewRepresentable {
     let player: AVPlayer?
+    var fill = false
     func makeUIView(context: Context) -> PlayerUIView { PlayerUIView() }
     func updateUIView(_ view: PlayerUIView, context: Context) {
         let layer = view.layer as! AVPlayerLayer
-        layer.videoGravity = .resizeAspect; layer.player = player
+        layer.videoGravity = fill ? .resizeAspectFill : .resizeAspect; layer.player = player
     }
     static func dismantleUIView(_ view: PlayerUIView, coordinator: ()) { (view.layer as! AVPlayerLayer).player = nil }
 }
@@ -324,13 +326,16 @@ private struct ZoomPhoto: UIViewRepresentable {
     let label: String
     let current: Bool
     let onPullDown: () -> Void
+    /// 图上感想 fills the page so the note lies on the picture, not on letterboxing.
+    var fill = false
     func makeCoordinator() -> Coordinator { Coordinator(onPullDown: onPullDown) }
     func makeUIView(context: Context) -> UIScrollView {
         let scroll = PhotoScrollView()
         scroll.minimumZoomScale = 1; scroll.maximumZoomScale = 5
         scroll.delegate = context.coordinator; scroll.alwaysBounceVertical = true
         scroll.addSubview(context.coordinator.imageView)
-        context.coordinator.imageView.contentMode = .scaleAspectFit
+        context.coordinator.imageView.contentMode = fill ? .scaleAspectFill : .scaleAspectFit
+        context.coordinator.imageView.clipsToBounds = true; scroll.clipsToBounds = true
         let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleTap(_:)))
         doubleTap.numberOfTapsRequired = 2; scroll.addGestureRecognizer(doubleTap)
         return scroll
