@@ -49,6 +49,8 @@ struct JourneyCard: View {
     /// Live height while a vertical drag is in progress.
     @Binding var dragOffset: CGFloat
     let height: CGFloat
+    /// Landscape (medium == large) and accessibility sizes let medium scroll.
+    let mediumScrolls: Bool
     let storyNamespace: Namespace.ID
     let onPeekHeight: (CGFloat) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -58,6 +60,7 @@ struct JourneyCard: View {
     private var pointId: String? {
         router.selection?.journeyId == journey.id ? router.selection?.routePointId : nil
     }
+    private var scrolls: Bool { detent == .large || (detent == .medium && mediumScrolls) }
     private var point: AtlasRoutePoint? { journey.routePoints.first(where: { $0.id == pointId }) }
 
     var body: some View {
@@ -68,9 +71,9 @@ struct JourneyCard: View {
                 ScrollView {
                     details.padding(.bottom, NightFlight.grid(6))
                 }
-                .scrollDisabled(detent != .large)
+                .scrollDisabled(!scrolls)
                 .scrollIndicators(.hidden)
-                .gesture(drag, including: detent == .large ? .subviews : .all)
+                .gesture(drag, including: scrolls ? .subviews : .all)
             }
         }
         .frame(height: height, alignment: .top)
@@ -285,7 +288,8 @@ struct JourneyList: View {
     let onSelect: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: NightFlight.grid(2)) {
+        // Lazy: covers are read only for rows that actually scroll into view.
+        LazyVStack(alignment: .leading, spacing: NightFlight.grid(2)) {
             Text("全部旅程").font(.headline).foregroundStyle(NightFlight.ink)
                 .accessibilityAddTraits(.isHeader)
                 .padding(.top, NightFlight.grid(2))

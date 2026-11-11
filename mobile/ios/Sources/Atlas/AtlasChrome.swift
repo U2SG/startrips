@@ -14,6 +14,7 @@ struct AtlasChrome: View {
     @State private var peekHeight: CGFloat = 96
     @State private var topBarHeight: CGFloat = NightFlight.hitTarget
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var journey: AtlasJourney? {
         router.journeys.first(where: { $0.id == router.focusedJourneyId })
@@ -35,6 +36,7 @@ struct AtlasChrome: View {
                         JourneyCard(router: router, session: session, covers: covers, journey: journey,
                                     detent: $detent, dragOffset: $dragOffset,
                                     height: layout.cardHeight(detent, drag: dragOffset),
+                                    mediumScrolls: layout.medium >= layout.large || typeSize.isAccessibilitySize,
                                     storyNamespace: storyNamespace, onPeekHeight: { peekHeight = $0 })
                             .padding(.horizontal, NightFlight.grid(2))
                         if detent == .peek && !ribbon.isEmpty {
@@ -77,9 +79,9 @@ struct AtlasChrome: View {
 
     /// Insets are sent only when the layout settles, never per drag frame.
     private func report(_ layout: Layout) {
-        // The globe stays full-bleed behind the wordmark; only the card and
-        // ribbon push the camera viewport up.
-        let top: CGFloat = 0
+        // At peek the globe stays full-bleed behind the wordmark. Once the card
+        // rises, the focused point must not land under the top bar either.
+        let top: CGFloat = detent >= .medium ? layout.safeTop + layout.topBar : 0
         var bottom: CGFloat = 0
         if journey != nil {
             bottom = layout.safeBottom + layout.cardHeight(detent, drag: 0) + (detent == .peek && !ribbon.isEmpty ? ribbonHeight : 0)

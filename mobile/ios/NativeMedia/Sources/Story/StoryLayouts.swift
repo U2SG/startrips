@@ -255,7 +255,7 @@ struct StoryStream: View {
         let opensPoint = entry.routePointId != nil && entry.routePointId != previous?.routePointId
         VStack(alignment: .leading, spacing: 10) {
             if opensPoint, let point = point(entry.routePointId) {
-                Text(point.label).font(StoryTheme.serif(.title3)).foregroundStyle(StoryTheme.accent)
+                Text(point.label).font(StoryTheme.serif(.title3)).foregroundStyle(StoryTheme.ink)
                     .accessibilityAddTraits(.isHeader).padding(.top, 12)
             }
             if let asset = entry.asset { StoryStreamMedia(model: model, asset: asset, index: index, entryID: entry.id) }
@@ -273,7 +273,7 @@ struct StoryStream: View {
             ForEach(model.journal) { chapter in
                 VStack(alignment: .leading, spacing: 10) {
                     Text([chapter.date, chapter.title].filter { !$0.isEmpty }.joined(separator: "  "))
-                        .font(StoryTheme.serif(.headline)).foregroundStyle(StoryTheme.accent).accessibilityAddTraits(.isHeader)
+                        .font(StoryTheme.serif(.headline)).foregroundStyle(StoryTheme.muted).accessibilityAddTraits(.isHeader)
                     ForEach(chapter.events) { event in
                         VStack(alignment: .leading, spacing: 4) {
                             if let time = event.localTime, !time.isEmpty {

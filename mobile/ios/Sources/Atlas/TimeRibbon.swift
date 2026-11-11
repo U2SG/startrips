@@ -62,11 +62,15 @@ struct TimeRibbonModel: Equatable {
         lastIndex == 0 ? 1 : Double(min(max(0, index), lastIndex)) / Double(lastIndex)
     }
 
-    /// The Journey under the cursor: one that spans the month, else the closest
-    /// start. Ties keep the latest started one, like the web scrubber reaching it.
+    /// The Journey under the cursor: one that spans the month, else the latest
+    /// one already started (so the time window never hides it), else the first.
     func journey(at index: Int) -> String? {
         if let covering = spans.last(where: { $0.start <= index && index <= $0.end }) { return covering.journeyId }
-        return spans.min(by: { abs($0.start - index) < abs($1.start - index) })?.journeyId
+        let started = spans.filter { $0.start <= index }
+        if let latest = started.max(by: { $0.start < $1.start }) {
+            return started.last(where: { $0.start == latest.start })?.journeyId
+        }
+        return spans.min(by: { $0.start < $1.start })?.journeyId
     }
 
     func index(of journeyId: String?) -> Int? {

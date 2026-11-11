@@ -84,7 +84,7 @@ final class AtlasUITests: XCTestCase {
         XCTAssertTrue(waitForValue(grabber, "半屏"))
         XCTAssertTrue(app.buttons["atlas.card.cover"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["atlas.card.story"].exists)
-        XCTAssertFalse(app.descendants(matching: .any)["atlas.ribbon"].exists, "medium hides the ribbon")
+        XCTAssertTrue(app.descendants(matching: .any)["atlas.ribbon"].waitForNonExistence(timeout: 5), "medium hides the ribbon")
         capture(app, "card-medium")
 
         drag(grabber, by: -6)
@@ -126,7 +126,11 @@ final class AtlasUITests: XCTestCase {
         XCTAssertTrue(app.buttons["atlas.account"].isHittable)
         assertDarkFullBleed(capture(app, "shell-ax5-atlas"))
         peek.tap()
-        XCTAssertTrue(app.buttons["atlas.card.story"].waitForExistence(timeout: 10))
+        let story = app.buttons["atlas.card.story"]
+        XCTAssertTrue(story.waitForExistence(timeout: 10))
+        // Medium scrolls at accessibility sizes, so the Story action stays reachable.
+        if !story.isHittable { app.buttons["atlas.card.cover"].swipeUp() }
+        XCTAssertTrue(story.isHittable)
         capture(app, "card-ax5-medium")
     }
 
@@ -232,7 +236,7 @@ final class AtlasUITests: XCTestCase {
         ribbon.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5))
             .press(forDuration: 0.1, thenDragTo: ribbon.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)))
         XCTAssertTrue(waitForLabel(peek, "旅程：山谷旅程"))
-        XCTAssertEqual(ribbon.value as? String, "2025年2月")
+        XCTAssertTrue(waitForValue(ribbon, "2025年2月"))
         ribbon.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5))
             .press(forDuration: 0.1, thenDragTo: ribbon.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.5)))
         XCTAssertTrue(waitForLabel(peek, "旅程：海岸旅程"))

@@ -144,7 +144,8 @@ function AtlasScene() {
         {...atlasSceneFocus(point, routes.find((route) => route.id === selected?.id))}
         focusRevision={focusRevision} focusEnabled={!interrupted && snapshot.active}
         earthExperiencePolicy={snapshot.earthExperience} routeEditingEnabled={false}
-        reduceMotion={reduceMotion} showControls={!globeOnly}
+        // The detail map's 中文/双语 toggle has no native counterpart yet; it stays in-globe.
+        reduceMotion={reduceMotion}
         cinematicActive={!snapshot.active} mediaCoverHint={{ opaqueMediaCover: !snapshot.active, coverTransitionActive: false }}
         onManualCameraInteraction={interrupt} onFocusSettled={() => {
           // A ribbon preview is camera-only: it is never acknowledged as the selection.

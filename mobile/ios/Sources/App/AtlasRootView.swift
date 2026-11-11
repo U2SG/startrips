@@ -82,7 +82,7 @@ struct AtlasRootView: View {
                 #endif
             }
         }
-        .tint(AtlasPalette.accent)
+        .tint(NightFlight.ink)
         .confirmationDialog("账户", isPresented: $accountMenuPresented, titleVisibility: .hidden) {
             if router.snapshot.access == .owner {
                 Button("切换图谱") { signIn() }
@@ -121,6 +121,8 @@ struct AtlasRootView: View {
         .onChange(of: router.error) { _, error in
             if connected && error != nil { sceneRecoveryRequired = true }
         }
+        // A different owner or share never keeps the previous scope's covers.
+        .onChange(of: router.scopeId) { _, _ in covers.reset() }
         .onChange(of: router.rendered) { _, rendered in
             if rendered { sceneRecoveryRequired = false }
         }
@@ -313,7 +315,7 @@ private struct AtlasLoadingView: View {
             AtlasPalette.background.ignoresSafeArea()
             VStack(spacing: 28) {
                 AtlasWordmark()
-                ProgressView().tint(AtlasPalette.accent)
+                ProgressView().tint(NightFlight.muted)
             }
         }
         .accessibilityElement(children: .ignore)

@@ -26,7 +26,7 @@ public struct NativeStoryDestination: View {
             // collapsed-mode text panel repeats the same reflection.
             controls
         }
-        .foregroundStyle(StoryTheme.ink).tint(StoryTheme.accent)
+        .foregroundStyle(StoryTheme.ink).tint(StoryTheme.ink)
         .background(StoryTheme.background.ignoresSafeArea())
         .onAppear { model.appear() }
         .onDisappear { model.disappear() }
