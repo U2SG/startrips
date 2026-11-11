@@ -44,7 +44,7 @@ struct AtlasRootView: View {
             }
             .navigationTitle(router.snapshot.access == .guest ? "分享图谱" : "图谱")
             .navigationBarTitleDisplayMode(.inline)
-            // Web Mobile V2 draws its own compact brand/header in the local scene.
+            // The Atlas draws its own native wordmark/account bar over the globe.
             // Story keeps native navigation, while the Atlas has only one header.
             .toolbar(router.path.isEmpty ? .hidden : .visible, for: .navigationBar)
             .navigationDestination(for: StoryHandoff.self) { target in

@@ -3,7 +3,7 @@ import StartripsMedia
 
 /// Layout and time state the native chrome hands to the globe-only scene.
 struct ScenePresentation: Equatable {
-    var globeOnly = false
+    var globeOnly = true
     var insets = SceneInsets(top: 0, bottom: 0)
     var window: SceneTimeWindow?
 }

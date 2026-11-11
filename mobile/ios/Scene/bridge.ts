@@ -77,21 +77,6 @@ export function atlasSceneFocus(point: { latitude: number; longitude: number } |
     : { focusPoint: null, focusRoute: route ?? null };
 }
 
-// Horizontal gestures on the compact Journey row never replace vertical
-// drawer scrolling or the independent time-scrubber's horizontal gesture.
-export type JourneySwipePoint = { x: number; y: number };
-export function journeySwipeDirection(start: JourneySwipePoint, end: JourneySwipePoint): -1 | 0 | 1 {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  if (Math.abs(dx) < 42 || Math.abs(dx) < Math.abs(dy) * 1.25) return 0;
-  return dx < 0 ? 1 : -1;
-}
-
-export function nextJourneyIndex(index: number, total: number, direction: -1 | 0 | 1): number {
-  if (index < 0 || total < 2 || direction === 0) return index;
-  return Math.max(0, Math.min(total - 1, index + direction));
-}
-
 export function acceptsSnapshot(current: Snapshot | null, next: Snapshot) {
   return !current || current.scopeId !== next.scopeId || next.revision >= current.revision;
 }

@@ -62,13 +62,15 @@ struct JourneyCard: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            ScrollView {
-                details.padding(.bottom, NightFlight.grid(6))
+            // Peek shows only the header; details exist from the first upward drag.
+            if detent != .peek || dragOffset > 0 {
+                ScrollView {
+                    details.padding(.bottom, NightFlight.grid(6))
+                }
+                .scrollDisabled(detent != .large)
+                .scrollIndicators(.hidden)
+                .gesture(drag, including: detent == .large ? .subviews : .all)
             }
-            .scrollDisabled(detent != .large)
-            .scrollIndicators(.hidden)
-            .opacity(detent == .peek && dragOffset >= 0 ? 0 : 1)
-            .gesture(drag, including: detent == .large ? .subviews : .all)
         }
         .frame(height: height, alignment: .top)
         .frame(maxWidth: 560)
