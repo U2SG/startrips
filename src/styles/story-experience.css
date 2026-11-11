@@ -303,9 +303,42 @@
 }
 .journey-story[data-story-layout="desktop"]:has(> .journey-story__editor-actions) > .journey-story__layout { grid-row: 3; }
 .journey-story[data-story-layout="desktop"]:has(> .journey-story__editor-actions) > footer { grid-row: 4; }
+/* Phones: one Story action row under the header, on the copy's gutter. Export
+   leads; quick recap and management trail, right-aligned with or without it. */
+.journey-story[data-story-layout="mobile"] { --story-mobile-gutter: 22px; }
+.journey-story[data-story-layout="mobile"][data-classic-view] { --story-mobile-gutter: 18px; }
 .journey-story[data-story-layout="mobile"] > .journey-story__editor-actions {
   position: sticky; top: 106px; z-index: var(--z-content-3);
-  margin: 0; padding: 8px 12px; background: var(--archive-bg);
+  flex-wrap: nowrap; margin: 0; padding: 8px var(--story-mobile-gutter); background: var(--archive-bg);
+}
+.journey-story[data-story-layout="mobile"] > .journey-story__editor-actions > button { flex: 0 0 auto; white-space: nowrap; }
+.journey-story__editor-actions-end {
+  display: flex; gap: 8px; align-items: center; justify-content: flex-end;
+  min-width: 0; margin-inline-start: auto;
+}
+.journey-story__editor-actions-end > button { display: inline-flex; }
+.journey-story[data-story-layout="mobile"] .journey-story__editor-actions-end > button {
+  position: static; inset: auto; flex: 0 0 auto;
+  align-items: center; justify-content: center; gap: 8px;
+  min-width: 44px; height: 44px; min-height: 44px; padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-line); border-radius: var(--control-radius);
+  background: var(--control-fill); color: var(--control-ink);
+  box-shadow: none; backdrop-filter: none;
+  font: 400 var(--control-font-size)/1.4 var(--archive-sans); white-space: nowrap;
+  pointer-events: auto; cursor: pointer;
+}
+.journey-story[data-story-layout="mobile"] .journey-story__editor-actions-end > .journey-story__mobile-media-menu-trigger {
+  width: 44px; padding: 0;
+}
+/* A longer transient label (preparing, continue) truncates instead of wrapping. */
+.journey-story[data-story-layout="mobile"] .journey-story__editor-actions-end > .journey-story__mobile-quick-recap {
+  flex-shrink: 1; min-width: 0; overflow: hidden;
+}
+.journey-story__editor-actions-end > .journey-story__mobile-quick-recap > span {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.journey-story[data-story-layout="mobile"] .journey-story__editor-actions-end > button:disabled {
+  cursor: default; opacity: var(--control-disabled-opacity);
 }
 .journey-story[data-classic-view] > .journey-story__editor-actions { top: 100px; }
 .journey-story[data-story-layout="mobile"][data-mobile-presentation="expanded"] > .journey-story__editor-actions {
@@ -320,6 +353,6 @@
 }
 
 /* Keep picture/tool overlays below the sticky editor controls while scrolling. */
-.journey-story[data-story-layout="mobile"][data-story-editing="true"] > .journey-story__layout {
+.journey-story[data-story-layout="mobile"]:is([data-story-editing="true"], :has(> .journey-story__editor-actions)) > .journey-story__layout {
   position: relative; isolation: isolate;
 }
