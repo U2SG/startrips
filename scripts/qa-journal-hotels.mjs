@@ -33,6 +33,9 @@ try {
     await page.goto(`${origin}/artifacts/daily-journal/index.html`);
     await page.getByRole("button", { name: "每日手记", exact: true }).click();
     const preview = () => page.getByRole("button", { name: "用 AI 查找已入住酒店" });
+    await preview().waitFor();
+    // A journal without a saved import offers no undo.
+    assert.equal(await page.getByRole("button", { name: "撤销这次导入" }).count(), 0);
     await preview().click(); await page.getByText("正在检索酒店…", { exact: true }).waitFor();
     releasePreview(); await page.getByRole("button", { name: "确认批量添加及关联" }).waitFor();
     await page.getByRole("button", { name: "取消酒店预览" }).click(); assert.equal(writes, 0);

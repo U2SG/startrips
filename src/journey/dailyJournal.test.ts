@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adoptJournalSuggestions, mergeJournalSuggestions, parseJournalChapters, previewJournalImport } from "./dailyJournal";
+import { adoptJournalSuggestions, latestJournalImport, mergeJournalSuggestions, parseJournalChapters, previewJournalImport } from "./dailyJournal";
 const source = "2027-04-03 出发\n23:30 她从甲城出发\n18:20 她抵达乙城\n原计划海湾公园取消，改去山坡花园\n00:30 准备睡觉，属于前一晚的叙事";
 describe("daily journal evidence", () => {
   it("preserves raw sequence, third person, plans and wall times without guessing instants or places", () => {
@@ -111,5 +111,20 @@ describe("structured diary import", () => {
     expect(adopted[13].events[0].text).toMatch(/^整理：/);
     expect(adopted[13].events[0].status).toBe("planned");
     expect(parseJournalChapters(adopted)).not.toBeNull();
+  });
+  it("keeps a valid import record through parsing and finds the latest saved import", () => {
+    const chapters = previewJournalImport("2027-04-01\n甲\n2027-04-02\n乙\n2027-04-03\n丙", "2027-04-01");
+    const batch = (id: string, at: string) => ({ id, at, digest: "a".repeat(64), pointIds: ["44444444-4444-4444-8444-444444444444"] });
+    chapters[0].importBatch = batch("first", "2027-04-01T00:00:00.000Z");
+    chapters[1].importBatch = batch("second", "2027-04-02T00:00:00.000Z");
+    chapters[2].importBatch = batch("second", "2027-04-02T00:00:00.000Z");
+    const parsed = parseJournalChapters(chapters)!;
+    expect(parsed.map(c => c.importBatch?.id)).toEqual(["first", "second", "second"]);
+    expect(latestJournalImport(parsed)).toEqual({ id: "second", chapters: 2 });
+    expect(latestJournalImport(parsed.slice(0, 1))).toEqual({ id: "first", chapters: 1 });
+    expect(latestJournalImport(previewJournalImport(source, "2027-04-01"))).toBeNull();
+    for (const bad of [{ ...batch("x", "later"), }, { ...batch("x", "2027-04-01T00:00:00Z"), digest: "short" }, { ...batch("x", "2027-04-01T00:00:00Z"), pointIds: ["bad id"] }, { ...batch("bad id", "2027-04-01T00:00:00Z") }]) {
+      expect(parseJournalChapters([{ ...chapters[0], importBatch: bad }])).toBeNull();
+    }
   });
 });

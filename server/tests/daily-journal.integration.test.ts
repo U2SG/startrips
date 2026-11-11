@@ -372,6 +372,63 @@ describe("private daily journal API and PostgreSQL", () => {
     expect(accepted.journal.chapters[0].source).toBe(raw);
     for (let i = 0; i < count; i++) expect(accepted.journal.chapters[0].events[i]).toMatchObject({ source: cs[0].events[i].source, text: cs[0].events[i].text, edited: cs[0].events[i].edited, status: "actual" });
   });
+  it("undoes a saved import in one step, deleting only hotel points its hotel step created and nothing else uses", async () => {
+    const j = await createJourneyForAtlas(owner.atlasId, owner.userId, { title: "Synthetic import undo", startedOn: "2027-05-01", endedOn: null, note: "", lightColor: "#ffffff",
+      routePoints: [{ label: "星桥酒店", regionContext: "虚构城，中心路", latitude: 10, longitude: 20, isStop: true, occurredAt: null }] });
+    const at = (path: string, body: unknown, cookie = owner.cookie) => app.request(`${TEST_ORIGIN}/api/journeys/${j!.id}/journal${path}`, { method: path ? "POST" : "PUT", headers: authHeaders(cookie), body: JSON.stringify(body) });
+    const kept = previewJournalImport("2027-05-01\n她到达虚构城。", "2027-05-01");
+    expect((await writeDailyJournal(j!.id, owner.atlasId, 0, kept))!.chapters[0].importBatch).toBeUndefined();
+    const imported = previewJournalImport(["星桥", "云顶", "山谷"].map((name, i) => `2027-05-0${i + 2}\n实际：23:40她在虚构城入住${name}酒店。`).join("\n"), "2027-05-02", kept);
+    // Ids of chapters that already existed never join the batch.
+    const save = await at("", { baseRevision: 1, chapters: imported, importedChapterIds: imported.map(c => c.id) });
+    expect(save.status).toBe(200);
+    const saved = (await save.json()).journal as DailyJournal;
+    const batchId = saved.chapters[1].importBatch!.id;
+    expect(saved.chapters[0].importBatch).toBeUndefined();
+    expect(saved.chapters.slice(1).map(c => c.importBatch)).toEqual(saved.chapters.slice(1).map(() => expect.objectContaining({ id: batchId, pointIds: [] })));
+    const hotels = saved.chapters.slice(1).map((c, i) => ({ eventId: c.events[0].id, evidence: c.events[0].source, label: ["星桥", "云顶", "山谷"][i] + "酒店", sourceName: ["星桥", "云顶", "山谷"][i] + "酒店",
+      searchName: ["星桥", "云顶", "山谷"][i] + "酒店", context: "虚构城，中心路", sourceArea: "", latitude: 10 + i, longitude: 20 + i, providerId: "synthetic", existingPointId: i ? null : j!.routePoints[0].id }));
+    const applied = await app.request(`${TEST_ORIGIN}/api/journeys/${j!.id}/journal/hotels/apply`, { method: "POST", headers: authHeaders(owner.cookie), body: JSON.stringify({ confirmed: true,
+      token: signHotelPlan({ atlasId: owner.atlasId, journeyId: j!.id, journalRevision: 2, journeyRevision: j!.revision, expires: Date.now() + 60000, hotels }, serverConfig.authSecret) }) });
+    expect(applied.status).toBe(200);
+    const after = await applied.json();
+    expect(after.journey.routePoints).toHaveLength(3);
+    const [reused, cloud, valley] = after.journal.chapters.slice(1).map((c: { events: { routePointId: string }[] }) => c.events[0].routePointId);
+    expect(reused).toBe(j!.routePoints[0].id);
+    expect(after.journal.chapters.slice(1).map((c: DailyJournal["chapters"][number]) => c.importBatch!.pointIds)).toEqual([[], [cloud], [valley]]);
+    // A photo placed on a created hotel keeps that point.
+    await db.insert(mediaAssets).values({ journeyId: j!.id, routePointId: valley, storageDriver: "disabled", storageKey: randomUUID(), fileName: "valley.jpg", mimeType: "image/jpeg", bytes: 1, uploadedByUserId: owner.userId });
+    expect((await at(`/imports/${batchId}/undo`, { baseRevision: 3 }, other.cookie)).status).toBe(404);
+    expect((await at(`/imports/${batchId}/undo`, { baseRevision: 2 })).status).toBe(409);
+    const undo = await at(`/imports/${batchId}/undo`, { baseRevision: 3 });
+    expect(undo.status).toBe(200);
+    const undone = await undo.json();
+    expect(undone.journal).toEqual({ revision: 4, chapters: [after.journal.chapters[0]] });
+    expect(undone.journey.routePoints.map((p: { id: string }) => p.id).sort()).toEqual([reused, valley].sort());
+    expect(undone.journey.revision).toBe(after.journey.revision + 1);
+    // Replay is a no-op, even with the revision it was sent with.
+    const replay = await at(`/imports/${batchId}/undo`, { baseRevision: 3 });
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).journal).toEqual(undone.journal);
+  });
+  it("asks before an undo drops imported chapters the member edited, and never trusts a client import record", async () => {
+    const j = await createJourneyForAtlas(owner.atlasId, owner.userId, { title: "Synthetic edited import", startedOn: "2027-05-01", endedOn: null, note: "", lightColor: "#ffffff", routePoints: [{ label: "起点", latitude: 0, longitude: 0, isStop: true, occurredAt: null }] });
+    const imported = previewJournalImport("2027-05-01\n她出发。\n2027-05-02\n她返回。", "2027-05-01");
+    const saved = (await writeDailyJournal(j!.id, owner.atlasId, 0, imported, undefined, imported.map(c => c.id)))!;
+    const batch = saved.chapters[0].importBatch!;
+    const changed = structuredClone(saved.chapters);
+    changed[0].title = "改过的标题";
+    changed[1].importBatch = { ...batch, id: "forged", pointIds: [pointId] };
+    const edited = (await writeDailyJournal(j!.id, owner.atlasId, 1, changed))!;
+    expect(edited.chapters.map(c => c.importBatch)).toEqual(saved.chapters.map(c => c.importBatch));
+    const undo = (confirmEdited?: boolean) => app.request(`${TEST_ORIGIN}/api/journeys/${j!.id}/journal/imports/${batch.id}/undo`, { method: "POST", headers: authHeaders(owner.cookie), body: JSON.stringify({ baseRevision: 2, confirmEdited }) });
+    const refused = await undo();
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "JOURNAL_IMPORT_EDITED", edited: 1 });
+    const accepted = await undo(true);
+    expect(accepted.status).toBe(200);
+    expect((await accepted.json()).journal).toEqual({ revision: 3, chapters: [] });
+  });
   it("refuses deleted journeys and cascades private data on hard deletion", async () => {
     await db.update(journeys).set({ deletionStartedAt: new Date() }).where(eq(journeys.id, journeyId));
     expect((await request()).status).toBe(404);

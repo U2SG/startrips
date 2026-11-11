@@ -26,17 +26,24 @@ export type JournalChapter = {
   date: string;
   /** Immutable import identity; older stored chapters may omit it. */
   importDate?: string;
+  /** Server-owned record of the saved AI import that added this chapter. */
+  importBatch?: JournalImportBatch;
   title: string;
   source: string;
   events: JournalEvent[];
   suggestions: JournalSuggestion[];
 };
+/** digest is the chapter as saved by the import (or its hotel step); pointIds are hotel points that step created. */
+export type JournalImportBatch = { id: string; at: string; digest: string; pointIds: string[] };
 export type DailyJournal = { revision: number; chapters: JournalChapter[] };
 export const EMPTY_JOURNAL: DailyJournal = { revision: 0, chapters: [] };
 const statuses = new Set(["actual", "planned", "cancelled", "uncertain"]);
 const idPattern = /^[a-zA-Z0-9_-]{1,80}$/;
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const text = (v: unknown, max: number): v is string => typeof v === "string" && v.length <= max;
+const importBatch = (v: unknown) => object(v) && typeof v.id === "string" && idPattern.test(v.id)
+  && text(v.at, 40) && !Number.isNaN(Date.parse(v.at)) && typeof v.digest === "string" && /^[a-f0-9]{64}$/.test(v.digest)
+  && Array.isArray(v.pointIds) && v.pointIds.length <= 200 && v.pointIds.every((id) => typeof id === "string" && idPattern.test(id));
 
 /** Strict bounded wire validation shared by API and preview. No coordinates exist in this contract. */
 export function parseJournalChapters(value: unknown): JournalChapter[] | null {
@@ -51,6 +58,7 @@ export function parseJournalChapters(value: unknown): JournalChapter[] | null {
   for (const chapter of value) {
     if (!object(chapter) || !validId(chapter.id) || !isPersistedCalendarDate(chapter.date)
       || (chapter.importDate !== undefined && !isPersistedCalendarDate(chapter.importDate))
+      || (chapter.importBatch !== undefined && !importBatch(chapter.importBatch))
       || !text(chapter.title, 200) || !text(chapter.source, JOURNAL_MAX_TEXT)
       || !Array.isArray(chapter.events) || !Array.isArray(chapter.suggestions)) return null;
     const identity = `${chapter.importDate ?? chapter.date}\0${chapter.source}`;
@@ -82,11 +90,19 @@ export function parseJournalChapters(value: unknown): JournalChapter[] | null {
   }
   // Project known fields: model/clients cannot smuggle coordinates or other authority.
   return value.map((c: JournalChapter) => ({ id: c.id, date: c.date, ...(c.importDate === undefined ? {} : { importDate: c.importDate }), title: c.title, source: c.source,
+    ...(c.importBatch === undefined ? {} : { importBatch: { id: c.importBatch.id, at: c.importBatch.at, digest: c.importBatch.digest, pointIds: [...c.importBatch.pointIds] } }),
     events: c.events.map((e) => ({ id: e.id, source: e.source, text: e.text, status: e.status,
       localDate: e.localDate, localTime: e.localTime, timeContext: e.timeContext,
       routePointId: e.routePointId, mediaIds: e.mediaIds, edited: e.edited })),
     suggestions: c.suggestions.map((s) => ({ eventId: s.eventId, text: s.text, questions: s.questions, background: s.background })),
   }));
+}
+
+/** The most recently saved AI import that still has chapters in the journal. */
+export function latestJournalImport(chapters: readonly JournalChapter[]): { id: string; chapters: number } | null {
+  let latest: JournalImportBatch | undefined;
+  for (const { importBatch: batch } of chapters) if (batch && (!latest || batch.at > latest.at)) latest = batch;
+  return latest ? { id: latest.id, chapters: chapters.filter((c) => c.importBatch?.id === latest!.id).length } : null;
 }
 
 /** Only explicit source labels convey status; an arbitrary heading or verb never proves a visit. */

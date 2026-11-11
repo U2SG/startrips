@@ -18,6 +18,19 @@ No additional database migration is required beyond 0040/0041. `pnpm qa:journal-
 
 Hotel writes update the owner application's Journey state as well as the open Stream. The browser regression remounts Stream and verifies the new point/link survives, avoiding stale route revisions after closing the reader.
 
+## Undoing a saved import
+
+Saving a preview from **用 AI 导入** sends `importedChapterIds`. The server stamps the chapters that this save adds (never ones that already existed) with one server-owned `importBatch` record: `{id, at, digest, pointIds}`. `digest` is a key-order-independent fingerprint of the chapter as saved. When the hotel step creates a new point for an event in such a chapter, it appends the point id to `pointIds` and refreshes the digest of batch chapters that were still untouched, so the hotel step does not count as a member edit. Reused points are never recorded. Clients cannot set or alter the record: every write strips it and restores the stored one. The record lives in the existing chapter JSONB and needs no migration. Older chapters have none.
+
+The panel shows **撤销这次导入** for the most recent batch. It asks for confirmation, then calls `POST /api/journeys/:id/journal/imports/:batchId/undo` with `{baseRevision, confirmEdited?}`. This uses the same origin, permission and Atlas/Journey lock as other journal writes. The server removes every chapter of the batch. It then deletes each recorded hotel point that is not used by:
+
+- a remaining journal event;
+- a media asset;
+- a media upload;
+- another point's stay anchor.
+
+Any point still in use is kept. Deleting points prunes stale route segments and bumps the Journey revision; the journal revision always advances. A stale `baseRevision` returns 409 `JOURNAL_CHANGED`. If any batch chapter's digest has changed since import (edited prose, title, date, status, media or place links), the server returns 409 `{error: "JOURNAL_IMPORT_EDITED", edited}`. The panel names that count in a second confirmation and only then sends `confirmEdited: true`. Replaying an undo after it succeeded, or naming a batch with no chapters left, returns the current journal unchanged.
+
 ## Persistence and access
 
 Migrations `0040_daily_journal.sql` and `0041_journal_write_replay.sql` add one `journey_journals` row per Journey: a separate optimistic revision and a bounded JSONB chapter document. A private digest of the last accepted request makes response-loss retries safe even when the server cleared stale references. These migrations are additive; old Journeys read as revision 0 with no chapters. Apply with the existing `pnpm db:migrate` workflow before deploying code. There is no backfill or production-data import. Hard Journey/Atlas deletion cascades; soft-deleted parents cannot be read or written.
@@ -25,7 +38,8 @@ Migrations `0040_daily_journal.sql` and `0041_journal_write_replay.sql` add one 
 The API uses existing active Atlas membership and permission checks:
 
 - `GET /api/journeys/:id/journal`
-- `PUT /api/journeys/:id/journal` with `{baseRevision, chapters}`
+- `PUT /api/journeys/:id/journal` with `{baseRevision, chapters, importedChapterIds?}`
+- `POST /api/journeys/:id/journal/imports/:batchId/undo` with `{baseRevision, confirmEdited?}`
 - `POST /api/journeys/:id/journal/suggest` with `{chapters}`
 
 Writes lock Atlas then Journey, validate all media/place references belong to that Journey, preserve existing raw evidence, and reject stale revisions. Structurally identical retries are no-ops even after a lost response. Journals are absent from all shared-link/Journey projections; they remain available only through the Atlas-authorized API. API reads are private/no-store. No draft text is placed in browser storage.

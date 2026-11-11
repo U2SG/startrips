@@ -1,10 +1,10 @@
 import { linkJournalPlaces, type JournalPlaceClaim } from "../itinerary/journal-place-links";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../db/client";
-import { atlases, journeys, journeyJournals, journeyRoutePoints, mediaAssets } from "../db/app-schema";
-import { lockActiveAtlas, lockActiveJourney } from "./journey-repository";
+import { atlases, journeys, journeyJournals, journeyRoutePoints, mediaAssets, mediaUploads } from "../db/app-schema";
+import { lockActiveAtlas, lockActiveJourney, pruneStaleRouteSegments } from "./journey-repository";
 import { EMPTY_JOURNAL, type DailyJournal, type JournalChapter } from "../../src/journey/dailyJournal";
 import { hotelSourceHash, sameHotel, type HotelPlan } from "../itinerary/journal-hotel-tools";
 import { hasExplicitHotelStay, isHotelEligible, similarHotelName } from "../../src/journey/journalHotels";
@@ -22,6 +22,8 @@ export async function applyJournalHotels(plan: HotelPlan, atlasId: string, journ
     const points = await tx.select().from(journeyRoutePoints).where(eq(journeyRoutePoints.journeyId, journeyId));
     const chapters = structuredClone(journal.chapters);
     const events = chapters.flatMap(c => c.events);
+    // The hotel step is part of an import, not a member edit: keep untouched batches untouched.
+    const unedited = chapters.filter(c => c.importBatch?.digest === importDigest(c));
     if (new Set(plan.hotels.map(h => h.eventId)).size !== plan.hotels.length
       || plan.hotels.some(h => !events.some(e => e.id === h.eventId))) throw new JournalWriteError("JOURNAL_CHANGED", 409);
     let sortOrder = points.reduce((max, p) => Math.max(max, p.sortOrder), -1) + 1;
@@ -42,9 +44,12 @@ export async function applyJournalHotels(plan: HotelPlan, atlasId: string, journ
         [point] = await tx.insert(journeyRoutePoints).values({ id: randomUUID(), journeyId, sortOrder: sortOrder++, label: hotel.label,
           latitude: hotel.latitude, longitude: hotel.longitude, regionContext: hotel.context, placeRole: "accommodation", isStop: true, occurredAt: null }).returning();
         points.push(point); created = true;
+        const batch = chapters.find(c => c.events.includes(event))?.importBatch;
+        if (batch) batch.pointIds.push(point.id);
       }
       event.routePointId = point.id; event.status = "actual";
     }
+    for (const chapter of unedited) chapter.importBatch!.digest = importDigest(chapter);
     if (created) await tx.update(journeys).set({ revision: journey.revision + 1, updatedAt: new Date() }).where(eq(journeys.id, journeyId));
     if (!plan.hotels.length) return { revision: journal.revision, chapters };
     const revision = journal.revision + 1;
@@ -54,7 +59,17 @@ export async function applyJournalHotels(plan: HotelPlan, atlasId: string, journ
 }
 
 export class JournalWriteError extends Error {
-  constructor(public code: string, public status: 400 | 409) { super(code); }
+  constructor(public code: string, public status: 400 | 409, public detail: Record<string, number> = {}) { super(code); }
+}
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)
+    .sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)]));
+  return value;
+}
+/** Content fingerprint of a chapter, independent of jsonb key order and of its own import record. */
+export function importDigest({ importBatch: _, ...chapter }: JournalChapter) {
+  return createHash("sha256").update(JSON.stringify(canonical(chapter))).digest("hex");
 }
 export async function readDailyJournal(journeyId: string, atlasId: string): Promise<DailyJournal | null> {
   const [owner] = await db.select({ id: journeys.id }).from(journeys).innerJoin(atlases, eq(journeys.atlasId, atlases.id))
@@ -73,9 +88,11 @@ export async function normalizeJournalReferences(journeyId: string, previous: Jo
     const pointIds = new Set(points.map((p) => p.id));
     const mediaIds = new Set(media.map((m) => m.id));
     const previousEvents = new Map(previous.flatMap((c) => c.events.map((e) => [e.id, e] as const)));
+    const batches = new Map(previous.flatMap((c) => c.importBatch ? [[c.id, c.importBatch] as const] : []));
     // Deleted/moved references that this exact event already held may be cleared.
     // A newly supplied foreign reference still cannot acquire authority here.
-    return chapters.map((c) => ({ ...c, events: c.events.map((event) => {
+    // Import records are server-owned: never accept one from a client or model.
+    return chapters.map(({ importBatch: _, ...c }) => ({ ...c, ...(batches.has(c.id) ? { importBatch: batches.get(c.id)! } : {}), events: c.events.map((event) => {
       const prior = previousEvents.get(event.id);
       if (prior && prior.source !== event.source) throw new JournalWriteError("JOURNAL_SOURCE_CHANGED", 400);
       if ((event.routePointId && !pointIds.has(event.routePointId) && prior?.routePointId !== event.routePointId)
@@ -86,11 +103,12 @@ export async function normalizeJournalReferences(journeyId: string, previous: Jo
         mediaIds: event.mediaIds.filter((id) => mediaIds.has(id)) };
     }) }));
 }
-export async function writeDailyJournal(journeyId: string, atlasId: string, baseRevision: number, chapters: JournalChapter[], connection: Pick<typeof db, "transaction"> = db): Promise<DailyJournal | null> {
+/** importedChapterIds marks the chapters this save adds from an AI import as one undoable batch. */
+export async function writeDailyJournal(journeyId: string, atlasId: string, baseRevision: number, chapters: JournalChapter[], connection: Pick<typeof db, "transaction"> = db, importedChapterIds: string[] = []): Promise<DailyJournal | null> {
   return connection.transaction(async (tx) => {
     if (!await lockActiveAtlas(tx, atlasId) || !await lockActiveJourney(tx, journeyId, atlasId)) return null;
     const [previous] = await tx.select().from(journeyJournals).where(eq(journeyJournals.journeyId, journeyId));
-    const digest = createHash("sha256").update(JSON.stringify({ baseRevision, chapters })).digest("hex");
+    const digest = createHash("sha256").update(JSON.stringify(importedChapterIds.length ? { baseRevision, chapters, importedChapterIds } : { baseRevision, chapters })).digest("hex");
     // Recognize the exact last accepted request, including any server-side cleanup.
     if (previous?.lastWriteDigest === digest) return { revision: previous.revision, chapters: previous.chapters };
     const cleaned = await normalizeJournalReferences(journeyId, previous?.chapters ?? [], chapters, tx);
@@ -103,8 +121,53 @@ export async function writeDailyJournal(journeyId: string, atlasId: string, base
         const prior = old.events.find((p) => p.id === e.id); return prior && prior.source !== e.source;
       }))) throw new JournalWriteError("JOURNAL_SOURCE_CHANGED", 400);
     }
+    const added = cleaned.filter((c) => importedChapterIds.includes(c.id) && !previous?.chapters.some((old) => old.id === c.id));
+    if (added.length) {
+      const batch = { id: randomUUID(), at: new Date().toISOString() };
+      for (const chapter of added) chapter.importBatch = { ...batch, digest: importDigest(chapter), pointIds: [] };
+    }
     const revision = baseRevision + 1;
     await tx.insert(journeyJournals).values({ journeyId, revision, chapters: cleaned, lastWriteDigest: digest }).onConflictDoUpdate({ target: journeyJournals.journeyId, set: { revision, chapters: cleaned, lastWriteDigest: digest } });
     return { revision, chapters: cleaned };
+  });
+}
+
+/**
+ * Removes one saved AI import: its chapters, and the hotel points its hotel step
+ * created that nothing else (another event, media, an upload or a stay) uses.
+ * Replaying an undo that already happened is a no-op.
+ */
+export async function undoJournalImport(journeyId: string, atlasId: string, batchId: string, baseRevision: number, confirmEdited: boolean, connection: Pick<typeof db, "transaction"> = db) {
+  return connection.transaction(async (tx) => {
+    if (!await lockActiveAtlas(tx, atlasId) || !await lockActiveJourney(tx, journeyId, atlasId)) return null;
+    const [journal] = await tx.select().from(journeyJournals).where(eq(journeyJournals.journeyId, journeyId));
+    const batch = journal?.chapters.filter((c) => c.importBatch?.id === batchId) ?? [];
+    if (!journal || !batch.length) return { revision: journal?.revision ?? 0, chapters: journal?.chapters ?? [] };
+    if (journal.revision !== baseRevision) throw new JournalWriteError("JOURNAL_CHANGED", 409);
+    const edited = batch.filter((c) => c.importBatch!.digest !== importDigest(c)).length;
+    if (edited && !confirmEdited) throw new JournalWriteError("JOURNAL_IMPORT_EDITED", 409, { edited });
+    const chapters = journal.chapters.filter((c) => c.importBatch?.id !== batchId);
+    const linked = new Set(chapters.flatMap((c) => c.events.map((e) => e.routePointId)));
+    const candidates = [...new Set(batch.flatMap((c) => c.importBatch!.pointIds))].filter((id) => !linked.has(id));
+    // Lock the points first so no media or stay can start referencing them before the delete.
+    const points = candidates.length ? await tx.select({ id: journeyRoutePoints.id }).from(journeyRoutePoints)
+      .where(and(eq(journeyRoutePoints.journeyId, journeyId), inArray(journeyRoutePoints.id, candidates))).for("update") : [];
+    const ids = points.map((p) => p.id);
+    const used = new Set(ids.length ? [
+      ...(await tx.select({ id: mediaAssets.routePointId }).from(mediaAssets).where(inArray(mediaAssets.routePointId, ids))).map((r) => r.id),
+      ...(await tx.select({ id: mediaUploads.routePointId }).from(mediaUploads).where(inArray(mediaUploads.routePointId, ids))).map((r) => r.id),
+      ...(await tx.select({ id: journeyRoutePoints.stayAnchorRoutePointId }).from(journeyRoutePoints).where(inArray(journeyRoutePoints.stayAnchorRoutePointId, ids))).map((r) => r.id),
+    ] : []);
+    const removable = ids.filter((id) => !used.has(id));
+    if (removable.length) {
+      await tx.delete(journeyRoutePoints).where(and(eq(journeyRoutePoints.journeyId, journeyId), inArray(journeyRoutePoints.id, removable)));
+      const [journey] = await tx.select({ revision: journeys.revision, routeSegments: journeys.routeSegments }).from(journeys).where(eq(journeys.id, journeyId));
+      await pruneStaleRouteSegments(tx, journeyId, journey.routeSegments);
+      await tx.update(journeys).set({ revision: journey.revision + 1, updatedAt: new Date() }).where(eq(journeys.id, journeyId));
+    }
+    const revision = journal.revision + 1;
+    const digest = createHash("sha256").update(JSON.stringify({ undoImport: batchId })).digest("hex");
+    await tx.update(journeyJournals).set({ revision, chapters, lastWriteDigest: digest }).where(eq(journeyJournals.journeyId, journeyId));
+    return { revision, chapters };
   });
 }

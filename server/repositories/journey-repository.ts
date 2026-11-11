@@ -520,7 +520,7 @@ export async function updateJourneyForAtlas(
 
 // Saved route geometry is keyed by the legs of the current route. Any write that
 // removes or reorders Route Points drops the segments whose leg no longer exists.
-async function pruneStaleRouteSegments(
+export async function pruneStaleRouteSegments(
   transaction: Transaction,
   journeyId: string,
   routeSegments: (typeof journeys.$inferSelect)["routeSegments"],
