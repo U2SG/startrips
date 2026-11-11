@@ -73,14 +73,17 @@ final class StoryPresentationUITests: XCTestCase {
     }
 
     @MainActor private func choose(_ app: XCUIApplication, _ label: String) {
-        app.buttons["story.style"].tap()
+        // A SwiftUI Menu label rejects XCUITest's scroll-to-visible AX action; tap its frame instead.
+        let control = app.buttons["story.style"]
+        XCTAssertTrue(control.waitForExistence(timeout: 5))
+        control.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         // Menu items live outside the Atlas web view, which may reuse the same labels.
         let menuItem = app.collectionViews.buttons[label]
         let item = menuItem.waitForExistence(timeout: 5) ? menuItem
             : app.buttons.matching(NSPredicate(format: "label == %@ AND elementType != %d", label,
                                                XCUIElement.ElementType.link.rawValue)).firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 5), "Missing style \(label)")
-        item.tap()
+        item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(app.buttons["story.style"].waitForExistence(timeout: 5))
     }
 
