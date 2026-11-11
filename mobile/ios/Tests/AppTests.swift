@@ -28,7 +28,7 @@ final class AppTests: XCTestCase {
         let router = AppRouter(defaults: UserDefaults(suiteName: "app.startrips.scene-failed." + UUID().uuidString)!)
         router.install(data.snapshot.journeys, identity: "scene-owner", access: .owner, earthExperience: "default")
         // The scene cannot echo a scope it failed to decode.
-        let json = #"{"version":1,"kind":"sceneFailed","requestId":"\#(UUID().uuidString)"}"#
+        let json = #"{"version":2,"kind":"sceneFailed","requestId":"\#(UUID().uuidString)"}"#
         let failed = try JSONDecoder().decode(SceneEvent.self, from: Data(json.utf8))
         XCTAssertNoThrow(try validateSceneEvent(failed, snapshot: router.snapshot))
         router.receive(failed)
@@ -37,13 +37,13 @@ final class AppTests: XCTestCase {
         router.receive(failed)
         XCTAssertNil(router.error, "the same request must not raise recovery twice")
 
-        let targeted = SceneEvent(version: 1, kind: .sceneFailed, scopeId: "", requestId: UUID().uuidString,
+        let targeted = SceneEvent(version: SceneContract.version, kind: .sceneFailed, scopeId: "", requestId: UUID().uuidString,
                                   revision: -1, journeyId: data.snapshot.journeys[0].id)
         XCTAssertThrowsError(try validateSceneEvent(targeted, snapshot: router.snapshot))
         // Every other kind still has to carry and match the live scope and revision.
-        let unscoped = #"{"version":1,"kind":"invalidate","requestId":"\#(UUID().uuidString)"}"#
+        let unscoped = #"{"version":2,"kind":"invalidate","requestId":"\#(UUID().uuidString)"}"#
         XCTAssertThrowsError(try JSONDecoder().decode(SceneEvent.self, from: Data(unscoped.utf8)))
-        let foreign = SceneEvent(version: 1, kind: .invalidate, scopeId: "other-owner",
+        let foreign = SceneEvent(version: SceneContract.version, kind: .invalidate, scopeId: "other-owner",
                                  requestId: UUID().uuidString, revision: router.revision)
         XCTAssertThrowsError(try validateSceneEvent(foreign, snapshot: router.snapshot))
     }
@@ -56,19 +56,19 @@ final class AppTests: XCTestCase {
                        earthExperience: "default")
         var calls = 0
         router.onSwitchAccess = { calls += 1 }
-        let event = SceneEvent(version: 1, kind: .switchAccess, scopeId: router.scopeId,
+        let event = SceneEvent(version: SceneContract.version, kind: .switchAccess, scopeId: router.scopeId,
                                requestId: UUID().uuidString, revision: router.revision,
                                journeyId: nil, routePointId: nil, assetId: nil)
         XCTAssertNoThrow(try validateSceneEvent(event, snapshot: router.snapshot))
         router.receive(event)
         router.receive(event)
         XCTAssertEqual(calls, 1)
-        let foreign = SceneEvent(version: 1, kind: .switchAccess, scopeId: "other-owner",
+        let foreign = SceneEvent(version: SceneContract.version, kind: .switchAccess, scopeId: "other-owner",
                                  requestId: UUID().uuidString, revision: router.revision,
                                  journeyId: nil, routePointId: nil, assetId: nil)
         router.receive(foreign)
         XCTAssertEqual(calls, 1)
-        let unauthorized = SceneEvent(version: 1, kind: .switchAccess, scopeId: router.scopeId,
+        let unauthorized = SceneEvent(version: SceneContract.version, kind: .switchAccess, scopeId: router.scopeId,
                                       requestId: UUID().uuidString, revision: router.revision,
                                       journeyId: data.snapshot.journeys[0].id, routePointId: nil, assetId: nil)
         XCTAssertThrowsError(try validateSceneEvent(unauthorized, snapshot: router.snapshot))
@@ -87,15 +87,92 @@ final class AppTests: XCTestCase {
         let fixture = try fixture()
         XCTAssertNoThrow(try validateSceneEvent(fixture.event, snapshot: fixture.snapshot))
         let event = fixture.event
-        let stale = SceneEvent(version: 1, kind: .story, scopeId: event.scopeId, requestId: event.requestId,
+        let stale = SceneEvent(version: SceneContract.version, kind: .story, scopeId: event.scopeId, requestId: event.requestId,
                                revision: event.revision - 1, journeyId: event.journeyId)
         XCTAssertThrowsError(try validateSceneEvent(stale, snapshot: fixture.snapshot))
-        let wrongPoint = SceneEvent(version: 1, kind: .story, scopeId: event.scopeId, requestId: event.requestId,
+        let wrongPoint = SceneEvent(version: SceneContract.version, kind: .story, scopeId: event.scopeId, requestId: event.requestId,
                                     revision: event.revision, journeyId: event.journeyId, routePointId: "other")
         XCTAssertThrowsError(try validateSceneEvent(wrongPoint, snapshot: fixture.snapshot))
-        let wrongAsset = SceneEvent(version: 1, kind: .story, scopeId: event.scopeId, requestId: event.requestId,
+        let wrongAsset = SceneEvent(version: SceneContract.version, kind: .story, scopeId: event.scopeId, requestId: event.requestId,
                                     revision: event.revision, journeyId: event.journeyId, routePointId: "point-b", assetId: event.assetId)
         XCTAssertThrowsError(try validateSceneEvent(wrongAsset, snapshot: fixture.snapshot))
+    }
+
+    func testSharedFixtureCommandsAndStaleCommandRejection() throws {
+        let fixture = try fixture()
+        XCTAssertEqual(fixture.snapshot.version, SceneContract.version)
+        XCTAssertEqual(fixture.commands.map(\.kind), [.focus, .timeWindow, .chrome, .insets])
+        for command in fixture.commands {
+            XCTAssertNoThrow(try validateSceneCommand(command, snapshot: fixture.snapshot))
+        }
+        let focus = fixture.commands[0]
+        func rejects(_ mutate: (inout SceneCommand) -> Void, as failure: BridgeFailure,
+                     _ base: SceneCommand, line: UInt = #line) {
+            var command = base; mutate(&command)
+            XCTAssertThrowsError(try validateSceneCommand(command, snapshot: fixture.snapshot), line: line) {
+                XCTAssertEqual($0 as? BridgeFailure, failure, line: line)
+            }
+        }
+        rejects({ $0 = SceneCommand(version: 1, kind: $0.kind, scopeId: $0.scopeId, revision: $0.revision,
+                                    requestId: $0.requestId, journeyId: $0.journeyId) }, as: .invalidMessage, focus)
+        rejects({ $0 = SceneCommand(version: 2, kind: $0.kind, scopeId: $0.scopeId, revision: $0.revision - 1,
+                                    requestId: $0.requestId, journeyId: $0.journeyId) }, as: .stale, focus)
+        rejects({ $0 = SceneCommand(version: 2, kind: $0.kind, scopeId: "guest", revision: $0.revision,
+                                    requestId: $0.requestId, journeyId: $0.journeyId) }, as: .stale, focus)
+        rejects({ $0.journeyId = "other" }, as: .unknownTarget, focus)
+        rejects({ $0.routePointId = "point-valley" }, as: .unknownTarget, focus)
+        rejects({ $0.globeOnly = true }, as: .invalidMessage, focus)
+        rejects({ $0.window = SceneTimeWindow(start: "2025-02-01", end: "2025-01-01") }, as: .invalidMessage, fixture.commands[1])
+        rejects({ $0.window = SceneTimeWindow(start: "2025/01/01", end: "2025-01-02") }, as: .invalidMessage, fixture.commands[1])
+        rejects({ $0.journeyId = "journey-fixture" }, as: .invalidMessage, fixture.commands[1])
+        rejects({ $0.globeOnly = nil }, as: .invalidMessage, fixture.commands[2])
+        rejects({ $0.insets = SceneInsets(top: -1, bottom: 0) }, as: .invalidMessage, fixture.commands[3])
+        rejects({ $0.insets = SceneInsets(top: 0, bottom: .infinity) }, as: .invalidMessage, fixture.commands[3])
+        var cleared = fixture.commands[1]; cleared.window = nil
+        XCTAssertNoThrow(try validateSceneCommand(cleared, snapshot: fixture.snapshot))
+        // A script literal keeps a command as data, exactly like a snapshot.
+        let script = try AtlasSceneView.commandScript(#"{"kind":"chrome');alert(1)//"}"#)
+        XCTAssertTrue(script.hasPrefix("window.atlasNative.command(\""))
+    }
+
+    func testNativeSelectionSharesSceneGuardsAndMintsFreshRequests() throws {
+        let suite = "test.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let router = AppRouter(defaults: defaults)
+        router.install(try fixture().snapshot.journeys, identity: "native-owner", access: .owner, earthExperience: "default")
+        let revision = router.revision
+        XCTAssertTrue(router.select(journeyId: "journey-fixture", routePointId: "point-b"))
+        let first = try XCTUnwrap(router.selection)
+        XCTAssertEqual(first.routePointId, "point-b")
+        XCTAssertNotNil(UUID(uuidString: first.requestId))
+        XCTAssertEqual(router.revision, revision, "a selection is not a data refresh")
+        XCTAssertTrue(router.select(journeyId: "journey-fixture"))
+        XCTAssertNotEqual(router.selection?.requestId, first.requestId)
+        XCTAssertFalse(router.select(journeyId: "journey-fixture", routePointId: "other"))
+        XCTAssertFalse(router.select(journeyId: "other"))
+        // Persisted for owner navigation restore, like a scene selection.
+        let saved = try XCTUnwrap(defaults.data(forKey: "atlas.navigation.selection"))
+        XCTAssertEqual(try JSONDecoder().decode(StoryHandoff.self, from: saved).requestId, router.selection?.requestId)
+
+        router.previewFocus(journeyId: "journey-fixture")
+        let preview = try XCTUnwrap(router.preview)
+        router.previewFocus(journeyId: "journey-fixture")
+        XCTAssertEqual(router.preview, preview, "the same Journey does not re-fly the camera")
+        let command = router.command(.focus, journeyId: preview.journeyId)
+        XCTAssertNoThrow(try validateSceneCommand(command, snapshot: router.snapshot))
+
+        XCTAssertTrue(router.openStory(journeyId: "journey-fixture", routePointId: "point-a"))
+        XCTAssertNil(router.preview, "a committed selection ends the preview")
+        XCTAssertEqual(router.path.count, 1)
+        XCTAssertFalse(router.select(journeyId: "journey-fixture"), "Story owns navigation")
+        XCTAssertFalse(router.openStory(journeyId: "journey-fixture"))
+        router.previewFocus(journeyId: "journey-fixture")
+        XCTAssertNil(router.preview)
+        router.returnToAtlas()
+        router.presentation.window = SceneTimeWindow(start: "2025-01-01", end: "2025-01-02")
+        router.clear()
+        XCTAssertNil(router.presentation.window, "a new scope starts without a time window")
     }
 
     func testOwnerRestoreGuestIsolationInvalidationAndReturn() throws {
@@ -105,7 +182,7 @@ final class AppTests: XCTestCase {
         let records = try fixture().snapshot.journeys
         let router = AppRouter(defaults: defaults)
         router.install(records, identity: "owner-a", access: .owner, earthExperience: "particle-only")
-        let open = SceneEvent(version: 1, kind: .story, scopeId: router.scopeId, requestId: UUID().uuidString,
+        let open = SceneEvent(version: SceneContract.version, kind: .story, scopeId: router.scopeId, requestId: UUID().uuidString,
                               revision: router.revision, journeyId: "journey-fixture", routePointId: "point-a")
         router.receive(open)
         XCTAssertEqual(router.path.first?.routePointId, "point-a")
@@ -135,7 +212,7 @@ final class AppTests: XCTestCase {
         router.install(try fixture().snapshot.journeys, identity: "synthetic-ci",
                        access: .owner, earthExperience: "default")
         let requestA = UUID().uuidString
-        router.receive(SceneEvent(version: 1, kind: .story, scopeId: router.scopeId,
+        router.receive(SceneEvent(version: SceneContract.version, kind: .story, scopeId: router.scopeId,
             requestId: requestA, revision: router.revision, journeyId: "journey-fixture",
             routePointId: "point-a", assetId: "asset-fixture"))
         let opened = try XCTUnwrap(router.path.last)
@@ -176,7 +253,7 @@ final class AppTests: XCTestCase {
         XCTAssertTrue(router.path.isEmpty)
 
         let requestB = UUID().uuidString
-        router.receive(SceneEvent(version: 1, kind: .story, scopeId: router.scopeId,
+        router.receive(SceneEvent(version: SceneContract.version, kind: .story, scopeId: router.scopeId,
             requestId: requestB, revision: router.revision, journeyId: "journey-fixture",
             routePointId: "point-a", assetId: "asset-second"))
         let replacement = try XCTUnwrap(router.path.last)
@@ -195,7 +272,7 @@ final class AppTests: XCTestCase {
         let router = AppRouter(defaults: defaults)
         router.install(bridge.snapshot.journeys, identity: "synthetic-ci", access: .owner, earthExperience: "default")
         let requestID = UUID().uuidString
-        let event = SceneEvent(version: 1, kind: .story, scopeId: router.scopeId, requestId: requestID,
+        let event = SceneEvent(version: SceneContract.version, kind: .story, scopeId: router.scopeId, requestId: requestID,
                                revision: router.revision, journeyId: "journey-fixture",
                                routePointId: "point-a", assetId: "asset-fixture")
         router.receive(event)
@@ -314,7 +391,7 @@ final class AppTests: XCTestCase {
         router.install(bridge.snapshot.journeys, identity: "synthetic-ci",
                        access: .owner, earthExperience: "default")
         let requestID = UUID().uuidString
-        router.receive(SceneEvent(version: 1, kind: .story, scopeId: router.scopeId,
+        router.receive(SceneEvent(version: SceneContract.version, kind: .story, scopeId: router.scopeId,
             requestId: requestID, revision: router.revision, journeyId: oldAtlas.id,
             routePointId: "point-a", assetId: "asset-fixture"))
         let target = try XCTUnwrap(router.path.last)
@@ -426,7 +503,7 @@ final class AppTests: XCTestCase {
                        access: .owner, earthExperience: "default")
 
         let requestA = UUID().uuidString
-        router.receive(SceneEvent(version: 1, kind: .story, scopeId: router.scopeId,
+        router.receive(SceneEvent(version: SceneContract.version, kind: .story, scopeId: router.scopeId,
             requestId: requestA, revision: router.revision, journeyId: "journey-fixture",
             routePointId: "point-a", assetId: "asset-fixture"))
         let targetA = try XCTUnwrap(router.path.last)
@@ -456,7 +533,7 @@ final class AppTests: XCTestCase {
         // Story A is replaced by B before A's delayed media refresh arrives.
         router.returnToAtlas()
         let requestB = UUID().uuidString
-        router.receive(SceneEvent(version: 1, kind: .story, scopeId: router.scopeId,
+        router.receive(SceneEvent(version: SceneContract.version, kind: .story, scopeId: router.scopeId,
             requestId: requestB, revision: router.revision, journeyId: "journey-fixture",
             routePointId: "point-a", assetId: "asset-second"))
         XCTAssertEqual(router.path.last?.requestId, requestB)
@@ -515,7 +592,10 @@ final class AppTests: XCTestCase {
     let fixture = try JSONDecoder().decode(BridgeFixture.self, from: Data(contentsOf: url))
     let encoded = try JSONEncoder().encode(fixture.snapshot)
     let text = String(decoding: encoded, as: UTF8.self)
+    let commands = String(decoding: try JSONEncoder().encode(fixture.commands), as: UTF8.self)
     for forbidden in ["cookie", "Authorization", "shareToken", "read-url", "createdByUserId"] {
         #expect(!text.contains(forbidden))
+        #expect(!commands.contains(forbidden))
     }
+    #expect(!commands.contains("http"))
 }

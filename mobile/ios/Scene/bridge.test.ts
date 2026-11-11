@@ -3,7 +3,7 @@ import fixture from "../Fixtures/bridge.json";
 import { buildJourneyTimeline, resolveJourneyTimelineSelection } from "../../../src/journey/globeTimeline";
 import { toJourneyRoutes } from "../../../src/journey/journeyModel";
 import { GLOBE_IDLE_RESUME_DELAY_MS, getGlobeIdleRotationDelta, resolveGlobeFocusIntent } from "../../../src/scene/ParticleEarthScene";
-import { acceptsSnapshot, atlasSceneFocus, decodeSnapshot, decodeSnapshotOrReport, journeySwipeDirection, nextJourneyIndex, renderJourneys } from "./bridge";
+import { acceptsSnapshot, atlasSceneFocus, CONTRACT_VERSION, decodeCommand, decodeCommandOrDrop, decodeSnapshot, decodeSnapshotOrReport, journeySwipeDirection, nextJourneyIndex, renderJourneys, windowReveal } from "./bridge";
 
 describe("native compact Journey chip gestures", () => {
   it("switches only for a meaningful horizontal gesture, not taps or vertical swipes", () => {
@@ -56,7 +56,8 @@ describe("the same redacted fixture as Swift", () => {
   });
   it("rejects invalid identity, revision, coordinates and cross-point media", () => {
     for (const mutate of [
-      (value: typeof fixture.snapshot) => { value.version = 2; },
+      (value: typeof fixture.snapshot) => { value.version = 1; },
+      (value: typeof fixture.snapshot) => { value.version = 3; },
       (value: typeof fixture.snapshot) => { value.revision = -1; },
       (value: typeof fixture.snapshot) => { value.journeys[0].routePoints[0].latitude = 91; },
       (value: typeof fixture.snapshot) => { value.selection.journeyId = "other"; },
@@ -79,7 +80,7 @@ describe("unreadable native snapshots", () => {
     expect(decodeSnapshotOrReport("not json")).toBeNull();
     expect(postMessage).toHaveBeenCalledTimes(2);
     const message = JSON.parse(postMessage.mock.calls[0][0]);
-    expect(message).toEqual({ version: 1, kind: "sceneFailed", requestId: expect.any(String) });
+    expect(message).toEqual({ version: CONTRACT_VERSION, kind: "sceneFailed", requestId: expect.any(String) });
     expect(message.requestId).toMatch(/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i);
   });
 
@@ -88,5 +89,58 @@ describe("unreadable native snapshots", () => {
     vi.stubGlobal("window", { webkit: { messageHandlers: { atlas: { postMessage } } } });
     expect(decodeSnapshotOrReport(JSON.stringify(fixture.snapshot))?.scopeId).toBe(fixture.snapshot.scopeId);
     expect(postMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("native commands (contract v2)", () => {
+  const snapshot = () => decodeSnapshot(structuredClone(fixture.snapshot));
+  type Command = Record<string, unknown>;
+  const clone = (index: number) => structuredClone(fixture.commands[index]) as Command;
+
+  it("decodes every fixture command Swift also validates", () => {
+    expect(fixture.commands.map((command) => decodeCommand(command, snapshot()).kind))
+      .toEqual(["focus", "timeWindow", "chrome", "insets"]);
+    expect(decodeCommand(fixture.commands[0], snapshot())).toMatchObject({ journeyId: "journey-fixture", routePointId: "point-b" });
+    expect(decodeCommand({ ...clone(1), window: null }, snapshot())).toMatchObject({ kind: "timeWindow", window: null });
+  });
+
+  it("rejects stale scopes and revisions, and drops them silently", () => {
+    expect(() => decodeCommand({ ...clone(2), revision: 6 }, snapshot())).toThrow("stale-command");
+    expect(() => decodeCommand({ ...clone(2), scopeId: "guest-scope" }, snapshot())).toThrow("stale-command");
+    expect(() => decodeCommand(clone(2), null)).toThrow("stale-command");
+    expect(decodeCommandOrDrop(JSON.stringify({ ...clone(3), revision: 8 }), snapshot())).toBeNull();
+    expect(decodeCommandOrDrop("not json", snapshot())).toBeNull();
+  });
+
+  it("rejects foreign targets, extra fields, bad windows and insets", () => {
+    for (const command of [
+      { ...clone(0), version: 1 },
+      { ...clone(0), requestId: "not-a-uuid" },
+      { ...clone(0), journeyId: "other" },
+      { ...clone(0), routePointId: "point-valley" },
+      { ...clone(0), globeOnly: true },
+      { ...clone(1), journeyId: "journey-fixture" },
+      { ...clone(1), window: { start: "2025-02-01", end: "2025-01-01" } },
+      { ...clone(1), window: { start: "2025/01/01", end: "2025-01-02" } },
+      { ...clone(2), globeOnly: "yes" },
+      { ...clone(2), insets: { top: 1, bottom: 1 } },
+      { ...clone(3), insets: { top: -1, bottom: 0 } },
+      { ...clone(3), insets: { top: 0, bottom: Number.POSITIVE_INFINITY } },
+      { ...clone(3), kind: "story" },
+    ]) expect(() => decodeCommand(command, snapshot())).toThrow();
+  });
+
+  it("reveals only what the time window has reached", () => {
+    const journeys = renderJourneys(snapshot());
+    const before = windowReveal(journeys, { start: "2024-01-01", end: "2024-12-31" });
+    expect(before.journeyProgress.get("journey-fixture")).toBe(0);
+    expect(before.pointProgress.get("journey-fixture:0")).toBe(0);
+    const first = windowReveal(journeys, { start: "2025-01-01", end: "2025-01-01" });
+    expect(first.journeyProgress.get("journey-fixture")).toBeGreaterThan(0);
+    expect(first.pointProgress.get("journey-fixture:0")).toBe(1);
+    expect(first.pointProgress.get("journey-fixture:1")).toBe(0);
+    const all = windowReveal(journeys, { start: "2025-01-01", end: "2025-12-31" });
+    expect(all.journeyProgress.get("journey-fixture")).toBe(1);
+    expect(all.pointProgress.get("journey-fixture:1")).toBe(1);
   });
 });

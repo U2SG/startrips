@@ -8,10 +8,7 @@ import { useGlobeTimeCursor } from "../../../src/journey/useGlobeTimeCursor";
 import { MobileSheetGrabber, useMobileSheetDetents } from "../../../src/journey/mobileSheetDetents";
 import { toJourneyRoutes } from "../../../src/journey/journeyModel";
 import { LivingAtlasGlobe, PersistentEarthProvider, usePersistentEarth } from "../../../src/scene/LivingAtlasGlobe";
-import {
-  acceptsSnapshot, atlasSceneFocus, decodeSnapshotOrReport, journeySwipeDirection, nextJourneyIndex, renderJourneys, send,
-  type JourneySwipePoint, type SceneAccessibility, type Snapshot,
-} from "./bridge";
+import { acceptsSnapshot, atlasSceneFocus, decodeCommandOrDrop, decodeSnapshotOrReport, journeySwipeDirection, nextJourneyIndex, renderJourneys, send, windowReveal, type CameraInsets, type JourneySwipePoint, type Snapshot, type TimeWindow } from "./bridge";
 import "../../../src/styles/tokens.css";
 import "../../../src/styles/controls.css";
 import "../../../src/styles/living-atlas.css";
@@ -22,15 +19,16 @@ import "../../../src/styles/globe-time-scrubber.css";
 import "./scene.css";
 
 // The native page-world receiver exists before deferred module evaluation.
-// Carry values sent by WKNavigationDelegate.didFinish into React's first effects.
-let pendingSnapshot = window.atlasNative?.pending ?? null;
+// Carry any snapshot sent by WKNavigationDelegate.didFinish into React's first effect.
+const early = window.atlasNative as { pending?: string | null; commands?: string[] } | undefined;
+let pendingSnapshot: string | null = early?.pending ?? null;
 let deliverSnapshot: ((json: string) => void) | null = null;
-let sceneAccessibility: SceneAccessibility = window.atlasNative?.accessibility
-  ?? { textScale: 1, accessibilitySize: false, boldText: false, increasedContrast: false };
-let deliverAccessibility: ((settings: SceneAccessibility) => void) | null = null;
+// Commands sent before the module ran are replayed after the pending snapshot.
+let pendingCommands: string[] = [...(early?.commands ?? [])];
+let deliverCommand: ((json: string) => void) | null = null;
 window.atlasNative = {
   receive(json) { pendingSnapshot = json; deliverSnapshot?.(json); },
-  setAccessibility(settings) { sceneAccessibility = settings; deliverAccessibility?.(settings); },
+  command(json) { if (deliverCommand) deliverCommand(json); else pendingCommands.push(json); },
 };
 
 const reducedMotionQuery = "(prefers-reduced-motion: reduce)";
@@ -81,6 +79,11 @@ function AtlasScene() {
   const lastCursorCommit = useRef<string | null>(null);
   const current = useRef<Snapshot | null>(null);
   const [error, setError] = useState(false);
+  // Native presentation state (contract v2 commands).
+  const [globeOnly, setGlobeOnly] = useState(false);
+  const [insets, setInsets] = useState<CameraInsets | null>(null);
+  const [timeWindow, setTimeWindow] = useState<TimeWindow | null>(null);
+  const [preview, setPreview] = useState<{ journeyId: string; routePointId: string | null } | null>(null);
   useEffect(() => {
     deliverSnapshot = (json) => {
       // An unreadable snapshot is reported to native, which owns the reload control.
@@ -91,13 +94,35 @@ function AtlasScene() {
       const newFocus = previous?.scopeId !== next.scopeId || previous?.selection?.requestId !== next.selection?.requestId;
       current.current = next; setSnapshot(next); setError(false);
       if (newFocus) {
-        setInterrupted(false); setFocusRevision((value) => value + 1);
+        setPreview(null); setInterrupted(false); setFocusRevision((value) => value + 1);
       }
       if (!previous || previous.scopeId !== next.scopeId) send(next, "ready");
     };
     if (pendingSnapshot) deliverSnapshot(pendingSnapshot);
-    return () => { deliverSnapshot = null; };
+    deliverCommand = (json) => {
+      const command = decodeCommandOrDrop(json, current.current);
+      if (!command) return;
+      if (command.kind === "chrome") setGlobeOnly(command.globeOnly);
+      else if (command.kind === "insets") setInsets(command.insets);
+      else if (command.kind === "timeWindow") setTimeWindow(command.window);
+      else {
+        setPreview({ journeyId: command.journeyId, routePointId: command.routePointId });
+        setInterrupted(false); setFocusRevision((value) => value + 1);
+      }
+    };
+    const queued = pendingCommands; pendingCommands = [];
+    queued.forEach((json) => deliverCommand?.(json));
+    return () => { deliverSnapshot = null; deliverCommand = null; };
   }, []);
+  // In globe-only mode native chrome reports what it covers; the camera viewport
+  // (the persistent Earth host) shrinks so the globe is never under the card.
+  useEffect(() => {
+    const root = document.documentElement.style;
+    if (!globeOnly || !insets) { root.removeProperty("--native-atlas-top-inset"); return; }
+    root.setProperty("--native-atlas-top-inset", `${insets.top}px`);
+    root.setProperty("--native-atlas-bottom", `${insets.bottom}px`);
+    return () => { root.removeProperty("--native-atlas-top-inset"); };
+  }, [globeOnly, insets]);
   useEffect(() => {
     if (snapshot?.active) { setInterrupted(false); setFocusRevision((value) => value + 1); }
   }, [snapshot?.active]);
@@ -105,11 +130,14 @@ function AtlasScene() {
   const routes = useMemo(() => toJourneyRoutes(journeys), [journeys]);
   const time = useGlobeTimeCursor(journeys);
   const cursorActive = !!snapshot?.active && cursorScope === snapshot.scopeId;
-  const selected = journeys.find((journey) => journey.id === (cursorActive ? time.selection?.journeyId : snapshot?.selection?.journeyId))
+  const previewing = !cursorActive && preview !== null;
+  const selected = journeys.find((journey) => journey.id === (cursorActive ? time.selection?.journeyId
+    : previewing ? preview.journeyId : snapshot?.selection?.journeyId))
     ?? journeys[0];
   const point = cursorActive
     ? selected?.routePoints[time.selection?.pointIndex ?? -1]
-    : selected?.routePoints.find((value) => value.id === snapshot?.selection?.routePointId);
+    : selected?.routePoints.find((value) => value.id === (previewing ? preview.routePointId : snapshot?.selection?.routePointId));
+  const nativeReveal = useMemo(() => timeWindow ? windowReveal(journeys, timeWindow) : null, [journeys, timeWindow]);
 
   useEffect(() => {
     if (!snapshot?.active || cursorScope !== snapshot.scopeId) {
@@ -142,6 +170,7 @@ function AtlasScene() {
 
   useEffect(() => {
     const element = panel.current;
+    if (globeOnly) return;
     if (!element) {
       document.documentElement.style.setProperty("--native-atlas-bottom", "0px");
       return () => document.documentElement.style.removeProperty("--native-atlas-bottom");
@@ -154,7 +183,7 @@ function AtlasScene() {
     const observer = new ResizeObserver(update);
     observer.observe(element);
     return () => { observer.disconnect(); document.documentElement.style.removeProperty("--native-atlas-bottom"); };
-  }, [!!snapshot, error, selected?.id]);
+  }, [!!snapshot, error, selected?.id, globeOnly]);
 
   const beginCursor = () => {
     if (!snapshot) return;
@@ -229,16 +258,13 @@ function AtlasScene() {
     <StartripsBrandLoader message="正在打开图谱…" />
   </main>;
   return <main className="living-atlas is-mobile-v2 native-atlas" data-mobile-v2="on"
-    data-native-mobile-v2="on" aria-label="图谱地球"
-    data-native-large-text={scrollableDetails || undefined}
-    data-native-bold-text={boldText || undefined}
-    data-native-increased-contrast={increasedContrast || undefined}
-    style={{ "--native-text-scale": textScale } as CSSProperties}>
-    <div className="native-atlas__earth" aria-label="旅程地球" inert={sheetOpen || pickerOpen || undefined}>
+    data-native-mobile-v2="on" data-globe-only={globeOnly ? "on" : undefined} aria-label="图谱地球">
+    <div className="native-atlas__earth" aria-label="旅程地球">
       <LivingAtlasGlobe journeyRoutes={routes} activeJourneyRouteId={selected?.id}
         selectedJourneyRoutePoint={selected ? { journeyId: selected.id, routePointId: point?.id } : null}
         temporalReveal={cursorActive ? { journeys: time.reveal.journeyProgress, points: time.reveal.pointProgress,
-          timestamp: time.timeDomain ? time.timeDomain.minTime + time.cursor * (time.timeDomain.maxTime - time.timeDomain.minTime) : undefined } : undefined}
+          timestamp: time.timeDomain ? time.timeDomain.minTime + time.cursor * (time.timeDomain.maxTime - time.timeDomain.minTime) : undefined }
+          : nativeReveal ? { journeys: nativeReveal.journeyProgress, points: nativeReveal.pointProgress } : undefined}
         {...atlasSceneFocus(point, routes.find((route) => route.id === selected?.id))}
         focusRevision={focusRevision} focusEnabled={!interrupted && snapshot.active}
         earthExperiencePolicy={snapshot.earthExperience} routeEditingEnabled={false}
@@ -246,6 +272,8 @@ function AtlasScene() {
         reduceMotion={reduceMotion}
         cinematicActive={!snapshot.active} mediaCoverHint={{ opaqueMediaCover: !snapshot.active, coverTransitionActive: false }}
         onManualCameraInteraction={interrupt} onFocusSettled={() => {
+          // A ribbon preview is camera-only: it is never acknowledged as the selection.
+          if (previewing) return;
           if (!cursorActive || (time.scrub === null && selected?.id === snapshot.selection?.journeyId
             && (point?.id ?? null) === (snapshot.selection?.routePointId ?? null))) {
             send(snapshot, "rendered", { focusRequestId: snapshot.selection?.requestId });
@@ -254,6 +282,7 @@ function AtlasScene() {
         onJourneyRouteActivate={(journeyId) => select(journeyId)}
         onJourneyRoutePointActivate={select}/>
     </div>
+    {!globeOnly && <>
     <header className="mobile-v2__header native-atlas__header"
       inert={sheetOpen || pickerOpen || undefined}>
       <div className="mobile-v2__brand"><StartripsWordmarkSignatureButton size={27} state="rest" /></div>
@@ -407,6 +436,7 @@ function AtlasScene() {
         </button>
       </li>)}</ol>
     </section>}
+    </>}
   </main>;
 }
 createRoot(document.getElementById("root")!).render(<PersistentEarthProvider><AtlasScene/></PersistentEarthProvider>);

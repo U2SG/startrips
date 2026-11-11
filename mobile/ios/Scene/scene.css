@@ -11,10 +11,12 @@ body { background: var(--archive-bg); color: var(--archive-ink); font-family: va
   height: 100%;
   min-height: 0;
   isolation: isolate;
-  --native-atlas-top: calc(env(safe-area-inset-top, 0px) + 62px);
+  --native-atlas-top: var(--native-atlas-top-inset, calc(env(safe-area-inset-top, 0px) + 62px));
 }
+/* Globe-only (contract v2): native chrome owns every control and reports the
+   points it covers through --native-atlas-top-inset / --native-atlas-bottom. */
 .persistent-earth-host {
-  top: calc(env(safe-area-inset-top, 0px) + 62px);
+  top: var(--native-atlas-top-inset, calc(env(safe-area-inset-top, 0px) + 62px));
   bottom: var(--native-atlas-bottom, 0px);
 }
 .particle-earth-journey-connector { display: none; }

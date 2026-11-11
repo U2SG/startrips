@@ -318,4 +318,4 @@ private struct AtlasWordmark: View {
     }
 }
 
-struct BridgeFixture: Decodable { let snapshot: SceneSnapshot; let event: SceneEvent }
+struct BridgeFixture: Decodable { let snapshot: SceneSnapshot; let event: SceneEvent; let commands: [SceneCommand] }

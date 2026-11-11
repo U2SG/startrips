@@ -1,6 +1,20 @@
 import SwiftUI
 import StartripsMedia
 
+/// Layout and time state the native chrome hands to the globe-only scene.
+struct ScenePresentation: Equatable {
+    var globeOnly = false
+    var insets = SceneInsets(top: 0, bottom: 0)
+    var window: SceneTimeWindow?
+}
+
+/// A ribbon scrub preview: camera only, never persisted and never acknowledged.
+struct ScenePreview: Equatable {
+    let journeyId: String
+    let routePointId: String?
+    let requestId: String
+}
+
 @MainActor
 final class AppRouter: ObservableObject {
     @Published private(set) var scopeId = UUID().uuidString
@@ -14,6 +28,10 @@ final class AppRouter: ObservableObject {
     }
     @Published var error: String?
     @Published var rendered = false
+    @Published var presentation = ScenePresentation()
+    @Published private(set) var preview: ScenePreview?
+    /// Bumped on every scene `ready`; the scene view re-sends presentation state.
+    @Published private(set) var sceneReadyCount = 0
     #if DEBUG
     private(set) var completedFocusCount = 0
     #endif
@@ -31,13 +49,14 @@ final class AppRouter: ObservableObject {
     var installed: Bool { identity != nil }
 
     var snapshot: SceneSnapshot {
-        SceneSnapshot(version: 1, scopeId: scopeId, revision: revision, access: access,
+        SceneSnapshot(version: SceneContract.version, scopeId: scopeId, revision: revision, access: access,
                       earthExperience: earthExperience, journeys: journeys, selection: selection, active: path.isEmpty)
     }
 
     func clear() {
         journeys = []; selection = nil; path = []; identity = nil; seen.removeAll()
         scopeId = UUID().uuidString; revision += 1; rendered = false
+        preview = nil; presentation.window = nil
     }
 
     func install(_ records: [AtlasJourney], identity newIdentity: String, access: AtlasAccess,
@@ -129,16 +148,9 @@ final class AppRouter: ObservableObject {
         if seen.count > 256 { seen = [event.requestId] }
         switch event.kind {
         case .select, .story:
-            guard path.isEmpty else { return }
-            guard let journey = journeys.first(where: { $0.id == event.journeyId }) else { return }
-            selection = StoryHandoff(journeyId: journey.id, routePointId: event.routePointId,
-                                     assetId: event.assetId, revision: journey.revision, requestId: event.requestId)
-            rendered = false
-            if access == .owner, let selection {
-                defaults.set(identity, forKey: "atlas.navigation.identity")
-                defaults.set(try? JSONEncoder().encode(selection), forKey: "atlas.navigation.selection")
-            }
-            if event.kind == .story, let selection { path = [selection] }
+            guard let journeyId = event.journeyId else { return }
+            commit(journeyId: journeyId, routePointId: event.routePointId, assetId: event.assetId,
+                   requestId: event.requestId, story: event.kind == .story)
         case .invalidate: onInvalidation?()
         case .rendered:
             #if DEBUG
@@ -155,8 +167,54 @@ final class AppRouter: ObservableObject {
             // which does not depend on the WKWebView's own controls.
             guard path.isEmpty else { return }
             error = "地球数据无法读取，请刷新重试。"
-        case .ready: break
+        case .ready: sceneReadyCount += 1
         }
+    }
+
+    /// Native chrome selection (card swipe, route point, ribbon release). It
+    /// shares the scene event's guards and persistence and mints its own request.
+    @discardableResult
+    func select(journeyId: String, routePointId: String? = nil) -> Bool {
+        commit(journeyId: journeyId, routePointId: routePointId, assetId: nil,
+               requestId: UUID().uuidString, story: false)
+    }
+
+    @discardableResult
+    func openStory(journeyId: String, routePointId: String? = nil) -> Bool {
+        commit(journeyId: journeyId, routePointId: routePointId, assetId: nil,
+               requestId: UUID().uuidString, story: true)
+    }
+
+    /// Fly the camera to a Journey while the ribbon is being dragged.
+    func previewFocus(journeyId: String?) {
+        guard path.isEmpty else { return }
+        guard let journeyId, journeys.contains(where: { $0.id == journeyId }) else { preview = nil; return }
+        guard preview?.journeyId != journeyId else { return }
+        preview = ScenePreview(journeyId: journeyId, routePointId: nil, requestId: UUID().uuidString)
+    }
+
+    func command(_ kind: SceneCommandKind, journeyId: String? = nil, routePointId: String? = nil,
+                 window: SceneTimeWindow? = nil, globeOnly: Bool? = nil, insets: SceneInsets? = nil) -> SceneCommand {
+        SceneCommand(version: SceneContract.version, kind: kind, scopeId: scopeId, revision: revision,
+                     requestId: UUID().uuidString, journeyId: journeyId, routePointId: routePointId,
+                     window: window, globeOnly: globeOnly, insets: insets)
+    }
+
+    @discardableResult
+    private func commit(journeyId: String, routePointId: String?, assetId: String?,
+                        requestId: String, story: Bool) -> Bool {
+        guard path.isEmpty, let journey = journeys.first(where: { $0.id == journeyId }) else { return false }
+        if let routePointId, !journey.routePoints.contains(where: { $0.id == routePointId }) { return false }
+        preview = nil
+        selection = StoryHandoff(journeyId: journey.id, routePointId: routePointId,
+                                 assetId: assetId, revision: journey.revision, requestId: requestId)
+        rendered = false
+        if access == .owner, let selection {
+            defaults.set(identity, forKey: "atlas.navigation.identity")
+            defaults.set(try? JSONEncoder().encode(selection), forKey: "atlas.navigation.selection")
+        }
+        if story, let selection { path = [selection] }
+        return true
     }
 
     func commitStoryPosition(_ target: StoryHandoff, mediaJourney: MediaJourney? = nil) {
