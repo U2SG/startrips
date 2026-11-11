@@ -190,8 +190,19 @@ try {
   await mockImports(page,()=>stored);
   await page.route(/\/hotels\/preview$/, route=>route.fulfill({json:{preview:{token:"synthetic",hotels:[],questions:[]}}}));
   await page.route(/\/api\/journeys\/[^/]+\/journal$/, async route=>{
-    if(route.request().method()==="PUT") stored={revision:1,chapters:route.request().postDataJSON().chapters};
+    if(route.request().method()==="PUT") {
+      // The fictional server marks the chapters this save adds from the import as one undoable batch.
+      const body=route.request().postDataJSON(); savedImportIds=body.importedChapterIds;
+      stored={revision:1,chapters:body.chapters.map(c=>body.importedChapterIds?.includes(c.id)?{...c,importBatch:{id:"batch-fortnight",at:"2027-04-15T00:00:00.000Z",digest:"c".repeat(64),pointIds:[]}}:c)};
+    }
     await route.fulfill({json:{journal:stored}});
+  });
+  let savedImportIds, undoBodies=[];
+  await page.route(/\/journal\/imports\/batch-fortnight\/undo$/, route=>{
+    const body=route.request().postDataJSON(); undoBodies.push(body);
+    if(!body.confirmEdited) return route.fulfill({status:409,json:{error:"JOURNAL_IMPORT_EDITED",edited:1}});
+    stored={revision:2,chapters:[]};
+    return route.fulfill({json:{journal:stored,journey:fixture}});
   });
   await page.goto(`${origin}/${output}/index.html?media=1`);
   await page.getByRole("button",{name:"每日手记",exact:true}).click();
@@ -211,6 +222,18 @@ try {
   for(const chapter of stored.chapters) assert.deepEqual(chapter.events.map(e=>e.status),["actual","planned","cancelled"]);
   assert.equal(await page.getByRole("navigation",{name:"手记日期目录"}).getByRole("link").count(),14);
   await page.screenshot({path:`${output}/journal-media-390.png`});
+  assert.equal(savedImportIds.length,14);
+  // One step undoes the whole saved import; edited chapters need a second, explicit confirmation.
+  await page.getByRole("button",{name:"撤销这次导入",exact:true}).click();
+  await page.getByText("撤销这次导入会移除 14 章。",{exact:true}).waitFor();
+  await page.getByRole("button",{name:"确认撤销",exact:true}).click();
+  await page.getByText("其中 1 章导入后有修改，撤销会一并丢失。",{exact:true}).waitFor();
+  assert.equal(stored.chapters.length,14);
+  await page.getByRole("button",{name:"确认撤销",exact:true}).click();
+  await page.getByText("已撤销这次导入。",{exact:true}).waitFor();
+  await page.getByText("还没有每日手记。可以先导入文字，无照片和坐标也能保存阅读。",{exact:true}).waitFor();
+  assert.deepEqual(undoBodies,[{baseRevision:1,confirmEdited:false},{baseRevision:1,confirmEdited:true}]);
+  assert.equal(await page.getByRole("button",{name:"撤销这次导入",exact:true}).count(),0);
   await context.close();
   console.log("daily journal inline media passed");
   for(const [width,height] of [[320,700],[390,844],[844,390],[1112,402],[1280,900]]) {
