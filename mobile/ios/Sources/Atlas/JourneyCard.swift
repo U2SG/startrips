@@ -52,6 +52,7 @@ struct JourneyCard: View {
     let storyNamespace: Namespace.ID
     let onPeekHeight: (CGFloat) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var index: Int { router.journeys.firstIndex(where: { $0.id == journey.id }) ?? 0 }
     private var pointId: String? {
@@ -96,14 +97,21 @@ struct JourneyCard: View {
                 Capsule().fill(Color(cssHex: journey.lightColor)).frame(width: 4).padding(.vertical, 2)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: NightFlight.grid(1)) {
-                    Text(dateRange).font(.footnote.monospacedDigit()).nightFlightMuted()
+                    // Accessibility sizes break between the two dates, never inside one.
+                    ViewThatFits(in: .horizontal) {
+                        Text(dateRange)
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(dates, id: \.self) { Text($0).fixedSize() }
+                        }
+                    }
+                    .font(.footnote.monospacedDigit()).nightFlightMuted()
                     Text(journey.title).font(NightFlight.serif(.title3).weight(.semibold))
                         .foregroundStyle(NightFlight.ink).lineLimit(2)
                         .accessibilityIdentifier("atlas.card.title")
                     stats
                 }
                 Spacer(minLength: NightFlight.grid(2))
-                if router.journeys.count > 1 {
+                if router.journeys.count > 1 && !typeSize.isAccessibilitySize {
                     Text("\(index + 1)/\(router.journeys.count)").font(.footnote.monospacedDigit()).nightFlightMuted()
                         .accessibilityHidden(true)
                 }
@@ -139,19 +147,25 @@ struct JourneyCard: View {
     }
 
     private var stats: some View {
-        let stops = journey.routePoints.filter(\.isStop).count
-        return HStack(spacing: NightFlight.grid(3)) {
-            Label("\(journey.routePoints.count)", systemImage: "mappin.and.ellipse")
-                .accessibilityLabel("\(journey.routePoints.count) 个路线点")
-            Label("\(journey.media.count)", systemImage: "photo.on.rectangle")
-                .accessibilityLabel("\(journey.media.count) 个媒体")
-            if stops > 0 {
-                Label("\(stops)", systemImage: "flag").accessibilityLabel("\(stops) 个停靠")
-            }
+        // One row when it fits; accessibility sizes stack the counts instead of truncating.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: NightFlight.grid(3)) { statItems }
+            VStack(alignment: .leading, spacing: NightFlight.grid(1)) { statItems }
         }
         .labelStyle(StatLabelStyle())
         .font(.footnote.monospacedDigit())
         .nightFlightMuted()
+    }
+
+    @ViewBuilder private var statItems: some View {
+        let stops = journey.routePoints.filter(\.isStop).count
+        Label("\(journey.routePoints.count)", systemImage: "mappin.and.ellipse").fixedSize()
+            .accessibilityLabel("\(journey.routePoints.count) 个路线点")
+        Label("\(journey.media.count)", systemImage: "photo.on.rectangle").fixedSize()
+            .accessibilityLabel("\(journey.media.count) 个媒体")
+        if stops > 0 {
+            Label("\(stops)", systemImage: "flag").fixedSize().accessibilityLabel("\(stops) 个停靠")
+        }
     }
 
     // MARK: Medium and large
@@ -259,9 +273,8 @@ struct JourneyCard: View {
         router.openStory(journeyId: journey.id, routePointId: pointId)
     }
 
-    private var dateRange: String {
-        [journey.startedOn, journey.endedOn].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " — ")
-    }
+    private var dates: [String] { [journey.startedOn, journey.endedOn].compactMap { $0 }.filter { !$0.isEmpty } }
+    private var dateRange: String { dates.joined(separator: " — ") }
 }
 
 /// Every Journey, current one marked in gold. Covers load as rows appear.

@@ -36,3 +36,28 @@ body { background: #07090f; color: var(--archive-ink); font-family: var(--archiv
   outline: 2px solid #e8b65c;
   outline-offset: 3px;
 }
+
+/* Low vision (S3), iPhone scene only: fewer, larger, opaque globe labels.
+   The persistent Earth host is a sibling of <main>, so these rules are scoped
+   to the document; this stylesheet ships only in the iPhone bundle. Only the
+   focused Journey's Route Point labels are drawn (main.tsx filters the
+   others) and decorative city names are dropped. Increase Contrast (WebKit
+   mirrors it as prefers-contrast: more) strengthens the halo further. */
+html .particle-earth-city-layer { display: none; }
+html .particle-earth-route__label text {
+  fill: #f2f4f8;
+  fill-opacity: 1;
+  stroke: #07090f;
+  stroke-opacity: 1;
+  stroke-width: 5px;
+  stroke-linejoin: round;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+html .particle-earth-route__label[data-attention-role="selected"] text,
+html .particle-earth-route__label[data-attention-role="narrative-current"] text { fill: #e8b65c; }
+@media (prefers-contrast: more) {
+  html .particle-earth-route__label text { stroke-width: 7px; font-weight: 700; }
+  html .particle-earth-route__leader { opacity: 1; stroke-width: 1.2; stroke-dasharray: none; }
+}

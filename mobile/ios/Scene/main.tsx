@@ -136,8 +136,8 @@ function AtlasScene() {
   </main>;
   return <main className="living-atlas is-mobile-v2 native-atlas" data-mobile-v2="on"
     data-native-mobile-v2="on" data-globe-only={globeOnly ? "on" : undefined} aria-label="图谱地球">
-    <style>{selected ? `.native-atlas-labels .particle-earth-route__label:not([data-journey-route="${CSS.escape(selected.id)}"]) { display: none !important; }` : ""}</style>
-    <div className="native-atlas__earth native-atlas-labels" aria-label="旅程地球">
+    <style>{selected ? `html .particle-earth-route__label:not([data-journey-route="${CSS.escape(selected.id)}"]) { display: none !important; }` : ""}</style>
+    <div className="native-atlas__earth" aria-label="旅程地球">
       <LivingAtlasGlobe journeyRoutes={routes} activeJourneyRouteId={selected?.id}
         selectedJourneyRoutePoint={selected ? { journeyId: selected.id, routePointId: point?.id } : null}
         temporalReveal={reveal ? { journeys: reveal.journeyProgress, points: reveal.pointProgress } : undefined}

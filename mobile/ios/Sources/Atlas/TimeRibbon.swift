@@ -164,6 +164,7 @@ struct TimeRibbon: View {
             ForEach(Array(years.enumerated()).filter { $0.offset % stride == 0 }.map(\.element), id: \.offset) { item in
                 Text(String(item.element.year))
                     .font(.caption2.monospacedDigit())
+                    .dynamicTypeSize(...DynamicTypeSize.xxLarge)
                     .nightFlightMuted()
                     .fixedSize()
                     .offset(x: NightFlight.grid(4) + CGFloat(item.offset) * step)
