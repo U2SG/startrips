@@ -42,3 +42,7 @@ On a real 14-day itinerary written as day summaries (`住宿：<hotel>`, often a
 - Each stay is judged independently; failures become questions. A single plausible candidate needs no selection call.
 
 With the owner's permission the change was checked locally against that itinerary on the production model and location service: 11 of 13 nightly hotels were proposed, each the correct property; the remaining two (an untranslatable nickname and an ambiguous branch) became questions, and the "return flight, no hotel" line was excluded.
+
+### Follow-up review: geography and category fail closed
+
+Review of the relaxation found two gaps: a Journey without points accepted candidates at any distance, and a result without a provider feature class passed the lodging filter. Now a missing class is rejected (Nominatim results also carry `class:type`), and a Journey without points is anchored by the batch itself: each stay's best candidate must be linked within 300 km to another stay's candidate. An isolated result (e.g. a same-named shop in another country) becomes a question. On the real itinerary with no Journey points this still proposed 11 of 13 hotels, the same as with the Journey's 25 points; a three-point Nevada/Utah Journey proposed only the five hotels within range.

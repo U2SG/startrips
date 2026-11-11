@@ -13,7 +13,7 @@ import { writeDailyJournal } from "../repositories/daily-journal-repository";
 import { createJourneyForAtlas } from "../repositories/journey-repository";
 import { previewJournalImport, type DailyJournal } from "../../src/journey/dailyJournal";
 vi.mock("../location/create-location-search", () => ({ createLocationSearch: () => ({ driver: "mock", attribution: null, reverse: vi.fn(),
-  search: vi.fn(async () => [{ id: "provider-star", label: "星桥酒店", context: "虚构城，中心路", countryCode: "ZZ", latitude: 10, longitude: 20 }]) }) }));
+  search: vi.fn(async () => [{ id: "provider-star", label: "星桥酒店", context: "虚构城，中心路", countryCode: "ZZ", latitude: 10, longitude: 20, category: "tourism:hotel" }]) }) }));
 const TEST_ORIGIN = "http://127.0.0.1:5173";
 const atlasIds: string[] = [], authOrganizationIds: string[] = [], authUserEmails: string[] = [];
 function authHeaders(cookie?: string) { return { "content-type": "application/json", origin: TEST_ORIGIN, ...(cookie ? { cookie } : {}) }; }
@@ -352,7 +352,7 @@ describe("private daily journal API and PostgreSQL", () => {
         : { matches: cs[0].events.map(e => ({ eventId: e.id, candidateId: chosen })) };
       return Response.json({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ id: `mock-${randomUUID()}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
     });
-    const search = { search: vi.fn(async () => [{ id: chosen, label, context: "York, UK", countryCode: "GB", latitude: 10, longitude: 20 }]), reverse: vi.fn(), driver: "mock", attribution: null } as LocationSearch;
+    const search = { search: vi.fn(async () => [{ id: chosen, label, context: "York, UK", countryCode: "GB", latitude: 10, longitude: 20, category: "tourism:hotel" }]), reverse: vi.fn(), driver: "mock", attribution: null } as LocationSearch;
     const result = await proposeJournalHotels(journal!, j!.routePoints, { baseUrl: "https://model.example.test/v1", apiKey: "mock-only", model: "mock", timeoutMs: 1000, fetcher }, search);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(result.hotels).toHaveLength(count);
