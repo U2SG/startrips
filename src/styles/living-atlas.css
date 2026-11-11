@@ -7053,7 +7053,7 @@ button.living-atlas__globe-focus-exit {
      then commits the collapsed height under an offset that is again 0. A
      reversal mid-way is an ordinary transition from the current position. */
   .journey-story {
-    --journey-story-sheet-extent: min(72svh, 680px);
+    --journey-story-sheet-extent: min(100svh, calc(min(72svh, 680px) + var(--story-action-row-height, 0px)));
     position: relative;
     display: block;
     height: var(--journey-story-sheet-extent);
@@ -7172,7 +7172,7 @@ button.living-atlas__globe-focus-exit {
 
   .journey-story__copy {
     min-height: 48svh;
-    padding: 30px 22px 44px;
+    padding: 30px var(--story-mobile-gutter, 22px) 44px;
     border-top: 1px solid var(--atlas-line);
     border-left: 0;
   }
@@ -7299,22 +7299,22 @@ button.living-atlas__globe-focus-exit {
     display: none;
   }
 
-  /* #199: playback shares the Viewer cluster with the management entry, one
-     hit target to its left, so the pair stays put across image/video and
-     aspect-ratio changes and never lands on the swipe surface. */
+  /* #199: playback anchors the Viewer transport cluster. Management moved to
+     the Story action row, so playback takes the trailing slot and the cluster
+     still stays put across image/video and aspect-ratio changes. */
   .journey-story__mobile-media-play {
-    right: calc(12px + var(--mobile-control-hit-size, 44px) + 8px);
+    right: 12px;
   }
 
-  /* #199 follow-up: the immersive entry takes the third slot of the same row,
+  /* #199 follow-up: the immersive entry takes the next slot of the same row,
      so Viewer keeps one cluster with one anchor and the swipe surface below the
      control band stays whole. */
   .journey-story__mobile-media-fullscreen {
-    right: calc(12px + 2 * (var(--mobile-control-hit-size, 44px) + 8px));
+    right: calc(12px + var(--mobile-control-hit-size, 44px) + 8px);
   }
 
   .journey-story__mobile-media-fullscreen.is-compact {
-    right: calc(12px + var(--mobile-control-hit-size, 44px) + 8px);
+    right: 12px;
   }
 
   .journey-story__mobile-media-play.is-active {
@@ -7323,7 +7323,6 @@ button.living-atlas__globe-focus-exit {
     color: rgba(238, 250, 246, 0.96);
   }
 
-  .journey-story__mobile-media-actions.has-quick-recap .journey-story__mobile-quick-recap,
   .journey-story__mobile-media-actions.has-quick-recap .journey-story__mobile-autobrowse {
     position: absolute;
     top: 64px;
@@ -7342,10 +7341,6 @@ button.living-atlas__globe-focus-exit {
     white-space: nowrap;
   }
 
-  .journey-story__mobile-media-actions.has-quick-recap .journey-story__mobile-quick-recap {
-    right: 12px;
-  }
-
   .journey-story__mobile-media-actions.has-quick-recap .journey-story__playback-entry {
     position: absolute;
     top: 64px;
@@ -7353,10 +7348,6 @@ button.living-atlas__globe-focus-exit {
     width: calc(100% - 24px);
     justify-content: flex-end;
     pointer-events: none;
-  }
-
-  .journey-story__mobile-media-actions.has-quick-recap .journey-story__playback-entry .journey-story__mobile-quick-recap {
-    position: static;
   }
 
   .journey-story__mobile-media-actions .journey-story__playback-entry .journey-story__quick-recap-status {

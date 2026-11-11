@@ -87,7 +87,7 @@ try {
     const geometry = await root.evaluate((story) => {
       const visible = (element) => { const r = element.getBoundingClientRect(); const style = getComputedStyle(element);
         return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none"; };
-      const controls = [...story.querySelectorAll("header button, .journey-story__mobile-media-actions button")]
+      const controls = [...story.querySelectorAll("header button, .journey-story__editor-actions button, .journey-story__mobile-media-actions button")]
         .filter(visible).map((button) => ({ label: button.getAttribute("aria-label") ?? button.textContent,
           ...button.getBoundingClientRect().toJSON() }));
       const collisions = [];
@@ -104,7 +104,10 @@ try {
     assert.ok(geometry.controls.every((control) => control.left >= -1 && control.right <= width + 1), `clipped control in ${view}`);
     assert.ok(geometry.stage.height > 80, `empty media aperture in ${view}`);
     assert.ok(geometry.overflow <= 1, `horizontal document overflow in ${view}`);
-    assert.equal(await page.getByRole("button", { name: "管理旅程", exact: true }).isVisible(), false);
+    // Management trails the Story action row in every mobile mode, so reading
+    // and Manage keep the same position for it.
+    assert.equal(await page.getByRole("button", { name: "管理旅程", exact: true }).evaluate((button) =>
+      Boolean(button.closest(".journey-story__editor-actions")) && button.getClientRects().length > 0), true);
     if (view === "photo") {
       await page.getByRole("button", { name: "选择停靠点", exact: true }).tap();
       assert.equal(await root.getAttribute("data-classic-panel"), "chapters");

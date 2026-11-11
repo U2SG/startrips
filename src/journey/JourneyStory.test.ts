@@ -1095,9 +1095,14 @@ describe("JourneyStory", () => {
     expect(
       sequence.indexOf("journey-story__mobile-media-play"),
     ).toBeGreaterThan(sequence.indexOf('class="journey-story__mobile-media-actions"'));
+    // Management is a Story action: it trails the action row under the header,
+    // ahead of the picture's transport cluster in reading order.
     expect(
-      sequence.indexOf("journey-story__mobile-media-play"),
-    ).toBeLessThan(sequence.indexOf("journey-story__mobile-media-menu-trigger"));
+      sequence.indexOf("journey-story__mobile-media-menu-trigger"),
+    ).toBeGreaterThan(sequence.indexOf('class="journey-story__editor-actions-end"'));
+    expect(
+      sequence.indexOf("journey-story__mobile-media-menu-trigger"),
+    ).toBeLessThan(sequence.indexOf('class="journey-story__mobile-media-actions'));
   });
 
   it("gives mobile Viewer the immersive entry the manage sheet used to own (#199)", () => {
@@ -1125,7 +1130,8 @@ describe("JourneyStory", () => {
     // Immersive viewing is a viewing action: it sits in the Viewer cluster and
     // the management sheet is not even mounted here.
     expect(sequence).not.toContain("journey-story__mobile-media-sheet");
-    // Focus order follows the rendered row: immersive, playback, management.
+    // Focus order: the Story action row's management first, then the
+    // picture's transport cluster, immersive before playback.
     expect(
       sequence.indexOf("journey-story__mobile-media-fullscreen"),
     ).toBeGreaterThan(sequence.indexOf('class="journey-story__mobile-media-actions"'));
@@ -1133,8 +1139,8 @@ describe("JourneyStory", () => {
       sequence.indexOf("journey-story__mobile-media-fullscreen"),
     ).toBeLessThan(sequence.indexOf("journey-story__mobile-media-play"));
     expect(
-      sequence.indexOf("journey-story__mobile-media-play"),
-    ).toBeLessThan(sequence.indexOf("journey-story__mobile-media-menu-trigger"));
+      sequence.indexOf("journey-story__mobile-media-menu-trigger"),
+    ).toBeLessThan(sequence.indexOf("journey-story__mobile-media-fullscreen"));
 
     // A single asset has no sequence to play, so the immersive entry takes the
     // playback slot rather than leaving a hole in the row.

@@ -4,21 +4,21 @@
   box-sizing: border-box;
   --story-safe-bottom: env(safe-area-inset-bottom, 0px);
   --classic-aperture: clamp(150px, 30svh, 320px);
-  --journey-story-sheet-extent: min(72svh, 680px);
+  --journey-story-sheet-extent: min(100svh, calc(min(72svh, 680px) + var(--story-action-row-height, 0px)));
   padding-bottom: var(--story-safe-bottom);
   scroll-padding-block: 112px 24px;
 }
 .journey-story[data-classic-view="thumb"] {
   --classic-aperture: clamp(160px, 34svh, 350px);
-  --journey-story-sheet-extent: min(78svh, 740px);
+  --journey-story-sheet-extent: min(100svh, calc(min(78svh, 740px) + var(--story-action-row-height, 0px)));
 }
 .journey-story[data-classic-view="photo"] {
   --classic-aperture: clamp(190px, 44svh, 470px);
-  --journey-story-sheet-extent: min(86svh, 840px);
+  --journey-story-sheet-extent: min(100svh, calc(min(86svh, 840px) + var(--story-action-row-height, 0px)));
 }
 .journey-story[data-classic-view="earth"] {
   --classic-aperture: clamp(130px, 21svh, 230px);
-  --journey-story-sheet-extent: min(56svh, 540px);
+  --journey-story-sheet-extent: min(100svh, calc(min(56svh, 540px) + var(--story-action-row-height, 0px)));
 }
 .journey-story[data-classic-view] > header {
   display: flex; gap: var(--control-gap); height: 56px; padding-inline: 12px;
@@ -80,20 +80,13 @@
 .journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-media-actions > .journey-story__classic-chapters { order: 1; }
 .journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-media-actions > :is(.journey-story__playback-entry, .journey-story__mobile-media-play) { order: 2; }
 .journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-media-actions > .journey-story__classic-more { order: 3; }
-.journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-media-actions .journey-story__mobile-quick-recap {
-  position: static; min-width: 44px; width: 44px; height: 44px; min-height: 44px;
-  padding: 0; display: grid; place-items: center;
-  border: 1px solid var(--control-line); border-radius: var(--control-radius);
-  color: var(--control-ink); background: var(--control-fill); pointer-events: auto;
-}
-.journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__mobile-quick-recap > span { display: none; }
 .journey-story[data-classic-view][data-mobile-mode="viewer"] .journey-story__classic-toolbar-break { display: none; }
 .journey-story[data-classic-view][data-mobile-mode="viewer"][data-classic-panel="more"] .journey-story__classic-toolbar-break {
   display: block; order: 4; flex-basis: 100%; height: 0;
 }
 .journey-story[data-classic-view][data-mobile-mode="viewer"]:not([data-classic-panel="more"]) :is(
   .journey-story__mobile-media-fullscreen, .journey-story__mobile-autobrowse,
-  .journey-story__mobile-media-menu-trigger, .story-media-rail,
+  .story-media-rail,
   .journey-story__copy > dl, .journey-story__stops, .journey-story__soundtrack,
   .journey-story__navigation
 ) { display: none; }
@@ -103,7 +96,7 @@
 .journey-story[data-classic-view][data-classic-playing="true"] .journey-story__mobile-quick-recap { display: none; }
 .journey-story[data-classic-view][data-classic-panel="none"] .journey-story__route-points { display: none; }
 .journey-story[data-classic-view] .journey-story__copy {
-  min-height: 0; padding: 12px 18px 20px; border: 0;
+  min-height: 0; padding: 12px var(--story-mobile-gutter, 18px) 20px; border: 0;
 }
 .journey-story[data-classic-view] .journey-story__copy > :is(.journey-story__note, .journey-story__point-note) {
   margin-block: 8px; font-size: 15px; line-height: 1.8;
@@ -126,7 +119,7 @@
 .journey-story[data-classic-view="thumb"][data-mobile-mode="viewer"] .journey-story__mobile-media-actions {
   border-block: 1px solid var(--control-line); background: var(--control-fill);
 }
-.journey-story[data-classic-view="thumb"] :is(.journey-story__mobile-quick-recap, .journey-story__mobile-media-play) {
+.journey-story[data-classic-view="thumb"] .journey-story__mobile-media-play {
   color: var(--control-primary-ink); background: var(--startrips-starlight);
 }
 .journey-story[data-classic-view="photo"] .journey-story__classic-context > small { display: none; }
