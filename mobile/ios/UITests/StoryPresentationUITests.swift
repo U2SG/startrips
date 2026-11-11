@@ -9,15 +9,10 @@ final class StoryPresentationUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture"]
         app.launch()
-        let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
-        XCTAssertTrue(chip.waitForExistence(timeout: 30))
-        chip.tap()
-        let point = app.webViews.switches["起点"]
-        XCTAssertTrue(point.waitForExistence(timeout: 10))
-        point.tap()
-        chip.tap()
-        let story = app.webViews.buttons["打开故事：起点"].firstMatch
-        XCTAssertTrue(story.waitForExistence(timeout: 10))
+        XCTAssertTrue(card(app).waitForExistence(timeout: 30))
+        choosePoint(app, "point-a")
+        let story = openCard(app)
+        XCTAssertEqual(story.label, "打开故事：起点")
         story.tap()
         XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10))
         let style = app.buttons["story.style"]
@@ -59,13 +54,9 @@ final class StoryPresentationUITests: XCTestCase {
 
         // The choice is remembered: closing and reopening the Story keeps the stream.
         app.buttons["story.close"].tap()
-        XCTAssertTrue(chip.waitForExistence(timeout: 10))
-        chip.tap()
-        XCTAssertTrue(point.waitForExistence(timeout: 10))
-        point.tap()
-        chip.tap()
-        XCTAssertTrue(story.waitForExistence(timeout: 10))
-        story.tap()
+        XCTAssertTrue(card(app).waitForExistence(timeout: 10))
+        choosePoint(app, "point-a")
+        openCard(app).tap()
         XCTAssertTrue(element(app, "story.stream").waitForExistence(timeout: 10))
         XCTAssertEqual(app.buttons["story.style"].value as? String, "旅程之流")
         choose(app, "默认")

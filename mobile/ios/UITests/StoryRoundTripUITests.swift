@@ -3,15 +3,11 @@ import XCTest
 extension AtlasUITests {
     // Continue from the same live Atlas, after its initial Story round trip and foreground restore.
     @MainActor func verifyNativeMediaRoundTrip(in app: XCUIApplication) {
-        let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
-        XCTAssertTrue(chip.waitForExistence(timeout: 10))
-        chip.tap()
-        let point = app.webViews.switches["起点"]
-        XCTAssertTrue(point.waitForExistence(timeout: 10))
-        point.tap()
-        chip.tap()
-        let story = app.webViews.buttons["打开故事：起点"].firstMatch
-        XCTAssertTrue(story.waitForExistence(timeout: 10))
+        let peek = card(app)
+        XCTAssertTrue(peek.waitForExistence(timeout: 10))
+        choosePoint(app, "point-a")
+        let story = openCard(app)
+        XCTAssertEqual(story.label, "打开故事：起点")
         story.tap()
         let close = app.buttons["story.close"]
         XCTAssertTrue(close.waitForExistence(timeout: 10))
@@ -53,7 +49,7 @@ extension AtlasUITests {
         close.tap()
         XCTAssertTrue(app.buttons["story.play"].waitForExistence(timeout: 5))
         close.tap()
-        XCTAssertTrue(chip.waitForExistence(timeout: 10))
+        XCTAssertTrue(peek.waitForExistence(timeout: 10))
         // Assert the real Atlas navigation state after native Story returns,
         // not only that a selectable point is rendered again.
         XCTAssertEqual(app.staticTexts["atlas.selection.point"].label, "point-a")
