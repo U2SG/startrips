@@ -43,6 +43,9 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [hotels, setHotels] = useState<HotelPreview | null>(null);
+  // An AI-imported preview that was saved goes straight on to the hotel step.
+  const [fromImport, setFromImport] = useState(false);
+  const [findHotels, setFindHotels] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const [editing, setEditing] = useState(false);
   const requests = useRef(createJournalRequestSlot());
@@ -74,11 +77,25 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
     if (importControl.current && !await importControl.current.stop()) return;
     requests.current.cancel(); onClose();
   }
+  function searchHotels(keepNotice?: string) {
+    return run("检索酒店", async signal => {
+      // run() clears messages; the automatic step keeps the save confirmation.
+      if (keepNotice) setNotice(keepNotice);
+      setHotels(null);
+      const preview = await client.previewHotels!(journey.id, signal);
+      if (!signal.aborted) setHotels(preview);
+    });
+  }
+  useEffect(() => {
+    if (!findHotels || busy) return;
+    setFindHotels(false);
+    void searchHotels("手记已保存。");
+  }, [findHotels, busy]); // eslint-disable-line react-hooks/exhaustive-deps
   function stopOperation() {
     requests.current.cancel(); setBusy(null); setError(""); setNotice("已停止，原文和草稿已保留。");
   }
   function cancelDraft() {
-    requests.current.cancel(); setBusy(null); setDraft(null); setEditing(false); setSource(""); setError(""); setNotice("已取消，未保存预览。");
+    requests.current.cancel(); setBusy(null); setDraft(null); setFromImport(false); setEditing(false); setSource(""); setError(""); setNotice("已取消，未保存预览。");
   }
   function updateChapter(id: string, transform: (chapter: JournalChapter) => JournalChapter) {
     setDraft((value) => value ? { ...value, chapters: value.chapters.map((c) => c.id === id ? transform(c) : c) } : value);
@@ -105,17 +122,13 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
           onBusy={value => setBusy(current => value ? "导入" : current === "导入" ? null : current)}
           onPreview={preview => {
             if (preview.revision !== saved.revision) { setError("手记已更新，请保留原文，重新打开后导入。"); return false; }
-            setDraft(preview); setEditing(false); setHotels(null); setError(""); setNotice(`识别完成，已填入 ${preview.chapters.length} 章、${preview.chapters.reduce((count, chapter) => count + chapter.events.length, 0)} 条记录的完整预览，尚未保存。缺失或有歧义的内容单独列出，可在编辑中调整。`); return true;
+            setDraft(preview); setEditing(false); setHotels(null); setFromImport(true); setError(""); setNotice(`识别完成，已填入 ${preview.chapters.length} 章、${preview.chapters.reduce((count, chapter) => count + chapter.events.length, 0)} 条记录的完整预览，尚未保存。缺失或有歧义的内容单独列出，可在编辑中调整。`); return true;
           }} />
       </section>
       {!draft && saved.chapters.length > 0 ? <button disabled={!!busy || !!hotels} onClick={() => { setDraft(structuredClone(saved)); setEditing(true); }}>编辑已有手记</button> : null}
       {!draft && !source && saved.chapters.length > 0 && client.previewHotels && client.applyHotels ? <section aria-label="酒店工具导入">
         <p>AI 向已配置模型发送原文事件，用酒店名称与地区检索地点。先预览再确认；不推测坐标，不改变正文或当地时间。</p>
-        <button disabled={!!busy} onClick={() => run("检索酒店", async signal => {
-          setHotels(null);
-          const preview = await client.previewHotels!(journey.id, signal);
-          if (!signal.aborted) setHotels(preview);
-        })}>用 AI 查找已入住酒店</button>
+        <button disabled={!!busy} onClick={() => void searchHotels()}>用 AI 查找已入住酒店</button>
         {hotels ? <><ul>{hotels.hotels.map(h => <li key={h.eventId}><strong>{h.label}</strong> · {h.context}<p>原文：{h.evidence}</p><span>{h.existingPointId ? "复用已有地点" : "新增住宿地点"}；确认后记为实际入住</span></li>)}</ul>
           {hotels.questions.map((q, i) => <p key={i}>{q}</p>)}
           {!hotels.hotels.length ? <p>没有可可靠确认的住宿地点；未写入。</p> : null}
@@ -131,7 +144,7 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
         <button disabled={!!busy} aria-pressed={editing} onClick={() => setEditing(value => !value)}>{editing ? "返回阅读" : "编辑预览"}</button>
         <button disabled={!!busy} onClick={() => run("保存", async (signal) => {
           const result = await client.save(journey.id, draft, signal);
-          if (!signal.aborted) { setSaved(result); setDraft(null); setEditing(false); setSource(""); setNotice("手记已保存。"); }
+          if (!signal.aborted) { setSaved(result); setDraft(null); setEditing(false); setSource(""); setNotice("手记已保存。"); setFindHotels(fromImport && !!client.previewHotels && !!client.applyHotels); setFromImport(false); }
         })}>确认保存</button>
         <button disabled={busy === "保存"} onClick={cancelDraft}>取消预览</button>
         <p>当前内容尚未保存。选填字段可以留空；不会自动添加地图点。</p>

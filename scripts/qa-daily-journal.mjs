@@ -111,6 +111,9 @@ try {
         await route.fulfill({ json: { journal: saved } });
       } else await route.fulfill({ json: { journal: request.url().includes(fixture.id) ? saved : {revision:0,chapters:[]} } });
     });
+    // Saving an AI-imported preview continues straight into the hotel preview.
+    let hotelPreviews=0;
+    await page.route(/\/api\/journeys\/[^/]+\/journal\/hotels\/preview$/, route=>{hotelPreviews++;return route.fulfill({json:{preview:{token:"synthetic",hotels:[],questions:[]}}});});
     const errors=[]; page.on("pageerror", e => errors.push(e.message));
     await page.goto(`${origin}/${output}/index.html`);
     await page.getByRole("button",{name:"每日手记",exact:true}).click();
@@ -155,6 +158,7 @@ try {
     await page.getByText("手记已保存。",{exact:true}).waitFor(); assert.equal(writes,1);
     assert.equal(saved.chapters.length,1);
     assert.equal(saved.chapters[0].source,source);
+    await page.getByText("没有可可靠确认的住宿地点；未写入。",{exact:true}).waitFor(); assert.equal(hotelPreviews,1);
     await importPreview(page,source);
     await page.getByRole("button",{name:"编辑预览",exact:true}).click();
     assert.equal(await page.getByLabel("阅读正文",{exact:true}).nth(0).inputValue(),"她手工修订了出发记录。");
@@ -184,6 +188,7 @@ try {
   const page=await context.newPage();
   let stored={revision:0,chapters:[]};
   await mockImports(page,()=>stored);
+  await page.route(/\/hotels\/preview$/, route=>route.fulfill({json:{preview:{token:"synthetic",hotels:[],questions:[]}}}));
   await page.route(/\/api\/journeys\/[^/]+\/journal$/, async route=>{
     if(route.request().method()==="PUT") stored={revision:1,chapters:route.request().postDataJSON().chapters};
     await route.fulfill({json:{journal:stored}});

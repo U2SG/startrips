@@ -6,8 +6,8 @@ import { db } from "../db/client";
 import { atlases, journeys, journeyJournals, journeyRoutePoints, mediaAssets } from "../db/app-schema";
 import { lockActiveAtlas, lockActiveJourney } from "./journey-repository";
 import { EMPTY_JOURNAL, type DailyJournal, type JournalChapter } from "../../src/journey/dailyJournal";
-import { hotelSourceHash, sameHotel, sameHotelName, type HotelPlan } from "../itinerary/journal-hotel-tools";
-import { hasExplicitHotelStayAt, hotelContextMatchesArea } from "../../src/journey/journalHotels";
+import { hotelSourceHash, sameHotel, type HotelPlan } from "../itinerary/journal-hotel-tools";
+import { hasExplicitHotelStay, isHotelEligible, similarHotelName } from "../../src/journey/journalHotels";
 
 /** Confirmed, server-signed plan; one transaction for both route and journal. */
 export async function applyJournalHotels(plan: HotelPlan, atlasId: string, journeyId: string, connection: Pick<typeof db, "transaction"> = db) {
@@ -30,13 +30,13 @@ export async function applyJournalHotels(plan: HotelPlan, atlasId: string, journ
     for (const event of events) {
       const hotel = plan.hotels.find(h => h.eventId === event.id);
       if (!hotel) continue;
-      if (event.routePointId || !["actual", "uncertain"].includes(event.status) || hotelSourceHash(event.source) !== hotel.sourceHash
-        || typeof hotel.sourceName !== "string" || !sameHotelName(hotel.sourceName, hotel.label)
-        || !hasExplicitHotelStayAt(event.source, hotel.sourceName, hotel.sourceArea) || !hotelContextMatchesArea(hotel.context, hotel.sourceArea)) throw new JournalWriteError("JOURNAL_CHANGED", 409);
+      if (event.routePointId || !isHotelEligible(event) || hotelSourceHash(event.source) !== hotel.sourceHash
+        || typeof hotel.sourceName !== "string" || typeof hotel.searchName !== "string"
+        || !(similarHotelName(hotel.label, hotel.searchName) || similarHotelName(hotel.label, hotel.sourceName))
+        || !hasExplicitHotelStay(event.source, hotel.sourceName)) throw new JournalWriteError("JOURNAL_CHANGED", 409);
       const matches = points.filter(p => sameHotel(p, hotel));
       if (matches.length > 1 || (hotel.existingPointId && matches[0]?.id !== hotel.existingPointId)) throw new JournalWriteError("JOURNAL_CHANGED", 409);
       let point = matches[0];
-      if (point && !hotelContextMatchesArea(point.regionContext, hotel.sourceArea)) throw new JournalWriteError("JOURNAL_CHANGED", 409);
       if (!point) {
         if (points.length >= 200) throw new JournalWriteError("HOTEL_POINT_LIMIT", 400);
         [point] = await tx.insert(journeyRoutePoints).values({ id: randomUUID(), journeyId, sortOrder: sortOrder++, label: hotel.label,

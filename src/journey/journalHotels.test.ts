@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasExplicitHotelStay, hasExplicitHotelStayAt, hotelContextMatchesArea } from "./journalHotels";
+import { distanceKm, hasExplicitHotelStay, hasExplicitHotelStayAt, hotelContextMatchesArea, isHotelEligible, isLodgingCategory, similarHotelName } from "./journalHotels";
 
 describe("hotel stay attribution", () => {
   it.each([
@@ -58,5 +58,51 @@ describe("whole address components", () => {
     ["North Fiction City, ZZ", "Fiction City", false],
   ])("matches %s to %s conservatively", (context, area, expected) => {
     expect(hotelContextMatchesArea(context, area)).toBe(expected);
+  });
+});
+
+describe("labelled lodging lines", () => {
+  it.each([
+    ["住宿：星桥酒店", "星桥酒店", true],
+    ["- 住宿：星桥酒店", "星桥酒店", true],
+    ["Hotel: Starbridge Hotel", "Starbridge Hotel", true],
+    ["住宿： 返程航班，无酒店", "返程航班", false],
+    ["住宿：星桥酒店旁的民宿", "星桥酒店", false],
+    ["住宿： 拉斯维加斯枫丹白露酒店（Fontainebleau Las Vegas）", "拉斯维加斯枫丹白露酒店", true],
+    ["住宿：星桥酒店，次日取消", "星桥酒店", false],
+    ["住宿：山谷酒店", "星桥酒店", false],
+    ["今天住宿：星桥酒店", "星桥酒店", false],
+  ])("%s -> %s is %s", (source, name, expected) => {
+    expect(hasExplicitHotelStay(source, name)).toBe(expected);
+  });
+  it("makes labelled lines eligible even when planned, and cancelled events never", () => {
+    expect(isHotelEligible({ status: "actual", source: "入住星桥酒店" })).toBe(true);
+    expect(isHotelEligible({ status: "uncertain", source: "入住星桥酒店" })).toBe(true);
+    expect(isHotelEligible({ status: "planned", source: "住宿：星桥酒店" })).toBe(true);
+    expect(isHotelEligible({ status: "planned", source: "- 酒店: Starbridge Hotel" })).toBe(true);
+    expect(isHotelEligible({ status: "planned", source: "入住星桥酒店" })).toBe(false);
+    expect(isHotelEligible({ status: "cancelled", source: "住宿：星桥酒店" })).toBe(false);
+  });
+});
+
+describe("hotel name similarity and lodging categories", () => {
+  it.each([
+    ["Best Western Plus Carmel Bay View Inn", "Carmel Bay View Inn", true],
+    ["Fontainebleau Miami Beach", "Fontainebleau Resort", true],
+    ["星桥酒店", "星桥酒店 虚构城", true],
+    ["Hilton Garden Inn", "Marriott Garden Inn", false],
+    ["星桥酒店", "山谷酒店", false],
+    ["Starbridge Hotel", "Valley Hotel", false],
+  ])("%s ~ %s is %s", (a, b, expected) => {
+    expect(similarHotelName(a, b)).toBe(expected);
+    expect(similarHotelName(b, a)).toBe(expected);
+  });
+  it("accepts lodging features and unclassified results only", () => {
+    for (const category of [undefined, "tourism:hotel", "tourism:guest_house", "building:hotel", "leisure:resort"]) expect(isLodgingCategory(category)).toBe(true);
+    for (const category of ["highway:bus_stop", "amenity:restaurant", "tourism:attraction"]) expect(isLodgingCategory(category)).toBe(false);
+  });
+  it("measures great-circle distance in kilometres", () => {
+    expect(distanceKm({ latitude: 0, longitude: 0 }, { latitude: 0, longitude: 0 })).toBe(0);
+    expect(distanceKm({ latitude: 0, longitude: 0 }, { latitude: 0, longitude: 1 })).toBeCloseTo(111.19, 0);
   });
 });

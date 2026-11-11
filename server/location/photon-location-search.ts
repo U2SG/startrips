@@ -121,6 +121,7 @@ function toLocationResult(feature: PhotonFeature): LocationSearchResult | null {
   }
 
   const osmType = text(properties.osm_type);
+  const osmKey = text(properties.osm_key), osmValue = text(properties.osm_value);
   const osmId = typeof properties.osm_id === "string"
     || typeof properties.osm_id === "number"
     ? String(properties.osm_id)
@@ -137,6 +138,7 @@ function toLocationResult(feature: PhotonFeature): LocationSearchResult | null {
     countryCode: text(properties.countrycode).toUpperCase(),
     latitude,
     longitude,
+    ...(osmKey && osmValue ? { category: `${osmKey}:${osmValue}` } : {}),
   };
 }
 
