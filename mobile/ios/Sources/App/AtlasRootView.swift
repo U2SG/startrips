@@ -12,6 +12,8 @@ struct AtlasRootView: View {
     @State private var googleLoginFailed = false
     @State private var sceneRecoveryRequired = false
     @State private var accountMenuPresented = false
+    @StateObject private var covers = JourneyCoverStore()
+    @Namespace private var storyNamespace
 
     private var loading: Bool {
         launching || (connected && !router.installed && session.busy)
@@ -27,6 +29,10 @@ struct AtlasRootView: View {
                     AtlasSceneView(router: router, mapOrigin: session.origin)
                         .id(sceneIdentity)
                         .ignoresSafeArea()
+                    if router.presentation.globeOnly && router.installed {
+                        AtlasChrome(router: router, session: session, covers: covers,
+                                    storyNamespace: storyNamespace) { accountMenuPresented = true }
+                    }
                 } else if !launching {
                     #if DEBUG
                     WelcomeView(signIn: signIn, pasteShare: pasteShare, debugOrigin: $session.originText)
@@ -218,6 +224,7 @@ struct AtlasRootView: View {
 
     private func leaveAtlas(_ end: () -> Void) {
         end()
+        covers.reset()
         router.clear()
         sceneRecoveryRequired = false
         sceneIdentity = UUID()

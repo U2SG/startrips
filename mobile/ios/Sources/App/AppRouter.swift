@@ -185,6 +185,12 @@ final class AppRouter: ObservableObject {
                requestId: UUID().uuidString, story: true)
     }
 
+    /// The Journey the native card shows: a ribbon preview, else the selection, else the first.
+    var focusedJourneyId: String? {
+        let id = preview?.journeyId ?? selection?.journeyId
+        return journeys.contains(where: { $0.id == id }) ? id : journeys.first?.id
+    }
+
     /// Fly the camera to a Journey while the ribbon is being dragged.
     func previewFocus(journeyId: String?) {
         guard path.isEmpty else { return }
