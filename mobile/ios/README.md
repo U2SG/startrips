@@ -29,15 +29,19 @@ and home indicator and pads itself with `env(safe-area-inset-*)`.
 
 The native Atlas follows the **Night Flight** concept: the globe is the stage
 and the bundled scene renders only the globe. SwiftUI owns every control: the
-wordmark and account menu, a draggable year/month time ribbon (dragging previews
-the camera across Journeys by date; release commits), and a three-detent Journey
+wordmark and a Settings avatar (account actions, map label language 中文/双语,
+city names), a draggable year/month time ribbon (dragging previews the camera
+across Journeys by date; a finer track places the focused Journey's Route Points
+by `occurredAt`, evenly by order when undated; release commits), and a three-detent Journey
 card (peek: title, dates, route stats, horizontal swipe switches Journey;
 medium: the real cover, loaded natively through the same scoped read path as
 native Story, plus Route Points; large: the note and every Journey). Signed
 media URLs never reach the scene. On iOS 18 Story zooms out of the cover; system
 pops leave Story through its own exit. Tokens live in `Sources/Design/`.
 Low vision follows Dynamic Type, Bold Text and Increase Contrast only; globe
-labels are fewer, at least 15pt, opaque and haloed (`Scene/scene.css`).
+labels are fewer, at least 15pt, opaque and haloed (`Scene/scene.css`); the
+detail map's MapLibre labels get the same floor through `Scene/detailMap.ts`,
+which patches the iPhone bundle's MapLibre prototype only.
 
 `Sources/App/AppRouter.swift` owns the navigation stack, selection and revision.
 `Scene/main.tsx` bundles the real production `LivingAtlasGlobe` (Three.js and
@@ -59,7 +63,7 @@ so rapid consecutive selections from one snapshot are accepted in WK message
 order. Duplicate IDs, stale scopes/revisions and foreign point/media ownership
 are rejected. Render acknowledgements also bind the current selection request.
 Swift and TypeScript decode the same synthetic `Fixtures/bridge.json`.
-Native -> scene commands (`focus`, `timeWindow`, `chrome` globe-only, `insets`)
+Native -> scene commands (`focus`, `timeWindow`, `chrome` globe-only, `insets`, `labels`)
 carry the live scope and revision without bumping it; stale or foreign commands
 are dropped by `decodeCommand` and refused by `validateSceneCommand`.
 
