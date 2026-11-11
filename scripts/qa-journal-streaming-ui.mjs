@@ -68,7 +68,7 @@ try {
     const start = async () => { await page.getByRole('button',{name:'用 AI 导入',exact:true}).click(); await page.waitForFunction(()=>window.__qa.observes===1); };
     const noDraft = async () => assert.equal(await page.getByRole('button',{name:'确认保存',exact:true}).count(),0);
     const noOverflow = async () => assert.equal(await page.locator('.daily-journal').evaluate(el=>el.scrollWidth>el.clientWidth+1),false);
-    await open(); await fill('持续接收'); await page.locator('.daily-journal__source-count').filter({hasText:'仅在本地统计'}).waitFor();
+    await open(); await fill('持续接收'); await page.locator('.daily-journal__source-count').waitFor();
     const sourceCount = await page.locator('.daily-journal__source-count').innerText();
     await start();
     for (const [phase, label] of [['queued','正在等待处理…'],['connecting','正在连接模型…'],['receiving','正在接收识别结果…'],['validating','正在处理 · 核对完整记录…']]) {

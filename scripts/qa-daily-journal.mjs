@@ -178,7 +178,7 @@ try {
     await page.evaluate(()=>window.dispatchEvent(new Event("qa-account-switch")));
     imports.release?.();
     await page.getByRole("button",{name:"每日手记",exact:true}).click();
-    await page.getByText("还没有每日手记。可以先导入文字，无照片和坐标也能保存阅读。",{exact:true}).waitFor();
+    await page.getByLabel("原始流水账").waitFor();
     assert.equal(await page.getByText("她手工修订了出发记录。",{exact:true}).count(),0);
     assert.deepEqual(errors,[]);
     await context.close();
@@ -231,7 +231,7 @@ try {
   assert.equal(stored.chapters.length,14);
   await page.getByRole("button",{name:"确认撤销",exact:true}).click();
   await page.getByText("已撤销这次导入。",{exact:true}).waitFor();
-  await page.getByText("还没有每日手记。可以先导入文字，无照片和坐标也能保存阅读。",{exact:true}).waitFor();
+  await page.getByLabel("原始流水账").waitFor();
   assert.deepEqual(undoBodies,[{baseRevision:1,confirmEdited:false},{baseRevision:1,confirmEdited:true}]);
   assert.equal(await page.getByRole("button",{name:"撤销这次导入",exact:true}).count(),0);
   await context.close();

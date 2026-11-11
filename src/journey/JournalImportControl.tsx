@@ -97,7 +97,6 @@ export function JournalImportControl({ client, input, disabled, control, onBusy,
   return <div className="daily-journal__ai-import">
     <button type="button" disabled={disabled || active || !client || !input.source.trim()} onClick={start}>用 AI 导入</button>
     {!client ? <p role="status">AI 导入暂不可用，原文仍保留；请稍后重试。</p> : null}
-    <p className="daily-journal__muted">识别完成后自动填入预览。没有明确日期的章节暂归到 {input.fallbackDate}（旅程起始日，不代表事件发生日期），可在编辑中调整；缺失的钟点和地图点不会猜填。</p>
     {state && (state.status !== "completed" || (disabled && input.source === submittedSource.current)) ? <JournalImportProgress
       state={state} onStop={() => { void control.current?.stop(); }} onResume={() => { void control.current?.resume(); }} /> : null}
   </div>;
