@@ -127,4 +127,51 @@ final class NightFlightTests: XCTestCase {
         XCTAssertEqual(router.path, [handoff])
         XCTAssertEqual(exits, 2)
     }
+
+    private func journey(_ start: String, _ end: String?, points: [String?]) -> AtlasJourney {
+        AtlasJourney(id: "j", title: "j", startedOn: start, endedOn: end, note: "", lightColor: "#d6b58c",
+                     lightEffect: nil, routeSegments: nil, revision: 1,
+                     routePoints: points.enumerated().map { AtlasRoutePoint(id: "p\($0.offset)", latitude: 0, longitude: 0,
+                                                                             label: "p\($0.offset)", isStop: true, occurredAt: $0.element) },
+                     media: [])
+    }
+
+    func testRoutePointTicksUseOccurredAtElseEvenSpacing() {
+        func positions(_ journey: AtlasJourney) -> [Double] {
+            RoutePointTicks.ticks(for: journey).map { ($0.position * 1000).rounded() / 1000 }
+        }
+        // No dates at all: evenly by order; a single point sits in the middle.
+        XCTAssertEqual(positions(journey("2025-01-01", "2025-01-02", points: [nil, nil, nil])), [0, 0.5, 1])
+        XCTAssertEqual(positions(journey("2025-01-01", nil, points: [nil])), [0.5])
+        // Dated points sit on the Journey's own time span (start of first day to end of last).
+        let dated = positions(journey("2025-01-01", "2025-01-02", points: ["2025-01-01T00:00:00Z", "2025-01-01T23:59:59Z", "2025-01-02T23:59:59Z"]))
+        XCTAssertEqual(dated, [0, 0.5, 1])
+        // Mixed: dated points by time, undated by order.
+        let mixed = positions(journey("2025-01-01", "2025-01-02", points: ["2025-01-02T00:00:00.000Z", nil, nil]))
+        XCTAssertEqual(mixed, [0.5, 0.5, 1])
+        // An undated Journey and undated points still get ticks.
+        XCTAssertEqual(positions(journey("", nil, points: [nil, nil])), [0, 1])
+        // A date-only occurredAt is read as that day.
+        XCTAssertEqual(RoutePointTicks.date("2025-03-04"), RoutePointTicks.date("2025-03-04T00:00:00Z"))
+        let ticks = RoutePointTicks.ticks(for: journey("2025-01-01", "2025-01-02", points: [nil, nil, nil]))
+        XCTAssertEqual(RoutePointTicks.nearest(0.3, in: ticks), "p1")
+        XCTAssertEqual(RoutePointTicks.nearest(-2, in: ticks), "p0")
+        XCTAssertNil(RoutePointTicks.nearest(0.5, in: []))
+    }
+
+    func testRoutePointPreviewIsCameraOnlyUntilReleased() throws {
+        let router = AppRouter(defaults: UserDefaults(suiteName: "points." + UUID().uuidString)!)
+        router.install([journey("2025-01-01", "2025-01-02", points: [nil, nil])], identity: "points",
+                       access: .owner, earthExperience: "default")
+        router.previewFocus(journeyId: "j", routePointId: "p1")
+        let preview = try XCTUnwrap(router.preview)
+        XCTAssertEqual(preview.routePointId, "p1")
+        XCTAssertNil(router.selection, "a preview is never a selection")
+        XCTAssertNoThrow(try validateSceneCommand(router.command(.focus, journeyId: "j", routePointId: "p1"), snapshot: router.snapshot))
+        router.previewFocus(journeyId: "j", routePointId: "other")
+        XCTAssertEqual(router.preview, preview, "a foreign point is ignored")
+        XCTAssertTrue(router.select(journeyId: "j", routePointId: "p1"))
+        XCTAssertNil(router.preview)
+        XCTAssertEqual(router.selection?.routePointId, "p1")
+    }
 }

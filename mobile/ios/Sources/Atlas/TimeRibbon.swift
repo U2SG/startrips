@@ -84,6 +84,47 @@ struct TimeRibbonModel: Equatable {
     }
 }
 
+/// Route Point ticks inside one Journey, as fractions 0...1 of its time span.
+/// `occurredAt` places a point; without one it is spaced evenly by order.
+enum RoutePointTicks {
+    struct Tick: Equatable { let id: String; let position: Double }
+
+    static func ticks(for journey: AtlasJourney) -> [Tick] {
+        let points = journey.routePoints
+        guard !points.isEmpty else { return [] }
+        let even = { (index: Int) in points.count == 1 ? 0.5 : Double(index) / Double(points.count - 1) }
+        let times = points.map { date($0.occurredAt) }
+        let explicit = times.compactMap { $0 }
+        let starts = [date(journey.startedOn)].compactMap { $0 } + explicit
+        let ends = [date(journey.endedOn ?? journey.startedOn).map { $0.addingTimeInterval(86_399) }].compactMap { $0 } + explicit
+        guard let low = starts.min(), let high = ends.max(), high > low else {
+            return points.enumerated().map { Tick(id: $0.element.id, position: even($0.offset)) }
+        }
+        let span = high.timeIntervalSince(low)
+        return points.enumerated().map { index, point in
+            guard let time = times[index] else { return Tick(id: point.id, position: even(index)) }
+            return Tick(id: point.id, position: min(1, max(0, time.timeIntervalSince(low) / span)))
+        }
+    }
+
+    /// The Route Point closest to a position on the point track.
+    static func nearest(_ position: Double, in ticks: [Tick]) -> String? {
+        ticks.min(by: { abs($0.position - position) < abs($1.position - position) })?.id
+    }
+
+    /// `YYYY-MM-DD` (UTC midnight) or a full ISO 8601 timestamp.
+    static func date(_ text: String?) -> Date? {
+        guard let text, !text.isEmpty else { return nil }
+        let full = ISO8601DateFormatter()
+        if let value = full.date(from: text) { return value }
+        full.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let value = full.date(from: text) { return value }
+        let day = ISO8601DateFormatter()
+        day.formatOptions = [.withFullDate]
+        return day.date(from: String(text.prefix(10)))
+    }
+}
+
 /// Draggable year/month ribbon. Dragging flies the camera across Journeys by
 /// date (preview only); releasing commits the Journey under the cursor.
 struct TimeRibbon: View {
@@ -100,6 +141,19 @@ struct TimeRibbon: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            if let journey = focusedJourney, !journey.routePoints.isEmpty {
+                RoutePointTrack(router: router, journey: journey)
+            }
+            journeyTrack
+        }
+    }
+
+    private var focusedJourney: AtlasJourney? {
+        router.journeys.first(where: { $0.id == router.focusedJourneyId })
+    }
+
+    private var journeyTrack: some View {
         GeometryReader { proxy in
             let width = max(1, proxy.size.width - NightFlight.grid(8))
             ZStack(alignment: .leading) {
@@ -200,5 +254,69 @@ struct TimeRibbon: View {
         restingIndex = index == model.lastIndex ? nil : index
         if let journey = model.journey(at: index) { router.select(journeyId: journey) }
         router.previewFocus(journeyId: nil)
+    }
+}
+
+/// Finer ticks for the focused Journey's Route Points. Dragging previews each
+/// point on the globe; release commits it through the normal selection flow.
+struct RoutePointTrack: View {
+    @ObservedObject var router: AppRouter
+    let journey: AtlasJourney
+    @State private var dragPoint: String?
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private var ticks: [RoutePointTicks.Tick] { RoutePointTicks.ticks(for: journey) }
+    private var currentPoint: String? {
+        dragPoint ?? (router.preview?.journeyId == journey.id ? router.preview?.routePointId : nil)
+            ?? (router.selection?.journeyId == journey.id ? router.selection?.routePointId : nil)
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let inset = NightFlight.grid(4)
+            let width = max(1, proxy.size.width - inset * 2)
+            Canvas { context, size in
+                let mid = size.height / 2
+                var line = Path()
+                line.move(to: CGPoint(x: inset, y: mid)); line.addLine(to: CGPoint(x: inset + width, y: mid))
+                context.stroke(line, with: .color(Color(cssHex: journey.lightColor).opacity(0.5)), lineWidth: 1)
+                for tick in ticks {
+                    let x = inset + width * tick.position
+                    let current = tick.id == currentPoint
+                    let dot = Path(ellipseIn: CGRect(x: x - (current ? 5 : 3), y: mid - (current ? 5 : 3),
+                                                     width: current ? 10 : 6, height: current ? 10 : 6))
+                    context.fill(dot, with: .color(current ? NightFlight.accent
+                        : NightFlight.ink.opacity(contrast == .increased ? 1 : 0.7)))
+                }
+            }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                preview(RoutePointTicks.nearest((value.location.x - inset) / width, in: ticks))
+            }.onEnded { _ in commit() })
+        }
+        .frame(height: NightFlight.hitTarget)
+        .accessibilityElement()
+        .accessibilityLabel("路线点")
+        .accessibilityValue(journey.routePoints.first(where: { $0.id == currentPoint })?.label ?? "")
+        .accessibilityAdjustableAction { direction in
+            let ids = ticks.sorted(by: { $0.position < $1.position }).map(\.id)
+            let index = currentPoint.flatMap { ids.firstIndex(of: $0) } ?? (direction == .increment ? -1 : ids.count)
+            let next = min(ids.count - 1, max(0, index + (direction == .increment ? 1 : -1)))
+            guard ids.indices.contains(next) else { return }
+            preview(ids[next]); commit()
+        }
+        .accessibilityIdentifier("atlas.ribbon.points")
+    }
+
+    private func preview(_ point: String?) {
+        guard let point, point != dragPoint else { return }
+        dragPoint = point
+        router.previewFocus(journeyId: journey.id, routePointId: point)
+    }
+
+    private func commit() {
+        guard let point = dragPoint else { return }
+        dragPoint = nil
+        router.select(journeyId: journey.id, routePointId: point)
     }
 }

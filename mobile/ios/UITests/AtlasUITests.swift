@@ -273,6 +273,17 @@ final class AtlasUITests: XCTestCase {
         XCTAssertTrue(waitForLabel(peek, "旅程：海岸旅程"))
         capture(app, "ribbon-scrubbed")
 
+        // The focused Journey's Route Points sit on a finer track: dragging previews,
+        // release commits the point through the normal selection flow.
+        let points = app.descendants(matching: .any)["atlas.ribbon.points"]
+        XCTAssertTrue(points.waitForExistence(timeout: 10))
+        points.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: points.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)))
+        XCTAssertTrue(waitForLabel(app.staticTexts["atlas.selection.point"], "point-b"))
+        XCTAssertTrue(waitForValue(points, "海岸"))
+        XCTAssertTrue(waitForLabel(peek, "旅程：海岸旅程"))
+        capture(app, "ribbon-route-points")
+
         // The large detent lists every Journey; picking one returns to peek on it.
         peek.tap()
         let grabber = app.buttons["atlas.card.grabber"]

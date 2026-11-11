@@ -20,7 +20,7 @@ struct AtlasChrome: View {
         router.journeys.first(where: { $0.id == router.focusedJourneyId })
     }
     private var ribbon: TimeRibbonModel { TimeRibbonModel(journeys: router.journeys) }
-    private var ribbonHeight: CGFloat { NightFlight.hitTarget + NightFlight.grid(3) }
+    @State private var ribbonHeight: CGFloat = NightFlight.hitTarget + NightFlight.grid(3)
 
     var body: some View {
         GeometryReader { proxy in
@@ -42,6 +42,7 @@ struct AtlasChrome: View {
                         if detent == .peek && !ribbon.isEmpty {
                             TimeRibbon(router: router, model: ribbon)
                                 .frame(maxWidth: 560)
+                                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { ribbonHeight = $0 }
                                 .transition(.opacity)
                         }
                     } else {
@@ -52,6 +53,7 @@ struct AtlasChrome: View {
             .onAppear { report(layout) }
             .onChange(of: layout) { _, value in report(value) }
             .onChange(of: detent) { _, _ in report(layout) }
+            .onChange(of: ribbonHeight) { _, _ in report(layout) }
             .onChange(of: router.journeys.isEmpty) { _, _ in report(layout) }
         }
         .onChange(of: router.scopeId) { _, _ in detent = .peek }

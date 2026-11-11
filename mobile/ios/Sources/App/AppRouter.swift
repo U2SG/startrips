@@ -212,11 +212,12 @@ final class AppRouter: ObservableObject {
     }
 
     /// Fly the camera to a Journey while the ribbon is being dragged.
-    func previewFocus(journeyId: String?) {
+    func previewFocus(journeyId: String?, routePointId: String? = nil) {
         guard path.isEmpty else { return }
-        guard let journeyId, journeys.contains(where: { $0.id == journeyId }) else { preview = nil; return }
-        guard preview?.journeyId != journeyId else { return }
-        preview = ScenePreview(journeyId: journeyId, routePointId: nil, requestId: UUID().uuidString)
+        guard let journeyId, let journey = journeys.first(where: { $0.id == journeyId }) else { preview = nil; return }
+        if let routePointId, !journey.routePoints.contains(where: { $0.id == routePointId }) { return }
+        guard preview?.journeyId != journeyId || preview?.routePointId != routePointId else { return }
+        preview = ScenePreview(journeyId: journeyId, routePointId: routePointId, requestId: UUID().uuidString)
     }
 
     func command(_ kind: SceneCommandKind, journeyId: String? = nil, routePointId: String? = nil,
