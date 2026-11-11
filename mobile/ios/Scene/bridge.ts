@@ -110,11 +110,13 @@ export function send(snapshot: Snapshot, kind: SceneEvent["kind"], target: Parti
 // never bump it, so a layout change cannot stale-reject in-flight scene events.
 export type TimeWindow = { start: string; end: string };
 export type CameraInsets = { top: number; bottom: number };
+export type LabelPreferences = { language: "zh" | "bilingual"; showPlaceNames: boolean };
 export type SceneCommand =
   | { kind: "focus"; requestId: string; journeyId: string; routePointId: string | null }
   | { kind: "timeWindow"; requestId: string; window: TimeWindow | null }
   | { kind: "chrome"; requestId: string; globeOnly: boolean }
-  | { kind: "insets"; requestId: string; insets: CameraInsets };
+  | { kind: "insets"; requestId: string; insets: CameraInsets }
+  | { kind: "labels"; requestId: string; labels: LabelPreferences };
 
 const day = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
 const inset = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 4096;
@@ -125,7 +127,14 @@ export function decodeCommand(value: unknown, snapshot: Snapshot | null): SceneC
   if (!object(value) || value.version !== CONTRACT_VERSION || !uuid(value.requestId)) throw Error("invalid-command");
   if (!snapshot || value.scopeId !== snapshot.scopeId || value.revision !== snapshot.revision) throw Error("stale-command");
   const requestId = value.requestId as string;
+  if (value.kind !== "labels" && value.labels != null) throw Error("invalid-command");
   switch (value.kind) {
+    case "labels": {
+      const labels = value.labels;
+      if (!absent(value, "journeyId", "routePointId", "window", "globeOnly", "insets") || !object(labels)
+        || (labels.language !== "zh" && labels.language !== "bilingual") || typeof labels.showPlaceNames !== "boolean") throw Error("invalid-command");
+      return { kind: "labels", requestId, labels: { language: labels.language, showPlaceNames: labels.showPlaceNames } };
+    }
     case "focus": {
       if (!absent(value, "window", "globeOnly", "insets")) throw Error("invalid-command");
       const journey = snapshot.journeys.find((candidate) => candidate.id === value.journeyId);

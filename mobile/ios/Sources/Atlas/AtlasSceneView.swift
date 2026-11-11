@@ -143,6 +143,9 @@ struct AtlasSceneView: UIViewRepresentable {
             if lastPresentation?.insets != presentation.insets {
                 commands.append(router.command(.insets, insets: presentation.insets))
             }
+            if lastPresentation?.labels != presentation.labels {
+                commands.append(router.command(.labels, labels: presentation.labels))
+            }
             if lastPresentation == nil || lastPresentation?.window != presentation.window {
                 commands.append(router.command(.timeWindow, window: presentation.window))
             }

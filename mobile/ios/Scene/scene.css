@@ -41,9 +41,14 @@ body { background: #07090f; color: var(--archive-ink); font-family: var(--archiv
    The persistent Earth host is a sibling of <main>, so these rules are scoped
    to the document; this stylesheet ships only in the iPhone bundle. Only the
    focused Journey's Route Point labels are drawn (main.tsx filters the
-   others) and decorative city names are dropped. Increase Contrast (WebKit
+   others); city names follow the native 城市名称 setting. The detail map's
+   MapLibre labels are sized in detailMap.ts. Increase Contrast (WebKit
    mirrors it as prefers-contrast: more) strengthens the halo further. */
-html .particle-earth-city-layer { display: none; }
+html:not([data-place-names="on"]) .particle-earth-city-layer { display: none; }
+/* Native Settings owns the detail map's language; pinch and rotate replace the
+   zoom/compass buttons. Attribution stays (map data licence). */
+html .living-atlas-globe__language,
+html .detailed-earth-map .maplibregl-ctrl-group { display: none !important; }
 html .particle-earth-route__label text {
   fill: #f2f4f8;
   fill-opacity: 1;

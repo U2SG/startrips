@@ -107,6 +107,14 @@
       "revision": 7,
       "requestId": "00000000-0000-4000-8000-000000000006",
       "insets": { "top": 64, "bottom": 188 }
+    },
+    {
+      "version": 2,
+      "kind": "labels",
+      "scopeId": "synthetic-atlas-scope",
+      "revision": 7,
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "labels": { "language": "bilingual", "showPlaceNames": true }
     }
   ]
 }

@@ -101,7 +101,7 @@ final class AppTests: XCTestCase {
     func testSharedFixtureCommandsAndStaleCommandRejection() throws {
         let fixture = try fixture()
         XCTAssertEqual(fixture.snapshot.version, SceneContract.version)
-        XCTAssertEqual(fixture.commands.map(\.kind), [.focus, .timeWindow, .chrome, .insets])
+        XCTAssertEqual(fixture.commands.map(\.kind), [.focus, .timeWindow, .chrome, .insets, .labels])
         for command in fixture.commands {
             XCTAssertNoThrow(try validateSceneCommand(command, snapshot: fixture.snapshot))
         }
@@ -128,6 +128,10 @@ final class AppTests: XCTestCase {
         rejects({ $0.globeOnly = nil }, as: .invalidMessage, fixture.commands[2])
         rejects({ $0.insets = SceneInsets(top: -1, bottom: 0) }, as: .invalidMessage, fixture.commands[3])
         rejects({ $0.insets = SceneInsets(top: 0, bottom: .infinity) }, as: .invalidMessage, fixture.commands[3])
+        rejects({ $0.labels = SceneLabelPreferences(language: "en", showPlaceNames: true) }, as: .invalidMessage, fixture.commands[4])
+        rejects({ $0.labels = nil }, as: .invalidMessage, fixture.commands[4])
+        rejects({ $0.globeOnly = true }, as: .invalidMessage, fixture.commands[4])
+        rejects({ $0.labels = SceneLabelPreferences() }, as: .invalidMessage, fixture.commands[2])
         var cleared = fixture.commands[1]; cleared.window = nil
         XCTAssertNoThrow(try validateSceneCommand(cleared, snapshot: fixture.snapshot))
         // A script literal keeps a command as data, exactly like a snapshot.

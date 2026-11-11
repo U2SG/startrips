@@ -81,7 +81,8 @@ describe("native commands (contract v2)", () => {
 
   it("decodes every fixture command Swift also validates", () => {
     expect(fixture.commands.map((command) => decodeCommand(command, snapshot()).kind))
-      .toEqual(["focus", "timeWindow", "chrome", "insets"]);
+      .toEqual(["focus", "timeWindow", "chrome", "insets", "labels"]);
+    expect(decodeCommand(fixture.commands[4], snapshot())).toMatchObject({ labels: { language: "bilingual", showPlaceNames: true } });
     expect(decodeCommand(fixture.commands[0], snapshot())).toMatchObject({ journeyId: "journey-fixture", routePointId: "point-b" });
     expect(decodeCommand({ ...clone(1), window: null }, snapshot())).toMatchObject({ kind: "timeWindow", window: null });
   });
@@ -109,6 +110,11 @@ describe("native commands (contract v2)", () => {
       { ...clone(3), insets: { top: -1, bottom: 0 } },
       { ...clone(3), insets: { top: 0, bottom: Number.POSITIVE_INFINITY } },
       { ...clone(3), kind: "story" },
+      { ...clone(4), labels: { language: "en", showPlaceNames: true } },
+      { ...clone(4), labels: { language: "zh", showPlaceNames: "yes" } },
+      { ...clone(4), labels: null },
+      { ...clone(4), globeOnly: true },
+      { ...clone(2), labels: { language: "zh", showPlaceNames: false } },
     ]) expect(() => decodeCommand(command, snapshot())).toThrow();
   });
 

@@ -6,6 +6,7 @@ struct ScenePresentation: Equatable {
     var globeOnly = true
     var insets = SceneInsets(top: 0, bottom: 0)
     var window: SceneTimeWindow?
+    var labels = SceneLabelPreferences()
 }
 
 /// A ribbon scrub preview: camera only, never persisted and never acknowledged.
@@ -45,7 +46,24 @@ final class AppRouter: ObservableObject {
     /// Set by the live Story destination: leaves Story through StoryModel.finish().
     var onStoryPop: (() -> Void)?
 
-    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        presentation.labels = SceneLabelPreferences(
+            language: defaults.string(forKey: Self.labelLanguageKey).flatMap {
+                SceneLabelPreferences.languages.contains($0) ? $0 : nil } ?? "zh",
+            showPlaceNames: defaults.bool(forKey: Self.placeNamesKey))
+    }
+
+    static let labelLanguageKey = "atlas.labels.language"
+    static let placeNamesKey = "atlas.labels.placeNames"
+
+    /// Settings: device-wide map label preferences, kept across launches and accounts.
+    func setLabels(_ labels: SceneLabelPreferences) {
+        guard SceneLabelPreferences.languages.contains(labels.language) else { return }
+        presentation.labels = labels
+        defaults.set(labels.language, forKey: Self.labelLanguageKey)
+        defaults.set(labels.showPlaceNames, forKey: Self.placeNamesKey)
+    }
 
     /// True once an owner or guest Atlas has been installed for the current scope.
     var installed: Bool { identity != nil }
@@ -202,10 +220,11 @@ final class AppRouter: ObservableObject {
     }
 
     func command(_ kind: SceneCommandKind, journeyId: String? = nil, routePointId: String? = nil,
-                 window: SceneTimeWindow? = nil, globeOnly: Bool? = nil, insets: SceneInsets? = nil) -> SceneCommand {
+                 window: SceneTimeWindow? = nil, globeOnly: Bool? = nil, insets: SceneInsets? = nil,
+                 labels: SceneLabelPreferences? = nil) -> SceneCommand {
         SceneCommand(version: SceneContract.version, kind: kind, scopeId: scopeId, revision: revision,
                      requestId: UUID().uuidString, journeyId: journeyId, routePointId: routePointId,
-                     window: window, globeOnly: globeOnly, insets: insets)
+                     window: window, globeOnly: globeOnly, insets: insets, labels: labels)
     }
 
     @discardableResult

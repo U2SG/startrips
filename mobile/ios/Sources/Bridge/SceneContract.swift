@@ -145,7 +145,7 @@ func validateSceneEvent(_ event: SceneEvent, snapshot: SceneSnapshot) throws {
 
 /// Presentation commands never change data, so they carry the live scope and
 /// revision without bumping it; a command for an older snapshot is stale.
-enum SceneCommandKind: String, Codable { case focus, timeWindow, chrome, insets }
+enum SceneCommandKind: String, Codable { case focus, timeWindow, chrome, insets, labels }
 
 /// Closed ISO day range (`YYYY-MM-DD`); `nil` on a timeWindow command clears it.
 struct SceneTimeWindow: Codable, Equatable {
@@ -159,6 +159,13 @@ struct SceneInsets: Codable, Equatable {
     let bottom: Double
 }
 
+/// Map label preferences from native Settings. `language` is `zh` or `bilingual`.
+struct SceneLabelPreferences: Codable, Equatable {
+    var language: String = "zh"
+    var showPlaceNames: Bool = false
+    static let languages = ["zh", "bilingual"]
+}
+
 struct SceneCommand: Codable, Equatable {
     let version: Int
     let kind: SceneCommandKind
@@ -170,6 +177,7 @@ struct SceneCommand: Codable, Equatable {
     var window: SceneTimeWindow? = nil
     var globeOnly: Bool? = nil
     var insets: SceneInsets? = nil
+    var labels: SceneLabelPreferences? = nil
 }
 
 private let isoDay = try! NSRegularExpression(pattern: "^\\d{4}-\\d{2}-\\d{2}$")
@@ -184,7 +192,13 @@ func validateSceneCommand(_ command: SceneCommand, snapshot: SceneSnapshot) thro
     }
     guard command.scopeId == snapshot.scopeId, command.revision == snapshot.revision else { throw BridgeFailure.stale }
     let targeted = command.journeyId != nil || command.routePointId != nil
+    if command.kind != .labels && command.labels != nil { throw BridgeFailure.invalidMessage }
     switch command.kind {
+    case .labels:
+        guard !targeted, command.window == nil, command.globeOnly == nil, command.insets == nil,
+              let labels = command.labels, SceneLabelPreferences.languages.contains(labels.language) else {
+            throw BridgeFailure.invalidMessage
+        }
     case .focus:
         guard command.window == nil, command.globeOnly == nil, command.insets == nil else { throw BridgeFailure.invalidMessage }
         guard let journey = snapshot.journeys.first(where: { $0.id == command.journeyId }) else { throw BridgeFailure.unknownTarget }

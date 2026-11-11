@@ -3,7 +3,8 @@ import { createRoot } from "react-dom/client";
 import { StartripsBrandLoader } from "../../../src/brand/StartripsBrandMark";
 import { toJourneyRoutes } from "../../../src/journey/journeyModel";
 import { LivingAtlasGlobe, PersistentEarthProvider, usePersistentEarth } from "../../../src/scene/LivingAtlasGlobe";
-import { acceptsSnapshot, atlasSceneFocus, decodeCommandOrDrop, decodeSnapshotOrReport, renderJourneys, send, windowReveal, type CameraInsets, type Snapshot, type TimeWindow } from "./bridge";
+import { installDetailMapOverrides, setDetailLabelPreferences } from "./detailMap";
+import { acceptsSnapshot, atlasSceneFocus, decodeCommandOrDrop, decodeSnapshotOrReport, renderJourneys, send, windowReveal, type CameraInsets, type LabelPreferences, type Snapshot, type TimeWindow } from "./bridge";
 import "../../../src/styles/tokens.css";
 import "../../../src/styles/controls.css";
 import "../../../src/styles/living-atlas.css";
@@ -24,6 +25,9 @@ window.atlasNative = {
   receive(json) { pendingSnapshot = json; deliverSnapshot?.(json); },
   command(json) { if (deliverCommand) deliverCommand(json); else pendingCommands.push(json); },
 };
+
+// The detail map loads MapLibre lazily; patch the same module instance before it draws.
+void import("maplibre-gl").then(({ Map }) => installDetailMapOverrides(Map.prototype as never));
 
 const reducedMotionQuery = "(prefers-reduced-motion: reduce)";
 
@@ -70,6 +74,7 @@ function AtlasScene() {
   const [insets, setInsets] = useState<CameraInsets | null>(null);
   const [timeWindow, setTimeWindow] = useState<TimeWindow | null>(null);
   const [preview, setPreview] = useState<{ journeyId: string; routePointId: string | null } | null>(null);
+  const [labels, setLabels] = useState<LabelPreferences>({ language: "zh", showPlaceNames: false });
   useEffect(() => {
     deliverSnapshot = (json) => {
       // An unreadable snapshot is reported to native, which owns the reload control.
@@ -92,6 +97,7 @@ function AtlasScene() {
       if (command.kind === "chrome") setGlobeOnly(command.globeOnly);
       else if (command.kind === "insets") setInsets(command.insets);
       else if (command.kind === "timeWindow") setTimeWindow(command.window);
+      else if (command.kind === "labels") setLabels(command.labels);
       else {
         setPreview({ journeyId: command.journeyId, routePointId: command.routePointId });
         setInterrupted(false); setFocusRevision((value) => value + 1);
@@ -110,6 +116,12 @@ function AtlasScene() {
     root.setProperty("--native-atlas-bottom", `${insets.bottom}px`);
     return () => { root.removeProperty("--native-atlas-top-inset"); root.removeProperty("--native-atlas-bottom"); };
   }, [insets]);
+  // Native Settings own map labels: the detail map follows the language and
+  // the globe's city names are drawn only when place names are switched on.
+  useEffect(() => {
+    setDetailLabelPreferences(labels);
+    document.documentElement.dataset.placeNames = labels.showPlaceNames ? "on" : "off";
+  }, [labels]);
   useEffect(() => {
     if (snapshot?.active) { setInterrupted(false); setFocusRevision((value) => value + 1); }
   }, [snapshot?.active]);
@@ -144,7 +156,6 @@ function AtlasScene() {
         {...atlasSceneFocus(point, routes.find((route) => route.id === selected?.id))}
         focusRevision={focusRevision} focusEnabled={!interrupted && snapshot.active}
         earthExperiencePolicy={snapshot.earthExperience} routeEditingEnabled={false}
-        // The detail map's 中文/双语 toggle has no native counterpart yet; it stays in-globe.
         reduceMotion={reduceMotion}
         cinematicActive={!snapshot.active} mediaCoverHint={{ opaqueMediaCover: !snapshot.active, coverTransitionActive: false }}
         onManualCameraInteraction={interrupt} onFocusSettled={() => {
