@@ -27,16 +27,17 @@ and home indicator and pads itself with `env(safe-area-inset-*)`.
 
 ## Scene and navigation
 
-The native Atlas now follows the **Mobile V2** composition from
-`src/journey/LivingAtlasApp.tsx`: the same brand wordmark, compact Journey
-chip/time dock, details bottom sheet and all-Journeys picker. It reuses the
-production mobile CSS class family rather than maintaining a second visual
-specification. The trusted loopback scene sends selection, Story and
-scope-bound account-switch actions through the native bridge. The native Story
-reader remains implemented with SwiftUI/UIKit for playback and photo gestures.
-Signed private media URLs are intentionally never sent to the scene; a brand
-placeholder is shown where the Web details sheet can display an authorized cover.
-Capture matching Web/iPhone screenshots before claiming visual parity.
+The native Atlas follows the **Night Flight** concept: the globe is the stage
+and the bundled scene renders only the globe. SwiftUI owns every control: the
+wordmark and account menu, a draggable year/month time ribbon (dragging previews
+the camera across Journeys by date; release commits), and a three-detent Journey
+card (peek: title, dates, route stats, horizontal swipe switches Journey;
+medium: the real cover, loaded natively through the same scoped read path as
+native Story, plus Route Points; large: the note and every Journey). Signed
+media URLs never reach the scene. On iOS 18 Story zooms out of the cover; system
+pops leave Story through its own exit. Tokens live in `Sources/Design/`.
+Low vision follows Dynamic Type, Bold Text and Increase Contrast only; globe
+labels are fewer, at least 15pt, opaque and haloed (`Scene/scene.css`).
 
 `Sources/App/AppRouter.swift` owns the navigation stack, selection and revision.
 `Scene/main.tsx` bundles the real production `LivingAtlasGlobe` (Three.js and
@@ -51,15 +52,18 @@ session cookies or owner API. The local WKWebView uses a nonpersistent data stor
 the private HTTPS WebView has no message handler. Origin and main-frame checks
 guard native messages. External navigation and redirects are refused.
 
-Snapshot/event version 1 uses `scopeId`, `revision`, `requestId`, `journeyId`,
+Contract version 2 (snapshots, events, native commands) uses `scopeId`, `revision`, `requestId`, `journeyId`,
 `routePointId`, `assetId`; `StoryHandoff.revision` is the Journey's server revision.
 Snapshot revision changes on data refresh/process recovery, not every point tap,
 so rapid consecutive selections from one snapshot are accepted in WK message
 order. Duplicate IDs, stale scopes/revisions and foreign point/media ownership
 are rejected. Render acknowledgements also bind the current selection request.
 Swift and TypeScript decode the same synthetic `Fixtures/bridge.json`.
+Native -> scene commands (`focus`, `timeWindow`, `chrome` globe-only, `insets`)
+carry the live scope and revision without bumping it; stale or foreign commands
+are dropped by `decodeCommand` and refused by `validateSceneCommand`.
 
-The bundled GlobeTimeScrubber uses the production useGlobeTimeCursor. A scrub changes route reveal and point focus in the same scene; only the committed point crosses the bridge. The scene measures the visible controls when layout changes to keep the camera viewport above the timeline.
+The native time ribbon sends a time window and a preview focus while dragging; only the released Journey is committed as the selection. The card reports its settled height as camera insets so the globe stays above it.
 
 Manual camera input suspends commanded centering until the next selection. After about 20 seconds of inactivity, the production renderer releases to idle rotation at the current orientation. Detail-map input uses
 the production controller. Card connector lines are hidden. Account Earth
