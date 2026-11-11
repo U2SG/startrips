@@ -307,6 +307,8 @@
    leads; quick recap and management trail, right-aligned with or without it. */
 .journey-story[data-story-layout="mobile"] { --story-mobile-gutter: 22px; }
 .journey-story[data-story-layout="mobile"][data-classic-view] { --story-mobile-gutter: 18px; }
+/* The media gives the row's height back so the picture keeps its first-screen fit. */
+.journey-story[data-story-layout="mobile"]:has(> .journey-story__editor-actions) { --story-action-row-height: 60px; }
 .journey-story[data-story-layout="mobile"] > .journey-story__editor-actions {
   position: sticky; top: 106px; z-index: var(--z-content-3);
   flex-wrap: nowrap; margin: 0; padding: 8px var(--story-mobile-gutter); background: var(--archive-bg);

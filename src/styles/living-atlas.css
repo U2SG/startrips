@@ -7137,13 +7137,13 @@ button.living-atlas__globe-focus-exit {
   }
 
   .journey-story__media {
-    height: 38svh;
-    min-height: 240px;
+    height: calc(38svh - var(--story-action-row-height, 0px));
+    min-height: calc(240px - var(--story-action-row-height, 0px));
   }
 
   .journey-story[data-mobile-presentation="expanded"] .journey-story__media {
-    height: 47svh;
-    min-height: 300px;
+    height: calc(47svh - var(--story-action-row-height, 0px));
+    min-height: calc(300px - var(--story-action-row-height, 0px));
   }
 
   /* #489 acceptance 2 / #531: on a short (landscape) phone the sheet was 72svh
@@ -7164,8 +7164,8 @@ button.living-atlas__globe-focus-exit {
 
     .journey-story__media,
     .journey-story[data-mobile-presentation="expanded"] .journey-story__media {
-      height: calc(92svh - 106px);
-      max-height: calc(92svh - 106px);
+      height: calc(92svh - 106px - var(--story-action-row-height, 0px));
+      max-height: calc(92svh - 106px - var(--story-action-row-height, 0px));
       min-height: 0;
     }
   }

@@ -132,7 +132,7 @@
   .journey-story[data-classic-view] {
     --journey-story-sheet-extent: 92svh;
     /* Preserve a picture area above the native video controls on short phones. */
-    --classic-aperture: max(180px, calc(92svh - 192px));
+    --classic-aperture: max(180px, calc(92svh - 192px - var(--story-action-row-height, 0px)));
   }
   .journey-story[data-classic-view] .journey-story__classic-context { display: none; }
 }
