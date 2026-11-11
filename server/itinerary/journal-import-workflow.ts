@@ -170,7 +170,7 @@ function assemble(results: StagedChapter[][], lines: readonly string[], input: {
     // same source grouped or dated differently already owns them: only then salt.
     const derive = (salt: string) => ({ chapter: id(`${input.fallbackDate}\0${input.source}\0chapter${c.firstLine}${salt}`), events: kept.map(e => id(`${input.fallbackDate}\0${input.source}\0${e.line}${salt}`)) });
     const claim = (eventIds: string[]) => kept.forEach((e, i) => {
-      if (e.placeName !== null || e.pointId !== null) placeClaims.push({ eventId: eventIds[i], name: e.placeName ?? "", pointId: e.pointId, date: e.localDate ?? (e.dateStatus === "absent" && c.dateStatus === "single" ? c.date : null) });
+      if (e.placeName !== null || e.pointId !== null) placeClaims.push({ eventId: eventIds[i], name: e.placeName ?? "", ...(e.pointId ? { pointId: e.pointId } : {}), date: e.localDate ?? (e.dateStatus === "absent" && c.dateStatus === "single" ? c.date : null) });
     });
     const prior = before.chapters.find(old => old.source === rawSource && (old.importDate ?? old.date) === (c.date ?? input.fallbackDate));
     if (prior) { claim(derive("").events); importedChapterIds.push(prior.id); continue; }
