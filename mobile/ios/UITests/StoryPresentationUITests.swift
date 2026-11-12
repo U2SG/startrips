@@ -93,10 +93,17 @@ final class StoryPresentationUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
         XCTAssertGreaterThan(app.frame.width, app.frame.height)
-        XCTAssertTrue(second.exists)
+        // WebKit can report the rotated window before the resized book camera settles.
+        XCTAssertTrue(second.waitForExistence(timeout: 15))
         capture(app, "story-style-3d-book-landscape", screen: true)
 
         XCUIDevice.shared.orientation = .portrait
+        let portraitDeadline = Date().addingTimeInterval(10)
+        while app.frame.width >= app.frame.height && Date() < portraitDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTAssertLessThan(app.frame.width, app.frame.height)
+        XCTAssertTrue(second.waitForExistence(timeout: 15))
         app.buttons["story.close"].tap()
         let selection = app.staticTexts["atlas.selection.asset"]
         XCTAssertTrue(selection.waitForExistence(timeout: 10))
