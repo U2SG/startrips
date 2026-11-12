@@ -34,6 +34,7 @@ await page.route("**/api/account-preferences/media-presentation",async route=>{i
 await page.route("**/api/account-preferences/earth-experience",route=>route.fulfill(json({earthExperience:"default",revision:0,updatedAt:null})));
 await page.route("**/api/atlases/current",route=>route.fulfill(json({atlas:{id:id(2),title:"QA Atlas",dedication:"同行"},role:"owner"})));
 await page.route("**/api/journeys",route=>route.fulfill(json({journeys:[journey]})));
+await page.route(`**/api/journeys/${journey.id}/journal`,route=>route.fulfill(json({journal:{revision:0,chapters:[]}})));
 await page.route(`**/api/journeys/${journey.id}`, async route => {
  if (holdJourneyRead) {
   let release;
@@ -132,6 +133,20 @@ async function assertIcon(button, label) {
 // chips row's gutter: 导出短片 leads, 快速回顾 then … trail; nothing floats on
 // the media. Reading states without the chips row use the copy's content edge.
 async function assertStoryActionRow(label, {editing, compact = false}) {
+ // Resizing a touch viewport can publish the new width before the height
+ // media query and the header layout have settled.
+ await page.waitForFunction(expected => {
+  const root = document.querySelector('.journey-story[data-story-layout="mobile"]');
+  const header = root?.querySelector(':scope > header');
+  if (!header) return false;
+  const compactHeight = matchMedia('(max-height: 480px)').matches;
+  const style = getComputedStyle(header);
+  const expectedHeight = Number.parseFloat(style.getPropertyValue('--story-heading-height'))
+   + Number.parseFloat(style.getPropertyValue('--story-action-row-height'));
+  return compactHeight === expected
+   && Math.abs(header.getBoundingClientRect().height - expectedHeight) <= 1
+   && (expected || Number.parseFloat(style.getPropertyValue('--story-action-row-height')) > 0);
+ }, compact);
  const g=await story.evaluate(root=>{
   const rect=el=>{if(!el||!el.getClientRects().length) return null;const r=el.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
   const row=root.querySelector(':scope > header > .journey-story__editor-actions');

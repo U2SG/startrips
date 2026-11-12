@@ -745,7 +745,7 @@ async function verifyMobileJourneySheetHandle() {
     const waitForEmptyStack = () => page.waitForFunction(() => {
       const stack = window.history.state?.__startripsMobileSurfaceStack;
       return !Array.isArray(stack) || stack.length === 0;
-    }, null, { timeout: 5_000 }).catch(() => undefined);
+    }, null, { timeout: 5_000 });
     const openSheet = async () => {
       await chip.waitFor({ state: "visible" });
       await chip.tap();
@@ -769,11 +769,12 @@ async function verifyMobileJourneySheetHandle() {
     if (!box) throw new Error("journey sheet handle has no bounds");
     const x = box.x + box.width / 2;
     const y = box.y + box.height / 2;
-    const cdp = await page.context().newCDPSession(page);
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + 50 }] });
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + 100 }] });
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    const dismissGesture = await page.context().newCDPSession(page);
+    await dismissGesture.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+    await dismissGesture.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + 50 }] });
+    await dismissGesture.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + 100 }] });
+    await dismissGesture.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await dismissGesture.detach();
     await sheet.waitFor({ state: "detached", timeout: 5_000 }).catch(() => undefined);
     const dragClosed = await sheet.count() === 0;
     await waitForEmptyStack();
@@ -807,7 +808,11 @@ async function verifyMobileJourneySheetHandle() {
       { timeout: 5_000 },
     ).then(() => true, () => false);
 
+    // The detent sequence is a separate scenario. Start from a fresh
+    // document after checking that the dismissal removed its history entry.
+    await page.reload({ waitUntil: "domcontentloaded" });
     await openSheet();
+    const cdp = await page.context().newCDPSession(page);
     const medium = await detentState();
     await swipe(-140);
     const expandedBySwipe = await waitForDetent("large");
@@ -825,6 +830,7 @@ async function verifyMobileJourneySheetHandle() {
     const collapsedBySwipe = await waitForDetent("medium");
     const stillOpenAfterCollapse = await sheet.count() === 1;
     await swipe(110);
+    await cdp.detach();
     await sheet.waitFor({ state: "detached", timeout: 5_000 }).catch(() => undefined);
     const closedFromMedium = await sheet.count() === 0;
     await waitForEmptyStack();
