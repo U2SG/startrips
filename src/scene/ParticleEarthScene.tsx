@@ -3764,7 +3764,8 @@ export function ParticleEarthScene({
       const halo = legibility ? (legibility.increasedContrast ? 3 : 2) : 0;
       const ascent = legibility ? Math.ceil(fontSize * 1.1) : 13;
       const descent = legibility ? Math.ceil(fontSize * 0.3) : 4;
-      const labelLimit = resolveRouteLabelLimit(currentCompactMobileLayout || Boolean(legibility));
+      const layoutLabelLimit = resolveRouteLabelLimit(currentCompactMobileLayout);
+      const labelLimit = legibility ? Math.min(layoutLabelLimit, MAX_RENDERED_MOBILE_ROUTE_LABELS) : layoutLabelLimit;
       let visibleLabelCount = 0;
 
       const arcWorld = {
@@ -3902,7 +3903,7 @@ export function ParticleEarthScene({
           label.element.style.display = "none";
         }
         arbitrateRouteLabels(arbitrationCandidates, {
-          compactMobileLayout: currentCompactMobileLayout || Boolean(legibility),
+          compactMobileLayout: currentCompactMobileLayout,
         })
           .map((pointIndex) => labelCandidates.get(pointIndex)!)
           .forEach(({ label, marker, x, y }) => {

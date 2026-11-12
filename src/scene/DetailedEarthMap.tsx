@@ -223,7 +223,7 @@ function installDetailedEarthJourneyOverlay(
       // let the attended point reserve space before the other stops.
       map.setLayoutProperty(JOURNEY_OVERLAY_LABEL_LAYER_ID, "symbol-sort-key",
         ["match", ["get", "attentionRole"], "narrative-current", 0, "selected", 1, 2]);
-      applyLabelLegibility(map, JOURNEY_OVERLAY_LABEL_LAYER_ID, labelLegibility);
+      applyLabelLegibility(map, JOURNEY_OVERLAY_LABEL_LAYER_ID, labelLegibility, style.glyphs);
     }
   }
   if (!map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) {
@@ -317,11 +317,21 @@ function applyMapLanguage(map: MapLibreMap, language: DetailedEarthLanguage) {
   }
 }
 
-function applyLabelLegibility(map: MapLibreMap, layerId: string, settings: EarthLabelLegibility) {
+function applyLabelLegibility(map: MapLibreMap, layerId: string, settings: EarthLabelLegibility, glyphs?: string) {
   const isJourney = layerId === JOURNEY_OVERLAY_LABEL_LAYER_ID;
-  // Keep the style's existing glyph stack. Not every glyph endpoint ships a
-  // bold face, so give Bold Text slightly larger glyphs in the vector map.
-  const fontSize = settings.fontSize + (settings.boldText ? 1 : 0) - (isJourney ? 0 : 2);
+  const fontStack: unknown = map.getLayoutProperty(layerId, "text-font");
+  // The Fiord proxy serves both weights, including CJK glyph ranges. Other
+  // glyph sources can supply a different stack or only one available weight.
+  const regular = "Noto Sans Regular";
+  const bold = "Noto Sans Bold";
+  const supportsBold = glyphs?.includes("/api/mapstyle?path=fonts%2F") === true
+    && Array.isArray(fontStack) && fontStack.length === 1
+    && (fontStack[0] === regular || fontStack[0] === bold);
+  if (supportsBold) {
+    const font = settings.boldText ? bold : regular;
+    if (fontStack[0] !== font) map.setLayoutProperty(layerId, "text-font", [font]);
+  }
+  const fontSize = settings.fontSize + (settings.boldText && !supportsBold ? 1 : 0) - (isJourney ? 0 : 2);
   map.setLayoutProperty(layerId, "text-size", fontSize);
   map.setLayoutProperty(layerId, "text-padding", isJourney ? 8 : 12);
   map.setLayoutProperty(layerId, "text-overlap", "never");
@@ -643,10 +653,11 @@ export default function DetailedEarthMap({
     const syncLabelLegibility = () => {
       const settings = labelLegibilityRef.current;
       if (!initialLoadSettled || !settings) return;
-      for (const layer of map.getStyle()?.layers ?? []) {
+      const style = map.getStyle();
+      for (const layer of style?.layers ?? []) {
         if (layer.type !== "symbol") continue;
         if (layer.id === JOURNEY_OVERLAY_LABEL_LAYER_ID || isDetailedEarthNameLabel(layer.layout?.["text-field"])) {
-          applyLabelLegibility(map, layer.id, settings);
+          applyLabelLegibility(map, layer.id, settings, style.glyphs);
         }
       }
     };

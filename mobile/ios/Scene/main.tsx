@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { IconArrowRight, IconRoute, IconTimeline, IconUserCircle, IconX } from "@tabler/icons-react";
 import { StartripsBrandLoader, StartripsJourneyCue } from "../../../src/brand/StartripsBrandMark";
@@ -176,7 +176,11 @@ function AtlasScene() {
     setSheetOpen(false);
     requestAnimationFrame(() => chip.current?.focus({ preventScroll: true }));
   };
-  const sheetDetents = useMobileSheetDetents(sheet, closeSheet, sheetOpen ? selected?.id ?? null : null);
+  const sheetDetents = useMobileSheetDetents(sheet, closeSheet, sheetOpen && !scrollableDetails ? selected?.id ?? null : null);
+  useLayoutEffect(() => {
+    // The same sheet can switch from scrolling to the compact detent while open.
+    if (!scrollableDetails && sheet.current) sheet.current.scrollTop = 0;
+  }, [scrollableDetails]);
   const closePicker = () => {
     setPickerOpen(false);
     requestAnimationFrame(() => pickerTrigger.current?.focus({ preventScroll: true }));
