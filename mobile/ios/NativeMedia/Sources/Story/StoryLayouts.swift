@@ -228,8 +228,9 @@ struct StoryStream: View {
     @ObservedObject var model: StoryModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var driver = StreamFlowDriver()
-    /// Content y of each laid-out row; changes only with layout, never with scrolling.
-    @State private var rowY: [String: CGFloat] = [:]
+    /// Content frames (minY...maxY) of the rows SwiftUI currently has laid out. Only these are
+    /// fresh: a row LazyVStack has dropped keeps no entry, so a stale position is never used.
+    @State private var rowFrames: [String: ClosedRange<CGFloat>] = [:]
 
     private var playing: Bool { model.playback != nil }
     private var streamEntries: [StoryEntry] { model.cursor.entries.filter { $0.role != .journeyCover } }
@@ -252,16 +253,17 @@ struct StoryStream: View {
                         row(index, entry, previous: index > 0 ? model.cursor.entries[index - 1] : nil, current: current)
                             .id(entry.id)
                             .background(GeometryReader { geometry in
-                                Color.clear.preference(key: StreamRowKey.self,
-                                                       value: [entry.id: geometry.frame(in: .named("story.stream.content")).minY])
+                                let frame = geometry.frame(in: .named("story.stream.content"))
+                                Color.clear.preference(key: StreamRowKey.self, value: [entry.id: frame.minY...max(frame.minY, frame.maxY)])
                             })
+                            .onDisappear { rowFrames[entry.id] = nil }
                     }
                     if !model.journal.isEmpty { journal.background(StoryTheme.background) }
                 }
                 .padding(.horizontal, StoryTheme.edge).padding(.vertical, StoryTheme.grid(4))
                 .frame(maxWidth: 680)
                 .coordinateSpace(name: "story.stream.content")
-                .onPreferenceChange(StreamRowKey.self) { rowY.merge($0) { _, new in new } }
+                .onPreferenceChange(StreamRowKey.self) { rowFrames.merge($0) { _, new in new } }
                 .frame(maxWidth: .infinity)
                 .background(StreamScrollViewFinder { driver.scrollView = $0 })
             }
@@ -291,25 +293,17 @@ struct StoryStream: View {
         model.prefetchLibrary(StreamFlow.lookahead(beats: clock.beats, index: clock.index, elapsedMS: clock.elapsedMS))
     }
 
-    /// Hands one clock sample and the upcoming knots to the driver; it moves per display frame.
+    /// Hands one clock sample and the next two anchors to the driver; it moves per display frame.
+    /// Anchors come only from rows that are laid out now (or the row right after one), so a
+    /// lazily estimated or stale position far down the stream can never become the target.
     private func sync(_ proxy: ScrollViewProxy) {
-        guard let clock = model.playback, let beat = clock.current else { driver.stop(); return }
+        guard let clock = model.playback, clock.current != nil else { driver.stop(); return }
         let entries = streamEntries
-        // Rows not laid out yet (lazy) get an estimate from the rows that are; the follower
-        // absorbs the small correction once they are, instead of stopping at an unknown row.
-        let known = entries.indices.compactMap { index in rowY[entries[index].id].map { (index, $0) } }
-        let pitch: CGFloat = known.count > 1
-            ? (known.last!.1 - known.first!.1) / CGFloat(max(1, known.last!.0 - known.first!.0)) : 600
-        func y(_ row: Int?) -> CGFloat? {
-            guard let row else { return 0 }
-            if let value = rowY[entries[row].id] { return value }
-            guard let last = known.last(where: { $0.0 < row }) else { return nil }
-            return last.1 + pitch * CGFloat(row - last.0)
-        }
-        let knots = StreamFlow.knots(index: clock.index, beats: clock.beats, entries: entries, y: y)
-        guard driver.attached, !knots.isEmpty else {
-            // Not laid out yet (lazy) or no UIKit scroll view: bring the row in once.
-            if let here = StreamFlow.row(for: beat, in: entries) {
+        let frames = entries.indices.map { rowFrames[entries[$0].id] }
+        let knots = StreamFlow.nearKnots(index: clock.index, beats: clock.beats, entries: entries, frames: frames,
+                                         spacing: StoryTheme.grid(5))
+        guard driver.attached else {
+            if let here = clock.current.flatMap({ StreamFlow.row(for: $0, in: entries) }) {
                 proxy.scrollTo(entries[here].id, anchor: UnitPoint(x: 0.5, y: StreamFlow.readingLine))
             }
             return
@@ -377,8 +371,8 @@ struct StoryStream: View {
 }
 
 private struct StreamRowKey: PreferenceKey {
-    static var defaultValue: [String: CGFloat] = [:]
-    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+    static var defaultValue: [String: ClosedRange<CGFloat>] = [:]
+    static func reduce(value: inout [String: ClosedRange<CGFloat>], nextValue: () -> [String: ClosedRange<CGFloat>]) {
         value.merge(nextValue()) { _, new in new }
     }
 }

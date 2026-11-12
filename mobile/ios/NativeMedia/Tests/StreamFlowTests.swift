@@ -174,4 +174,45 @@ final class StreamFlowTests: XCTestCase {
         seek.step(ahead: 0, dt: dt, catchUp: true)
         XCTAssertLessThan(seek.velocity, 0)
     }
+
+    // MARK: Geometry-stable targets (owner feedback: "乱转")
+
+    func testNearKnotsOnlyTrustLaidOutRowsAndNeverInventAPositionAbove() throws {
+        let journey = try MediaFixtures.journey()
+        let entries = journey.storySequence(includeCover: false)
+        let beats = JourneyPlaybackPlan.build(journey)
+        let rows = beats.map { StreamFlow.row(for: $0, in: entries) }
+        guard let index = rows.firstIndex(where: { $0 != nil }), let here = rows[index] else { return }
+        // Only the current row is laid out: it anchors itself, the next row sits right after it.
+        var frames = [ClosedRange<CGFloat>?](repeating: nil, count: entries.count)
+        frames[here] = 1000...1600
+        let knots = StreamFlow.nearKnots(index: index, beats: beats, entries: entries, frames: frames, spacing: 20)
+        XCTAssertEqual(knots.first?.y, 1000)
+        if knots.count > 1, case .some(.some(let next)) = StreamFlow.nextRow(after: index, beats: beats, entries: entries),
+           next == here + 1 {
+            XCTAssertEqual(knots[1].y, 1620, "the next row starts right after the current one")
+        }
+        XCTAssertLessThanOrEqual(knots.count, 2, "never anchors on rows far down the stream")
+        // A row that was dropped by LazyVStack (no frame) and lies above everything laid out: no target, hold.
+        var later = [ClosedRange<CGFloat>?](repeating: nil, count: entries.count)
+        later[entries.count - 1] = 9000...9500
+        if here < entries.count - 1 {
+            XCTAssertTrue(StreamFlow.nearKnots(index: index, beats: beats, entries: entries, frames: later, spacing: 20).isEmpty)
+        }
+    }
+
+    /// Targets revised mid-playback (an estimate replaced by a measured frame, a row above
+    /// growing) must never move the reading point back up while playing.
+    func testFollowerStaysMonotonicWhenTheTargetIsRevised() {
+        var follower = StreamFollower(position: 1000)
+        var last = follower.position
+        let targets: [CGFloat] = Array(repeating: 1400, count: 60) + Array(repeating: 600, count: 60)
+            + Array(repeating: 5000, count: 60) + Array(repeating: 200, count: 60)
+        for target in targets {
+            follower.step(ahead: target, dt: 1.0 / 60)
+            XCTAssertGreaterThanOrEqual(follower.position, last - 0.0001)
+            XCTAssertLessThanOrEqual(follower.velocity, StreamFollower.maxSpeed)
+            last = follower.position
+        }
+    }
 }

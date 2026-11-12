@@ -24,18 +24,33 @@ final class StreamFlowDriver: NSObject, ObservableObject {
     private var sampledAt: CFTimeInterval = 0
     private var follower: StreamFollower?
     private var lastFrame: CFTimeInterval?
+    /// Only an explicit seek (previous/next) may move the stream back up the thread.
+    private var seeking = false
+    private var lastOffset: CGFloat?
+    #if DEBUG
+    private var frameCount = 0
+    private lazy var timing: FileHandle? = {
+        guard ProcessInfo.processInfo.arguments.contains("-stream-timing") else { return nil }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("stream-timing.log")
+        if !FileManager.default.fileExists(atPath: file.path) { FileManager.default.createFile(atPath: file.path, contents: nil) }
+        let handle = try? FileHandle(forWritingTo: file); handle?.seekToEndOfFile(); return handle
+    }()
+    #endif
 
     var attached: Bool { scrollView != nil }
 
     func update(_ next: Sample) {
-        if let previous = sample, previous.paused, !next.paused { follower = nil }   // resume from where the reader is
+        if let previous = sample {
+            if previous.paused, !next.paused { follower = nil }   // resume from where the reader is
+            if next.beat != previous.beat && next.beat != previous.beat + 1 { seeking = true }   // previous/next
+        }
         sample = next; sampledAt = CACurrentMediaTime()
         start()
     }
 
     func stop() {
         link?.invalidate(); link = nil
-        sample = nil; follower = nil; lastFrame = nil
+        sample = nil; follower = nil; lastFrame = nil; seeking = false; lastOffset = nil
     }
 
     private func start() {
@@ -58,10 +73,11 @@ final class StreamFlowDriver: NSObject, ObservableObject {
         // The reader's finger always wins: playback pauses, play resumes the flow.
         if scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
             if !sample.paused { onTakeover?() }
-            follower = nil
+            follower = nil; lastOffset = nil
             return
         }
         guard !sample.paused, let first = sample.knots.first else { follower?.velocity = 0; return }
+        let start = currentReading() ?? first.y
         let viewport = scrollView.bounds.height
         let reading: CGFloat
         if reduceMotion {
@@ -72,17 +88,30 @@ final class StreamFlowDriver: NSObject, ObservableObject {
             // than maxLead ahead of a clock that is waiting for a picture.
             let time = sample.scheduleMS + min(max(0, (now - sampledAt) * 1000), StreamFlow.maxLeadMS)
             guard let ahead = StreamFlow.scheduled(sample.knots, at: time + StreamFollower.lead * 1000) else { return }
-            var follower = self.follower ?? StreamFollower(position: currentReading() ?? first.y)
+            var follower = self.follower ?? StreamFollower(position: start)
             let dt = min(0.05, max(0, now - (lastFrame ?? now)))
-            follower.step(ahead: ahead, dt: dt, catchUp: abs(ahead - follower.position) > viewport)
+            follower.step(ahead: ahead, dt: dt, catchUp: seeking)
+            if seeking && abs(ahead - follower.position) < 4 { seeking = false }
             self.follower = follower
             reading = follower.position
         }
         let inset = scrollView.adjustedContentInset
         let offset = StreamFlow.offset(reading: reading, viewport: viewport,
                                        content: scrollView.contentSize.height + inset.top + inset.bottom)
-        let y = (offset - inset.top).rounded(toPixelsOf: scrollView)
+        var y = (offset - inset.top).rounded(toPixelsOf: scrollView)
+        // Invariant: while playing, the stream only moves down; a lower offset is only for a seek.
+        if !seeking, !reduceMotion, let lastOffset, y < lastOffset { y = lastOffset }
+        lastOffset = y
         if abs(scrollView.contentOffset.y - y) > 0.01 { scrollView.contentOffset.y = y }
+        #if DEBUG
+        frameCount += 1
+        if let timing, frameCount % 6 == 0 {
+            let knots = sample.knots.map { String(format: "%.0f@%.0f", $0.y, $0.time) }.joined(separator: ",")
+            timing.write(Data(String(format: "FRAME t=%.3f beat=%d schedule=%.0f reading=%.1f offset=%.1f content=%.0f seek=%d knots=%@\n",
+                                     now, sample.beat, sample.scheduleMS, reading, y, scrollView.contentSize.height,
+                                     seeking ? 1 : 0, knots).utf8))
+        }
+        #endif
     }
 }
 

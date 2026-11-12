@@ -211,7 +211,9 @@ private final class FixturePhotoProtocol: URLProtocol {
         if let id = request.url?.lastPathComponent, StressPhotos.isStress(id) {
             // A camera-sized original over a ~300ms "network", like a real signed read.
             let preview = request.url?.pathComponents.contains("preview") == true
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.3) { [self] in
+            // Staggered arrival, 0.3s to 3s, like a real mixed network.
+            let delay = 0.3 + Double(StressPhotos.index(id) * 733 % 2700) / 1000
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + delay) { [self] in
                 guard let url = request.url, let data = StressPhotos.jpeg(id, preview: preview),
                       let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
                                                      headerFields: ["Content-Type": "image/jpeg"]) else { return }

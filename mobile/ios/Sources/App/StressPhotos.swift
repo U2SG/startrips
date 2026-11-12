@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 /// DEBUG-only performance probe (`-story-stress-photos`): adds many large camera-sized
 /// JPEGs to the fixture Journey so stream playback exposes real image loading.
 enum StressPhotos {
-    static let count = 30
+    static let count = 50
     /// Mixed shapes: landscape, portrait, wide and square, like a real camera roll.
     static let shapes = [(4032, 3024), (3024, 4032), (4032, 2268), (3024, 3024)]
     static func originalSize(_ id: String) -> (width: Int, height: Int) { shapes[index(id) % shapes.count] }
@@ -32,7 +32,7 @@ enum StressPhotos {
               var media = object["media"] as? [[String: Any]] else { return journey }
         // Extra stops with notes of very different lengths, so rows range from a line of text to a tall photo.
         var routePoints = object["routePoints"] as? [[String: Any]] ?? []
-        for (index, note) in notes.enumerated() {
+        for (index, note) in (notes + notes.map { $0 + $0 }).enumerated() {
             routePoints.append(["id": "stress-point-\(index)", "latitude": 1.3 + Double(index) * 0.1, "longitude": 104.0 + Double(index) * 0.1,
                                 "label": "停靠 \(index + 1)", "isStop": true, "note": note])
         }
@@ -51,7 +51,9 @@ enum StressPhotos {
 
     /// A deterministic, detailed JPEG (gradients and stripes so frames can be told apart).
     static func jpeg(_ id: String, preview: Bool) -> Data? {
-        let size = preview ? previewSize(id) : originalSize(id)
+        var size = preview ? previewSize(id) : originalSize(id)
+        // Some previews arrive in a different shape than reported, as a real cache can.
+        if preview && index(id) % 5 == 0 { size = (size.height, size.width) }
         let cache = FileManager.default.temporaryDirectory
             .appendingPathComponent("stress-\(id)-\(size.width).jpg")
         if let data = try? Data(contentsOf: cache) { return data }

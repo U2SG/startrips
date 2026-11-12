@@ -124,6 +124,25 @@ enum StreamFlow {
         return knots
     }
 
+    /// The current run's row and the next run's row, positioned only from fresh frames:
+    /// a laid-out row's own frame, the row right after a laid-out row (its maxY + spacing),
+    /// or, further down, the last laid-out row's end plus the average laid-out pitch. A row
+    /// above everything laid out yields no knot (the follower holds; it never chases back).
+    static func nearKnots(index: Int, beats: [PlaybackBeat], entries: [StoryEntry],
+                          frames: [ClosedRange<CGFloat>?], spacing: CGFloat) -> [Knot] {
+        func y(_ row: Int?) -> CGFloat? {
+            guard let row else { return 0 }
+            guard entries.indices.contains(row) else { return nil }
+            if let frame = frames[row] { return frame.lowerBound }
+            let laid = frames.indices.filter { frames[$0] != nil }
+            guard let before = laid.last(where: { $0 < row }), let end = frames[before]?.upperBound else { return nil }
+            let heights = laid.compactMap { frames[$0].map { $0.upperBound - $0.lowerBound } }
+            let pitch = heights.isEmpty ? 0 : heights.reduce(0, +) / CGFloat(heights.count) + spacing
+            return end + spacing + pitch * CGFloat(row - before - 1)
+        }
+        return knots(index: index, beats: beats, entries: entries, count: 2, y: y)
+    }
+
     /// The scheduled reading position: piecewise linear between knots, holding at the ends.
     static func scheduled(_ knots: [Knot], at time: Double) -> CGFloat? {
         guard let first = knots.first else { return nil }
@@ -152,7 +171,7 @@ struct StreamFollower: Equatable {
         guard dt > 0 else { return }
         var desired = (ahead - position) / CGFloat(Self.lead)
         if !catchUp { desired = max(0, desired) }   // playing never runs back up the thread
-        let speed = catchUp ? Self.maxSpeed * 4 : Self.maxSpeed
+        let speed = catchUp ? Self.maxSpeed * 3 : Self.maxSpeed
         desired = min(speed, max(-speed, desired))
         let limit = (catchUp ? Self.maxAcceleration * 6 : Self.maxAcceleration) * CGFloat(dt)
         velocity += min(limit, max(-limit, desired - velocity))
