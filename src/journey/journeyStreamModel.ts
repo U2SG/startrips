@@ -1,3 +1,4 @@
+import type { JournalChapter } from "./dailyJournal";
 import { isVisualMediaAsset } from "./journeyModel";
 import type { Journey, JourneyMediaAsset, MediaPreviewRead, RoutePoint } from "./types";
 
@@ -11,6 +12,7 @@ import type { Journey, JourneyMediaAsset, MediaPreviewRead, RoutePoint } from ".
  */
 export type JourneyStreamEntry =
   | { kind: "intro"; key: string; note: string | null }
+  | { kind: "journal"; key: string; routePoint: null; chapter: JournalChapter }
   | {
     kind: "media";
     key: string;
@@ -22,6 +24,8 @@ export type JourneyStreamEntry =
     note: string | null;
   }
   | { kind: "note"; key: string; routePoint: RoutePoint; place: string | null; date: string | null; note: string };
+
+type JourneyStreamRouteEntry = Exclude<JourneyStreamEntry, { kind: "journal" }>;
 
 function trimmed(value: string | null | undefined): string | null {
   const text = value?.trim();
@@ -41,8 +45,8 @@ function ownerMedia(journey: Journey, routePointId: string | null): JourneyMedia
 }
 
 /** Entries oldest first, in canonical Route order. */
-export function journeyStreamEntries(journey: Journey, focusPointId: string | null = null): JourneyStreamEntry[] {
-  const entries: JourneyStreamEntry[] = [{ kind: "intro", key: "intro", note: trimmed(journey.note) }];
+export function journeyStreamEntries(journey: Journey, focusPointId: string | null = null): JourneyStreamRouteEntry[] {
+  const entries: JourneyStreamRouteEntry[] = [{ kind: "intro", key: "intro", note: trimmed(journey.note) }];
   for (const asset of ownerMedia(journey, null)) {
     entries.push({ kind: "media", key: `media:${asset.id}`, asset, routePoint: null, place: null, date: null, note: null });
   }
@@ -68,6 +72,51 @@ export function journeyStreamEntries(journey: Journey, focusPointId: string | nu
     });
   }
   return entries;
+}
+
+/** Keep the journal's day and source order. Place each existing media entry once. */
+export function withJourneyStreamJournal(
+  entries: JourneyStreamRouteEntry[], chapters: readonly JournalChapter[],
+): JourneyStreamEntry[] {
+  if (!chapters.length) return entries;
+  const ordered = [...chapters].sort((a, b) => a.date.localeCompare(b.date));
+  const byDate = new Map<string, string>();
+  const byPoint = new Map<string, string>();
+  const byAsset = new Map<string, string>();
+  for (const chapter of ordered) {
+    if (!byDate.has(chapter.date)) byDate.set(chapter.date, chapter.id);
+    for (const event of chapter.events) {
+      if (event.status === "actual" && event.routePointId && !byPoint.has(event.routePointId)) {
+        byPoint.set(event.routePointId, chapter.id);
+      }
+      for (const id of event.mediaIds) if (!byAsset.has(id)) byAsset.set(id, chapter.id);
+    }
+  }
+  const opening: JourneyStreamEntry[] = [];
+  const remaining: JourneyStreamEntry[] = [];
+  const byChapter = new Map<string, JourneyStreamEntry[]>();
+  for (const entry of entries) {
+    if (entry.kind === "intro") {
+      opening.push(entry);
+      continue;
+    }
+    const point = entry.routePoint;
+    const date = streamDate(point?.occurredAt);
+    const chapterId = (entry.kind === "media" ? byAsset.get(entry.asset.id) : undefined)
+      ?? (date ? byDate.get(date) : undefined)
+      ?? (point ? byPoint.get(point.id) : undefined);
+    if (!chapterId) {
+      remaining.push(entry);
+      continue;
+    }
+    const group = byChapter.get(chapterId) ?? [];
+    group.push(entry);
+    byChapter.set(chapterId, group);
+  }
+  return [...opening, ...ordered.flatMap((chapter): JourneyStreamEntry[] => [
+    { kind: "journal", key: `journal:${chapter.id}`, routePoint: null, chapter },
+    ...(byChapter.get(chapter.id) ?? []),
+  ]), ...remaining];
 }
 
 /** Width / height of a picture, from the best size known so far. */

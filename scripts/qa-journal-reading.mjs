@@ -19,13 +19,16 @@ const journey=${JSON.stringify(journey)};const initial={revision:1,chapters:${JS
 window.__qa={writes:0,points:0,mediaReads:0,saved:structuredClone(initial)};
 const client={read:async()=>structuredClone(window.__qa.saved),save:async(id,draft)=>{window.__qa.writes++;window.__qa.saved={...structuredClone(draft),revision:window.__qa.saved.revision+1};return structuredClone(window.__qa.saved)},suggest:async()=>[]};
 const view={...createOwnerAtlasView(),readMedia:async()=>{window.__qa.mediaReads++;return {url:${JSON.stringify(photoUrl)},expiresAt:"2099-01-01T00:00:00Z"}}};
-function Harness(){const[open,setOpen]=useState(true);return <AtlasViewProvider value={view}>{open?<DailyJournalPanel journey={journey} client={client} onPoint={()=>window.__qa.points++} onClose={()=>setOpen(false)}/>:<button onClick={()=>setOpen(true)}>重新打开手记</button>}</AtlasViewProvider>}createRoot(document.getElementById("root")).render(<Harness/>);`);
+function Harness(){const[open,setOpen]=useState(true);return <AtlasViewProvider value={view}>{open?<DailyJournalPanel journey={journey} client={client} onClose={()=>setOpen(false)}/>:<button onClick={()=>setOpen(true)}>重新打开手记</button>}</AtlasViewProvider>}createRoot(document.getElementById("root")).render(<Harness/>);`);
 await writeFile(`${output}/index.html`, '<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div><script type="module" src="./harness.tsx"></script></body></html>');
 const browser=await launchQaBrowser();
 try {
  for(const width of [1280,390,320]) {
   const context=await browser.newContext({viewport:{width,height:900},reducedMotion:"reduce"});const page=await context.newPage();const errors=[];page.on("pageerror",e=>errors.push(e.message));
-  await page.goto(`${origin}/${output}/index.html`);await page.getByRole("navigation",{name:"手记日期目录"}).waitFor();
+  await page.goto(`${origin}/${output}/index.html`);
+  await page.getByRole("button",{name:"编辑已有手记",exact:true}).click();
+  await page.getByRole("button",{name:"返回阅读",exact:true}).click();
+  await page.getByRole("navigation",{name:"手记日期目录"}).waitFor();
   const baseline=await page.evaluate(()=>JSON.stringify(window.__qa.saved));
   // Real React lifecycle: B becomes first, opens, becomes a link, then becomes first again.
   const gallery=page.locator("#journal-place-media-point-one");
@@ -74,19 +77,22 @@ try {
   await page.locator(".daily-journal__table-scroll").evaluate(el=>el.scrollIntoView({block:"start"}));
   await page.screenshot({path:`${output}/table-${width}.png`});
   assert.equal(await page.evaluate(()=>JSON.stringify(window.__qa.saved)),baseline);assert.equal(await page.evaluate(()=>window.__qa.writes),0);
-  await page.getByRole("button",{name:"编辑已有手记",exact:true}).click();await page.getByLabel("阅读正文",{exact:true}).first().fill("保留这条手动修改。");
+  await page.getByRole("button",{name:"编辑预览",exact:true}).click();await page.getByLabel("阅读正文",{exact:true}).first().fill("保留这条手动修改。");
   await page.getByLabel("事件状态",{exact:true}).last().focus(); await page.keyboard.press("Tab");
   assert.equal(await page.getByText("时间、地图点与照片（选填）",{exact:true}).last().evaluate(el=>el===document.activeElement),true);
   await page.keyboard.press("Enter"); assert.equal(await page.getByText("时间、地图点与照片（选填）",{exact:true}).last().evaluate(el=>el.parentElement.open),true);
   await page.getByRole("button",{name:"返回阅读",exact:true}).click();await page.getByText("保留这条手动修改。",{exact:true}).waitFor();
-  assert.equal(await page.getByRole("button",{name:/在 Stream 中查看地点/}).first().isDisabled(),true);
-  await page.getByRole("button",{name:"返回 Stream",exact:true}).click();await page.getByRole("button",{name:"继续编辑",exact:true}).click();
+  assert.equal(await page.getByRole("button",{name:/在地图上查看/}).count(),0);
+  await page.getByRole("button",{name:"返回旅程",exact:true}).click();await page.getByRole("button",{name:"继续编辑",exact:true}).click();
   await page.getByRole("button",{name:"确认保存",exact:true}).click();await page.getByText("手记已保存。",{exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>window.__qa.writes),1);assert.equal(await page.evaluate(()=>window.__qa.saved.chapters[0].events[0].source),chapters[0].events[0].source);
-  assert.equal(await page.getByRole("button",{name:/在 Stream 中查看地点/}).first().isEnabled(),true);
+  assert.equal(await page.locator(".daily-journal__reader").count(),0);
   await page.getByRole("button",{name:"编辑已有手记",exact:true}).click();await page.getByLabel("阅读正文",{exact:true}).first().fill("这一条应丢弃。");
   await page.getByRole("button",{name:"返回阅读",exact:true}).click();await page.keyboard.press("Escape");await page.getByRole("button",{name:"丢弃并返回",exact:true}).click();
-  await page.getByRole("button",{name:"重新打开手记",exact:true}).click();await page.getByText("保留这条手动修改。",{exact:true}).waitFor();
+  await page.getByRole("button",{name:"重新打开手记",exact:true}).click();
+  await page.getByRole("button",{name:"编辑已有手记",exact:true}).click();
+  await page.getByRole("button",{name:"返回阅读",exact:true}).click();
+  await page.getByText("保留这条手动修改。",{exact:true}).waitFor();
   assert.equal(await page.getByText("这一条应丢弃。",{exact:true}).count(),0);assert.equal(await page.evaluate(()=>window.__qa.writes),1);assert.deepEqual(errors,[]);
   await context.close();console.log(`journal reading passed: ${width}px, 14 days / 224 events, read/table/filter/edit/save/cancel`);
  }

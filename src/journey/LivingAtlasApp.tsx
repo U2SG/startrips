@@ -1214,8 +1214,7 @@ export function LivingAtlasApp({
     () => emptyRoutePointContextSelection(),
   );
   // #514: opening a Route Point context selects the stay summary only. The
-  // child Route Points become visible only after a separate, explicit detail
-  // intent so zoom/focus/context resolution can never disclose them by itself.
+  // child Route Points usually need a separate, explicit stay detail intent.
   const [activeStayDetailId, setActiveStayDetailId] = useState<string | null>(null);
   const routePointContextSelectionRef = useRef(routePointContextSelection);
   const routePointMediaEvidenceRef = useRef(new Map<string, MediaEvidenceRecord>());
@@ -2788,21 +2787,26 @@ export function LivingAtlasApp({
     return visible;
   }, [journeys, effectiveDraftRoute, staySummariesByJourney]);
   const visibleRoutePointIds = useMemo(() => {
-    // Explicit detail intent expands only the selected stay. A narrated point
-    // may still surface itself temporarily, but zoom/camera alone never does.
+    // Keep overview anchors sparse. Only a close view of the selected Journey
+    // adds lodging stops, and explicit detail visibility still takes precedence.
     const selectedId = selectedJourneyRoutePoint?.routePointId;
     const narrativeId = narrativeJourneyRoutePoint?.routePointId;
     const detailIds = activeStaySummary?.routePointIds ?? [];
-    const needsCopy = detailIds.some((id) => !overviewRoutePointIds.has(id))
+    const lodgingIds = activeJourney && activeJourney.id === selectedJourneyIdForHomeCamera
+      && (atlasSemanticZoom === "regional" || atlasSemanticZoom === "local")
+      ? activeJourney.routePoints.filter(point => point.placeRole === "accommodation" && point.overviewVisibility !== "detail").map(point => point.id)
+      : [];
+    const expandedIds = [...detailIds, ...lodgingIds];
+    const needsCopy = expandedIds.some((id) => !overviewRoutePointIds.has(id))
       || Boolean(selectedId && !overviewRoutePointIds.has(selectedId))
       || Boolean(narrativeId && !overviewRoutePointIds.has(narrativeId));
     if (!needsCopy) return overviewRoutePointIds;
     const visible = new Set(overviewRoutePointIds);
-    detailIds.forEach((id) => visible.add(id));
+    expandedIds.forEach((id) => visible.add(id));
     if (selectedId) visible.add(selectedId);
     if (narrativeId) visible.add(narrativeId);
     return visible;
-  }, [activeStaySummary, overviewRoutePointIds, selectedJourneyRoutePoint?.routePointId, narrativeJourneyRoutePoint?.routePointId]);
+  }, [activeJourney, activeStaySummary, atlasSemanticZoom, overviewRoutePointIds, selectedJourneyIdForHomeCamera, selectedJourneyRoutePoint?.routePointId, narrativeJourneyRoutePoint?.routePointId]);
   // At the completed overview, the timeline's last reached point can be a
   // geometry-only non-stop. Frame the Journey route instead of an absent pin.
   const focusPointHiddenByOverview = Boolean(
@@ -5008,6 +5012,7 @@ export function LivingAtlasApp({
             origin={storyReaderOrigin}
             onObservationChange={handleStoryObservationChange}
             onClose={() => closeJourneyStory(null)}
+            onCloseAtPoint={(pointId) => closeJourneyStory(null, () => revealRoutePointContext(storyJourneyId, pointId))}
             onNavigate={navigateStoryJourney}
             onOpenClassic={openClassicStory}
             onJourneyUpdated={canEditJourney ? (updated) => setJourneys((current) => mergeJourney(current, updated)) : undefined}

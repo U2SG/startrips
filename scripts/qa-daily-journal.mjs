@@ -28,7 +28,7 @@ const read=view.readMedia; view.readMedia=async asset=>asset==="music" ? {url:"d
 function Harness(){const [journey,setJourney]=useState(fixture);const [epoch,setEpoch]=useState(0);
 useEffect(()=>{const remount=()=>setEpoch(n=>n+1);window.addEventListener("qa-remount-stream",remount);return()=>window.removeEventListener("qa-remount-stream",remount)},[]);
 useEffect(()=>{const switcher=()=>setJourney({...fixture,atlasId:"other-atlas",id:"33333333-3333-4333-8333-333333333333",title:"另一账号"}); window.addEventListener("qa-account-switch",switcher);return()=>window.removeEventListener("qa-account-switch",switcher)},[]);
-return <AtlasViewProvider value={view}><main className="living-atlas"><JourneyStream key={epoch} onJourneyUpdated={j=>{window.__ownerJourney=j;setJourney(j)}} journeys={[journey]} journeyId={journey.id} onClose={()=>{}} onOpenClassic={()=>{}} onObservationChange={v=>window.__observation=v}/></main></AtlasViewProvider>}
+return <AtlasViewProvider value={view}><main className="living-atlas"><JourneyStream key={epoch} onJourneyUpdated={j=>{window.__ownerJourney=j;setJourney(j)}} journeys={[journey]} journeyId={journey.id} onClose={()=>{}} onCloseAtPoint={id=>window.__mapPoint=id} onOpenClassic={()=>{}} onObservationChange={v=>window.__observation=v}/></main></AtlasViewProvider>}
 createRoot(document.getElementById("root")).render(<Harness/>);`);
 await writeFile(`${output}/index.html`, '<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div><script type="module" src="./harness.tsx"></script></body></html>');
 await writeFile(`${output}/fictional-photo.svg`, '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400"><rect width="600" height="400" fill="#4a6970"/><circle cx="300" cy="150" r="60" fill="#edce92"/><path d="M0 400L200 220L400 400Z" fill="#193844"/></svg>');
@@ -111,12 +111,12 @@ try {
         await route.fulfill({ json: { journal: saved } });
       } else await route.fulfill({ json: { journal: request.url().includes(fixture.id) ? saved : {revision:0,chapters:[]} } });
     });
-    // Saving an AI-imported preview continues straight into the hotel preview.
+    // Saving the journal does not require a separate hotel search.
     let hotelPreviews=0;
     await page.route(/\/api\/journeys\/[^/]+\/journal\/hotels\/preview$/, route=>{hotelPreviews++;return route.fulfill({json:{preview:{token:"synthetic",hotels:[],questions:[]}}});});
     const errors=[]; page.on("pageerror", e => errors.push(e.message));
     await page.goto(`${origin}/${output}/index.html`);
-    await page.getByRole("button",{name:"每日手记",exact:true}).click();
+    await page.getByRole("button",{name:"导入手记",exact:true}).click();
     const source="2027-04-03\n23:30 她出发\n18:20 她抵达\n计划公园取消\n" + "她记下沿途所见。".repeat(120);
     assert.equal(await page.getByRole("button",{name:"生成导入预览"}).count(),0);
     assert.equal(await page.getByRole("button",{name:"用 AI 整理原文"}).count(),0);
@@ -151,24 +151,26 @@ try {
     const saveRequested=page.waitForRequest(r=>r.method()==="PUT" && r.url().endsWith("/journal"));
     await page.getByRole("button",{name:"确认保存"}).dblclick();
     await saveRequested;
-    assert.equal(await page.getByRole("button",{name:"返回 Stream",exact:true}).isDisabled(),true);
+    assert.equal(await page.getByRole("button",{name:"返回旅程",exact:true}).isDisabled(),true);
     await page.keyboard.press("Escape");
     assert.equal(await page.getByRole("button",{name:"丢弃并返回",exact:true}).count(),0);
     releaseSave();
     await page.getByText("手记已保存。",{exact:true}).waitFor(); assert.equal(writes,1);
     assert.equal(saved.chapters.length,1);
     assert.equal(saved.chapters[0].source,source);
-    await page.getByText("没有可可靠确认的住宿地点；未写入。",{exact:true}).waitFor(); assert.equal(hotelPreviews,1);
+    assert.equal(hotelPreviews,0);
     await importPreview(page,source);
     await page.getByRole("button",{name:"编辑预览",exact:true}).click();
     assert.equal(await page.getByLabel("阅读正文",{exact:true}).nth(0).inputValue(),"她手工修订了出发记录。");
     await page.getByRole("button",{name:"取消预览"}).click();
-    await page.getByRole("heading",{level:2}).scrollIntoViewIfNeeded();
+    assert.equal(await page.locator(".daily-journal__reader").count(),0);
+    await page.getByRole("button",{name:"返回旅程",exact:true}).click();
+    await page.getByText("她手工修订了出发记录。",{exact:true}).scrollIntoViewIfNeeded();
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),true);
     await page.screenshot({path:`${output}/journal-${width}.png`});
-    await page.getByRole("button",{name:/在 Stream 中查看地点/}).click();
-    await page.waitForFunction(id=>window.__observation?.routePointId===id,fixture.routePoints[0].id);
-    await page.getByRole("button",{name:"每日手记",exact:true}).click();
+    await page.getByRole("button",{name:"在地图上查看：虚构海湾",exact:true}).click();
+    await page.waitForFunction(id=>window.__mapPoint===id,fixture.routePoints[0].id);
+    await page.getByRole("button",{name:"导入手记",exact:true}).click();
     // An old account's late completed response must not populate the new account.
     imports.hold=true;
     await sourceInput(page).fill(source);
@@ -177,7 +179,7 @@ try {
     await page.getByRole("button",{name:"停止",exact:true}).waitFor();
     await page.evaluate(()=>window.dispatchEvent(new Event("qa-account-switch")));
     imports.release?.();
-    await page.getByRole("button",{name:"每日手记",exact:true}).click();
+    await page.getByRole("button",{name:"导入手记",exact:true}).click();
     await page.getByLabel("原始流水账").waitFor();
     assert.equal(await page.getByText("她手工修订了出发记录。",{exact:true}).count(),0);
     assert.deepEqual(errors,[]);
@@ -205,7 +207,7 @@ try {
     return route.fulfill({json:{journal:stored,journey:fixture}});
   });
   await page.goto(`${origin}/${output}/index.html?media=1`);
-  await page.getByRole("button",{name:"每日手记",exact:true}).click();
+  await page.getByRole("button",{name:"导入手记",exact:true}).click();
   const fortnight=Array.from({length:14},(_,i)=>`### 2027年4月${i+1}日${i%2 ? "(虚构记录)" : "（虚构记录）"}\n实际：她留下了一张照片。\n计划：次日虚构公园\n取消：原定花园`).join("\n");
   await importPreview(page,fortnight);
   await page.getByRole("button",{name:"编辑预览",exact:true}).click();
@@ -213,16 +215,21 @@ try {
   await page.getByLabel("关联照片或视频（可多选）",{exact:true}).nth(0).selectOption(["photo-one"]);
   await page.getByRole("button",{name:"确认保存"}).click();
   await page.getByText("手记已保存。",{exact:true}).waitFor();
-  await page.getByAltText("虚构照片.svg").scrollIntoViewIfNeeded();
-  await page.waitForFunction(()=>document.querySelector(".daily-journal__media img")?.naturalWidth===600);
+  await page.getByRole("button",{name:"返回旅程",exact:true}).click();
+  const day = page.locator(".journey-stream__journal-day");
+  assert.equal(await day.count(),14);
+  const photo = page.getByRole("button",{name:"查看 虚构照片.svg",exact:true});
+  await photo.scrollIntoViewIfNeeded();
+  await page.waitForFunction(()=>document.querySelector("[data-stream-shot] img")?.naturalWidth===600);
+  assert.ok(await photo.evaluate(el=>el.closest("section").previousElementSibling?.classList.contains("journey-stream__journal-day")));
   assert.deepEqual(stored.chapters[0].events[0].mediaIds,["photo-one"]);
   assert.equal(stored.chapters.length,14);
   assert.deepEqual(stored.chapters.map(chapter=>chapter.date),Array.from({length:14},(_,i)=>`2027-04-${String(i+1).padStart(2,"0")}`));
   assert.equal(stored.chapters.map(chapter=>chapter.source).join("\n"),fortnight);
   for(const chapter of stored.chapters) assert.deepEqual(chapter.events.map(e=>e.status),["actual","planned","cancelled"]);
-  assert.equal(await page.getByRole("navigation",{name:"手记日期目录"}).getByRole("link").count(),14);
   await page.screenshot({path:`${output}/journal-media-390.png`});
   assert.equal(savedImportIds.length,14);
+  await page.getByRole("button",{name:"导入手记",exact:true}).click();
   // One step undoes the whole saved import; edited chapters need a second, explicit confirmation.
   await page.getByRole("button",{name:"撤销这次导入",exact:true}).click();
   await page.getByText("撤销这次导入会移除 14 章。",{exact:true}).waitFor();
@@ -234,6 +241,8 @@ try {
   await page.getByLabel("原始流水账").waitFor();
   assert.deepEqual(undoBodies,[{baseRevision:1,confirmEdited:false},{baseRevision:1,confirmEdited:true}]);
   assert.equal(await page.getByRole("button",{name:"撤销这次导入",exact:true}).count(),0);
+  await page.getByRole("button",{name:"返回旅程",exact:true}).click();
+  assert.equal(await day.count(),0);
   await context.close();
   console.log("daily journal inline media passed");
   for(const [width,height] of [[320,700],[390,844],[844,390],[1112,402],[1280,900]]) {
@@ -243,8 +252,12 @@ try {
     const chapters=[1,2].map(day=>({id:`day-${day}`,date:`2027-04-0${day}`,importDate:`2027-04-0${day}`,title:"虚构章节".repeat(20),source:long,suggestions:[],events:[{id:`event-${day}`,source:long,text:long,status:"uncertain",localDate:null,localTime:null,timeContext:"当地时间",routePointId:null,mediaIds:[],edited:false}]}));
     await page.route(/\/api\/journeys\/[^/]+\/journal$/,route=>route.fulfill({json:{journal:{revision:1,chapters}}}));
     await page.goto(`${origin}/${output}/index.html?media=1&layout=1`);
-    await page.getByRole("button",{name:"每日手记",exact:true}).waitFor();
-    await page.waitForFunction(()=>document.querySelector('.journey-stream__header button[aria-label="播放配乐"]')?.disabled===false);
+    await page.getByRole("button",{name:"导入手记",exact:true}).waitFor();
+    await page.locator(".journey-stream[data-journal]").waitFor();
+    // Autoplay can succeed in Chromium. Both audio states occupy the same control.
+    await page.waitForFunction(() => document.querySelector(
+      '.journey-stream__header button:is([aria-label="播放配乐"], [aria-label="关闭配乐"])',
+    )?.disabled === false);
     const assertLayout=async()=>{
       const bounds=await page.evaluate(()=>{
         const header=document.querySelector(".journey-stream__header").getBoundingClientRect();
@@ -268,23 +281,22 @@ try {
     await assertLayout();
     await page.screenshot({path:`${output}/stream-layout-${width}.png`});
     await page.evaluate(()=>{const chrome=document.createElement("div");chrome.id="qa-underlying-chrome";chrome.style.cssText="position:fixed;inset:0;z-index:200;background:red";document.querySelector(".living-atlas").append(chrome)});
-    for(let cycle=0;cycle<3;cycle++) {
-      await page.getByRole("button",{name:"每日手记",exact:true}).click();
-      const panel=page.getByRole("dialog",{name:"每日手记",exact:true});
-      await panel.getByRole("navigation").waitFor();
-      assert.equal(await panel.evaluate(el=>el.contains(document.elementFromPoint(20,20))),true,"journal stays above underlying Atlas chrome");
-      assert.equal(await panel.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,"long prose must not overflow horizontally");
-      await panel.getByRole("link").last().click();
-      const second=panel.locator("article").last();
-      assert.ok((await second.boundingBox()).y>=-1,"date navigation remains inside the journal scrollport");
-      await panel.evaluate(el=>el.scrollTop=el.scrollHeight);
-      const bottom=await panel.evaluate(el=>({top:el.scrollTop,max:el.scrollHeight-el.clientHeight,body:document.scrollingElement.scrollTop}));
-      assert.ok(Math.abs(bottom.top-bottom.max)<=1 && bottom.body===0);
-      await panel.evaluate(el=>el.scrollTop=0);
-      if(cycle===0) await page.screenshot({path:`${output}/journal-layout-${width}.png`});
-      await page.getByRole("button",{name:"返回 Stream",exact:true}).click();
-      await assertLayout();
-    }
+    const flow=page.locator(".journey-stream__flow");
+    const second=flow.locator(".journey-stream__journal-day").last();
+    await second.scrollIntoViewIfNeeded();
+    assert.equal(await flow.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,"long prose must not overflow horizontally");
+    await flow.evaluate(el=>el.scrollTop=el.scrollHeight);
+    const bottom=await flow.evaluate(el=>({top:el.scrollTop,max:el.scrollHeight-el.clientHeight,body:document.scrollingElement.scrollTop}));
+    assert.ok(Math.abs(bottom.top-bottom.max)<=1 && bottom.body===0);
+    await flow.evaluate(el=>el.scrollTop=0);
+    await page.screenshot({path:`${output}/journal-layout-${width}.png`});
+    await page.getByRole("button",{name:"导入手记",exact:true}).click();
+    const panel=page.getByRole("dialog",{name:"导入手记",exact:true});
+    await panel.getByLabel("原始流水账").waitFor();
+    assert.equal(await panel.evaluate(el=>el.contains(document.elementFromPoint(20,20))),true,"import stays above underlying Atlas chrome");
+    assert.equal(await panel.locator("article").count(),0);
+    await panel.getByRole("button",{name:"返回旅程",exact:true}).click();
+    await assertLayout();
     await context.close();
     console.log(`daily journal layout passed: ${width}x${height}`);
   }
