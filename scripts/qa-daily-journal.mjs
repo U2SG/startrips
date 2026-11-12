@@ -253,7 +253,11 @@ try {
     await page.route(/\/api\/journeys\/[^/]+\/journal$/,route=>route.fulfill({json:{journal:{revision:1,chapters}}}));
     await page.goto(`${origin}/${output}/index.html?media=1&layout=1`);
     await page.getByRole("button",{name:"导入手记",exact:true}).waitFor();
-    await page.waitForFunction(()=>document.querySelector('.journey-stream__header button[aria-label="播放配乐"]')?.disabled===false);
+    await page.locator(".journey-stream[data-journal]").waitFor();
+    // Autoplay can succeed in Chromium. Both audio states occupy the same control.
+    await page.waitForFunction(() => document.querySelector(
+      '.journey-stream__header button:is([aria-label="播放配乐"], [aria-label="关闭配乐"])',
+    )?.disabled === false);
     const assertLayout=async()=>{
       const bounds=await page.evaluate(()=>{
         const header=document.querySelector(".journey-stream__header").getBoundingClientRect();

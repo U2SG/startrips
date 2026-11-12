@@ -33,7 +33,7 @@ try {
       } else await route.fulfill({ json: { journal: url.includes(journeyId) ? stored : { revision: 0, chapters: [] } } });
     });
     await page.goto(`${origin}/artifacts/daily-journal/index.html`);
-    const lodging = page.locator(".journey-stream__journal-day").getByText("住宿", { exact: true }).last();
+    const lodging = page.locator(".journey-stream__journal-meta").getByText("住宿", { exact: true });
     await lodging.waitFor();
     assert.equal(await page.getByRole("button", { name: "在地图上查看：星桥酒店" }).count(), 0);
     await page.getByRole("button", { name: "导入手记", exact: true }).click();
