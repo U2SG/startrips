@@ -889,8 +889,6 @@ function StillCanvas({ canvas }: { canvas: HTMLCanvasElement }) {
   return <span ref={hostRef} className="journey-stream__still" />;
 }
 
-export default JourneyStream;
-
 export function JourneyStream(props: Omit<Parameters<typeof JourneyStreamContent>[0], "journal" | "onOpenJournal">) {
   const { dailyJournal } = useAtlasView();
   const [openFor, setOpenFor] = useState<string | null>(null);
@@ -909,10 +907,10 @@ export function JourneyStream(props: Omit<Parameters<typeof JourneyStreamContent
     }).catch(() => { /* Media remain readable; the import panel reports journal errors. */ });
     return () => request.abort();
   }, [dailyJournal, scope, journeyId, importing]);
-  if (dailyJournal && journey && importing) return <DailyJournalPanel
+  if (dailyJournal && journey && scope && importing) return <DailyJournalPanel
     key={scope} journey={journey} client={dailyJournal}
     onJourneyChanged={next => { setUpdated(next); props.onJourneyUpdated?.(next); }}
-    onJournalChanged={journal => setRead({ scope: scope!, client: dailyJournal, journal })}
+    onJournalChanged={journal => setRead({ scope, client: dailyJournal, journal })}
     onClose={() => setOpenFor(null)} />;
   const journal = read && read.scope === scope && read.client === dailyJournal ? read.journal : undefined;
   return <JourneyStreamContent {...props} key={`${scope}:${Boolean(journal?.chapters.length)}`} journeys={journeys} journal={journal}

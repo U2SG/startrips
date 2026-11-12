@@ -1,12 +1,14 @@
 // Reuse the real Stream harness and its baseline journal regression first.
 import "./qa-daily-journal.mjs";
 import assert from "node:assert/strict";
+import { mkdir } from "node:fs/promises";
 import { launchQaBrowser } from "./qa-browser.mjs";
 const browser = await launchQaBrowser();
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const journeyId = "11111111-1111-4111-8111-111111111111";
 const pointId = "44444444-4444-4444-8444-444444444444";
 const source = "住宿：星桥酒店";
+await mkdir("artifacts/journal-reading", { recursive: true });
 const journal = { revision: 1, chapters: [{ id: "chapter-hotel", date: "2027-04-03", title: "住宿", source,
   events: [{ id: "event-hotel", source, text: "她保留的手工正文。", edited: true, status: "uncertain", localDate: "2027-04-03", localTime: "23:40", timeContext: "当地时间", routePointId: null, mediaIds: [] }], suggestions: [] }] };
 try {
@@ -52,7 +54,7 @@ try {
     releaseApply(); await page.getByText("酒店地点及手记关联已保存。", { exact: true }).waitFor();
     await page.getByRole("button", { name: "返回旅程", exact: true }).click();
     await page.getByText("她保留的手工正文。", { exact: true }).waitFor();
-    await page.screenshot({ path: `artifacts/daily-journal/hotels-${width}.png`, fullPage: true });
+    await page.screenshot({ path: `artifacts/journal-reading/journey-hotels-${width}.png`, fullPage: true });
     await page.getByRole("button", { name: "在地图上查看：星桥酒店" }).click();
     await page.waitForFunction(id => window.__mapPoint === id, pointId);
     await page.getByRole("button", { name: "导入手记", exact: true }).click();
