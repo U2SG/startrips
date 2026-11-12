@@ -135,6 +135,18 @@ it("keeps an explicitly linked accommodation from older planned and uncertain im
   ]);
 });
 
+it("shows what happened when a plan was cancelled without presenting the plan as a visit", () => {
+  const chapters = previewJournalImport(
+    "2026-08-11\n取消\n参观花园\n取消：参观花园，乘坐游船\n取消：因下雨没赶上游船，改去看展。\n船班后来被取消了。",
+    base.startedOn,
+  );
+  const [day] = journeyStreamJournalDays(chapters, new Map());
+  expect(day.chapters[0].events.map(event => event.text)).toEqual([
+    "因下雨没赶上游船，改去看展。",
+    "船班后来被取消了。",
+  ]);
+});
+
 it("retains legacy source paragraphs and drops days made entirely of placeholders", () => {
   const chapters = previewJournalImport(
     "2026-08-11\n起床：未记录\\\n睡前：未确认\n2026-08-12\n她在码头看日落。\n\n小票：未记录\\\n第二段正文。",

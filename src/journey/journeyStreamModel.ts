@@ -79,7 +79,7 @@ export type JourneyStreamJournalDay = { date: string; chapters: JournalReadingCh
 const journalStatusPrefix = /^(?:[【\[（(]\s*(实际(?:发生)?|计划|(?:已)?取消|(?:状态)?待确认|(?:状态)?未确认|未核实|待核实|未记录)\s*[】\]）)]\s*[：:]?|(实际(?:发生)?|计划|(?:已)?取消|(?:状态)?待确认|(?:状态)?未确认|未核实|待核实|未记录)\s*[：:])\s*/u;
 const journalStatusSuffix = /\s*[（(]\s*(?:(?:状态)?(?:待确认|未确认)|未核实|待核实|未记录)\s*[）)]$/u;
 const journalMissingLine = /^(?:[\p{L}\p{N}、/]{1,8}\s*[：:]\s*|(?:状态|日期|时间|时区|地点|位置|住宿|酒店|交通|餐饮|天气|行程|活动|备注)\s*)?[【\[（(]?\s*(?:暂无记录|无记录|未提及|未注明|不详|(?:尚)?未(?:确认|核实|记录|填写|提供|标注|关联)|待(?:确认|核实|补充)|无)\s*[】\]）)]?[。.!！…]*$/u;
-const journalCancellationNarrative = /取消|改签|改期|改去|改走|改道|(?:没|未)(?:去成|能去|赶上)|不去了|因为|后来|最终/u;
+const journalCancellationNarrative = /取消|改签|改期|改去|改走|改道|(?:没|未)(?:去成|能去|赶上)|不去了/u;
 
 function cleanJournalLine(line: string) {
   return line.trim().replace(/^#{1,6}\s+/, "").replace(/\\+$/, "").trimEnd();
@@ -87,7 +87,7 @@ function cleanJournalLine(line: string) {
 
 function journalReadingText(value: string, status?: JournalEvent["status"]): string {
   if (status === "planned") return "";
-  return value.split(/\r\n?|\n/).flatMap(line => {
+  const text = value.split(/\r\n?|\n/).flatMap(line => {
     const clean = cleanJournalLine(line);
     if (!clean) return [""];
     const content = clean.replace(/^(?:[-*•]|\d+[.)])\s+/, "");
@@ -95,11 +95,12 @@ function journalReadingText(value: string, status?: JournalEvent["status"]): str
     const label = marker?.[1] ?? marker?.[2];
     const prose = (marker ? content.slice(marker[0].length) : clean).replace(journalStatusSuffix, "");
     if (!prose || label === "计划" || /^(?:实际(?:发生)?|计划|(?:已)?取消)$/.test(prose)) return [];
-    if ((label === "取消" || label === "已取消") && !journalCancellationNarrative.test(prose) && !/[，,；;]/.test(prose)) return [];
+    if ((label === "取消" || label === "已取消") && !journalCancellationNarrative.test(prose)) return [];
     return journalMissingLine.test(prose.replace(/^(?:[-*•]|\d+[.)])\s+/, "").replace(/\*\*/g, ""))
       ? []
       : [prose];
   }).join("\n").trim();
+  return status === "cancelled" && !journalCancellationNarrative.test(text) ? "" : text;
 }
 
 /** Readable excerpts stay in source order and never participate in media placement. */
