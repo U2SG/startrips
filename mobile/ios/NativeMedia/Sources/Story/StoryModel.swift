@@ -5,7 +5,7 @@ import ImageIO
 import UIKit
 
 @MainActor public final class StoryModel: ObservableObject {
-    private(set) var pageGeneration = 0
+    public private(set) var pageGeneration = 0
     @Published public private(set) var cursor: StoryCursor
     @Published public private(set) var images: [String: UIImage] = [:]
     @Published public private(set) var failure: String?
@@ -95,11 +95,11 @@ import UIKit
             generator.appliesPreferredTrackTransform = true
             generator.maximumSize = CGSize(width: 1400, height: 1400)
             image = UIImage(cgImage: try await generator.image(at: .zero).image)
+            try await session.revalidate()
         } else {
             image = try await loadImage(asset, maxPixel: 1400)
         }
         try Task.checkCancellation()
-        try await session.revalidate()
         guard revision == journey.revision, try bookAsset(assetID) == asset,
               let jpeg = image.jpegData(compressionQuality: 0.82) else { throw MediaFailure.unavailable }
         return jpeg

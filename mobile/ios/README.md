@@ -73,6 +73,11 @@ rebuilds the scene from the native snapshot, with two bounded automatic retries.
 
 The application links the local StartripsMedia package. StoryDestination constructs the viewer using the current AtlasSession and AppRouter selection. See [Native media integration](NativeMedia/INTEGRATION.md) for the owner/guest contract, background transfers and native test targets.
 
+The 立体之书 style bundles the web Three.js book as a separate local WebKit
+document. Its scoped bridge receives resized pictures from native Story, and
+the original video plays through the native player. The settled book position
+returns through the same Story cursor and Atlas navigation as the other styles.
+
 ## CI selection
 
 All rules use the entire PR merge-base diff, including both sides of renames.

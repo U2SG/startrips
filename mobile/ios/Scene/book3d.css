@@ -58,6 +58,7 @@ body {
 
 .journey-book-3d__play-video {
   position: absolute;
+  translate: -50% -50%;
   z-index: 2;
   min-height: 44px;
   padding: 0 16px;

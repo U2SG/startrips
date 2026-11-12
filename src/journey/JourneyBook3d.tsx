@@ -12,6 +12,7 @@ import {
 import { onMotionPreferenceChange, prefersReducedMotion } from "../motion/preferences";
 import { journeySoundtrack } from "./journeyModel";
 import {
+  journeyBookPageForReturn,
   journeyBookPageRoutePointId,
   journeyBookPages,
   journeyBookStartPage,
@@ -318,11 +319,12 @@ export function JourneyBook3dReader({
   const gestureRef = useRef<Gesture | null>(null);
   const pictureUrlsRef = useRef(new Map<string, string>());
   const placedRef = useRef(false);
-  const rootRef = useModalFocus<HTMLDivElement>(() => {
+  function dismiss() {
     if (fullNote !== null) setFullNote(null);
     else if (tocOpen) setTocOpen(false);
     else onClose();
-  });
+  }
+  const rootRef = useModalFocus<HTMLDivElement>(dismiss, !embedded);
 
   useEffect(() => onMotionPreferenceChange(setReduced), []);
 
@@ -730,9 +732,19 @@ export function JourneyBook3dReader({
       storySnapState: "in-context",
     });
   }, [currentPage, journey, onObservationChange]);
+  const returnPage = embedded ? journeyBookPageForReturn(pages, face, visibleFaces) : undefined;
   useEffect(() => {
-    if (embedded && currentPage && settled) embedded.position(currentPage);
-  }, [currentPage, embedded, settled]);
+    if (embedded && returnPage && settled) embedded.position(returnPage);
+  }, [returnPage, embedded, settled]);
+
+  function chooseVideo(target: number) {
+    const asset = pageAsset(pages[target]);
+    if (!asset) return;
+    if (embedded) {
+      setFace(target);
+      embedded.playVideo(asset.id);
+    } else setChosenVideoId(asset.id);
+  }
 
   // ── gestures ──────────────────────────────────────────────────────────
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -859,7 +871,7 @@ export function JourneyBook3dReader({
     for (const target of visibleVideos) {
       const rect = scene.faceRect(faceSide(target, faceCount));
       if (x >= rect.left && x <= rect.left + rect.width && event.clientY - stage.top >= rect.top && event.clientY - stage.top <= rect.top + rect.height) {
-        setChosenVideoId(pageAsset(pages[target])?.id ?? null);
+        chooseVideo(target);
         return;
       }
     }
@@ -874,7 +886,10 @@ export function JourneyBook3dReader({
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
     if (target.closest("video, input, textarea, select")) return;
-    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    if (embedded && event.key === "Escape") {
+      event.preventDefault();
+      dismiss();
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       event.preventDefault();
       step(event.key === "ArrowRight" ? 1 : -1);
     } else if (event.key === "Home" || event.key === "End") {
@@ -920,16 +935,16 @@ export function JourneyBook3dReader({
       onClick={() => setTocOpen((value) => !value)}
     ><IconLayoutList size={19} stroke={1.35} aria-hidden="true" /></button>
   );
-  const currentPicture = currentPage?.kind === "media" && pictures[currentPage.asset.id]?.status === "ready"
-    ? currentPage.asset.fileName : null;
-  const currentVideo = currentPage?.kind === "media" && isVideoAsset(currentPage.asset) ? currentPage.asset : null;
+  const currentPicture = returnPage?.kind === "media" && pictures[returnPage.asset.id]?.status === "ready"
+    ? returnPage.asset.fileName : null;
+  const embeddedScene = embedded && settled && !failure ? sceneRef.current : null;
 
   return (
     <div
       ref={rootRef}
       className={`journey-book journey-book-3d${embedded ? " journey-book--embedded" : ""}`}
-      role="dialog"
-      aria-modal="true"
+      role={embedded ? "region" : "dialog"}
+      aria-modal={embedded ? undefined : true}
       aria-label={`${journey.title} · 立体之书`}
       data-orientation={orientation}
       tabIndex={-1}
@@ -1018,9 +1033,17 @@ export function JourneyBook3dReader({
             onError={() => expireRead(liveAsset.id)}
           />
         ) : null}
-        {!failure && settled && currentVideo && embedded ? (
-          <button type="button" className="journey-book-3d__play-video" onClick={() => embedded.playVideo(currentVideo.id)}>播放视频</button>
-        ) : null}
+        {embeddedScene && visibleVideos.map((target) => {
+          const rect = embeddedScene.faceRect(faceSide(target, faceCount));
+          return <button
+            key={target}
+            type="button"
+            className="journey-book-3d__play-video"
+            aria-label={`播放 ${pageAsset(pages[target])?.fileName}`}
+            style={{ left: rect.left + rect.width / 2, top: rect.top + rect.height / 2 }}
+            onClick={() => chooseVideo(target)}
+          >播放视频</button>;
+        })}
         {settled && overflowNote ? (
           <button type="button" className="journey-book-3d__full-note" onClick={() => setFullNote(overflowNote)}>阅读全文</button>
         ) : null}

@@ -8,5 +8,3 @@ export function JourneyBook3d(props: Omit<ComponentProps<typeof JourneyBook3dRea
   const recoverPresentation = useMediaPresentationRecovery();
   return <JourneyBook3dReader {...props} readMedia={readMedia} recoverPresentation={recoverPresentation} />;
 }
-
-export default JourneyBook3d;

@@ -131,3 +131,14 @@ export function journeyBookStartPage(
 export function journeyBookPageRoutePointId(page: JourneyBookPage | undefined): string | null {
   return page && (page.kind === "media" || page.kind === "note") ? page.routePoint?.id ?? null : null;
 }
+
+/** A blank on a two-page spread leaves the other readable face as the return position. */
+export function journeyBookPageForReturn(
+  pages: readonly JourneyBookPage[],
+  face: number,
+  visibleFaces: readonly number[],
+): JourneyBookPage | undefined {
+  const current = pages[face];
+  if (current?.kind !== "blank") return current;
+  return visibleFaces.map((index) => pages[index]).find((page) => page?.kind === "media" || page?.kind === "note");
+}
