@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import {
+  isAllowedMapTerrainPath,
   isAllowedOpenFreemapPath,
   readMapStyleAsset,
   readMapStyleSprite,
@@ -20,7 +21,7 @@ export const mapStyleRoutes = new Hono();
 
 mapStyleRoutes.get("/", async (context) => {
   const path = context.req.query("path")?.trim() ?? "";
-  if (!isAllowedOpenFreemapPath(path)) {
+  if (!isAllowedOpenFreemapPath(path) && !isAllowedMapTerrainPath(path)) {
     return context.json({ error: "INVALID_MAP_PATH" }, 400);
   }
   return respondWithMapAsset(context, await readMapStyleAsset(path));

@@ -725,6 +725,7 @@ async function openDivePage(context, {
   motion = "animate",
   policy = "default",
   scope = "owner",
+  style = QA_PAINT_STYLE,
 }) {
   const page = await context.newPage();
   const consoleErrors = [];
@@ -751,7 +752,7 @@ async function openDivePage(context, {
       : route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(QA_PAINT_STYLE),
+        body: JSON.stringify(style),
       })
   ));
   await page.goto(qaUrl(focusShape, motion, policy, scope), { waitUntil: "domcontentloaded" });
@@ -2250,6 +2251,56 @@ try {
   await wideRun.page.close();
   await wideContext.close();
 
+  // A controlled DEM proves that the real map consumes elevation tiles after
+  // handoff. Other cases intentionally use the plain background-only style.
+  const terrainRun = await openDivePage(context, {
+    motion: "reduce",
+    style: {
+      ...QA_PAINT_STYLE,
+      sources: { water: { type: "geojson", data: { type: "FeatureCollection", features: [] } } },
+      layers: [...QA_PAINT_STYLE.layers, { id: "water", type: "fill", source: "water" }],
+    },
+  });
+  const { page: terrainPage } = terrainRun;
+  const terrainTile = await terrainPage.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 512;
+    const context = canvas.getContext("2d");
+    const pixels = context.createImageData(512, 512);
+    for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) {
+      const elevation = 480 + Math.round(1200 * Math.sin(Math.PI * x / 512) ** 2 * Math.sin(Math.PI * y / 512) ** 2);
+      const offset = (y * 512 + x) * 4;
+      pixels.data.set([(32768 + elevation) >> 8, (32768 + elevation) & 255, 0, 255], offset);
+    }
+    context.putImageData(pixels, 0, 0);
+    return canvas.toDataURL("image/png").split(",")[1];
+  });
+  let terrainRequests = 0;
+  await terrainPage.route(/\/api\/mapstyle\?path=terrain(?:%2F|\/)/i, (route) => {
+    terrainRequests++;
+    return route.fulfill({ contentType: "image/png", body: Buffer.from(terrainTile, "base64") });
+  });
+  const terrainPoint = await gesturePoint(terrainPage);
+  await wheelUntil(
+    terrainPage, terrainPoint, APPROACH_WHEEL_DELTA,
+    state => state.semanticZoom === "local" || state.owner === "detail",
+    "the terrain fixture did not approach the detail view",
+  );
+  await wheelUntilDetailWithStableRetry(terrainPage, terrainPoint, FINE_WHEEL_DELTA, "terrain detail did not commit");
+  await terrainPage.waitForFunction(() => {
+    const state = window.__detailedEarthMapLayerState?.("startrips-mapterhorn", "startrips-terrain-hillshade");
+    return state?.layerPresent && state.terrainElevation > 400;
+  }, null, { timeout: 15_000 });
+  const terrain = await terrainPage.evaluate(() => (
+    window.__detailedEarthMapLayerState("startrips-mapterhorn", "startrips-terrain-hillshade")
+  ));
+  const terrainFailures = [];
+  if (!terrainRequests || terrainRun.pageErrors.length) {
+    terrainFailures.push(`terrain tiles did not load cleanly: ${JSON.stringify({ terrainRequests, pageErrors: terrainRun.pageErrors })}`);
+  }
+  result.terrain = { terrain, terrainRequests };
+  await terrainPage.close();
+
   result.failures = [
     ...coldFailures,
     ...intermediatePolicyFailures,
@@ -2263,6 +2314,7 @@ try {
     ...blockedFailures,
     ...compactFailures,
     ...wideFailures,
+    ...terrainFailures,
   ];
   console.log(JSON.stringify(result, null, 2));
   if (result.failures.length > 0) {
