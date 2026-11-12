@@ -33,9 +33,14 @@ try {
       } else await route.fulfill({ json: { journal: url.includes(journeyId) ? stored : { revision: 0, chapters: [] } } });
     });
     await page.goto(`${origin}/artifacts/daily-journal/index.html`);
-    const lodging = page.locator(".journey-stream__journal-meta").getByText("住宿", { exact: true });
-    await lodging.waitFor();
-    assert.equal(await page.getByRole("button", { name: "在地图上查看：星桥酒店" }).count(), 0);
+    const reading = page.getByRole("region", { name: "手记", exact: true });
+    const openLodgingDay = async () => {
+      await reading.locator("summary").filter({ hasText: "2027-04-03" }).click();
+      await reading.getByText("她保留的手工正文。", { exact: true }).waitFor();
+    };
+    const hotelMapLink = reading.getByRole("button", { name: "在地图上查看：星桥酒店" });
+    await openLodgingDay();
+    assert.equal(await hotelMapLink.count(), 0);
     await page.getByRole("button", { name: "导入手记", exact: true }).click();
     const preview = () => page.getByRole("button", { name: "用 AI 查找已入住酒店" });
     await preview().waitFor();
@@ -53,14 +58,15 @@ try {
     await page.keyboard.press("Escape"); assert.equal(await page.getByRole("dialog", { name: "导入手记" }).count(), 1);
     releaseApply(); await page.getByText("酒店地点及手记关联已保存。", { exact: true }).waitFor();
     await page.getByRole("button", { name: "返回旅程", exact: true }).click();
-    await page.getByText("她保留的手工正文。", { exact: true }).waitFor();
+    await openLodgingDay();
     await page.screenshot({ path: `artifacts/journal-reading/journey-hotels-${width}.png`, fullPage: true });
-    await page.getByRole("button", { name: "在地图上查看：星桥酒店" }).click();
+    await hotelMapLink.click();
     await page.waitForFunction(id => window.__mapPoint === id, pointId);
     await page.getByRole("button", { name: "导入手记", exact: true }).click();
     assert.equal(await page.evaluate(() => window.__ownerJourney.routePoints.some(p => p.id === "44444444-4444-4444-8444-444444444444")), true);
     await page.evaluate(() => window.dispatchEvent(new Event("qa-remount-stream")));
-    await page.getByRole("button", { name: "在地图上查看：星桥酒店" }).waitFor();
+    await openLodgingDay();
+    await hotelMapLink.waitFor();
     await page.getByRole("button", { name: "导入手记", exact: true }).click();
     // A late preview must not land in the newly selected account.
     await preview().click(); await page.getByText("正在检索酒店…", { exact: true }).waitFor();
