@@ -126,7 +126,7 @@ export function DailyJournalPanel({ journey, client, onClose, onJourneyChanged, 
           onBusy={value => setBusy(current => value ? "导入" : current === "导入" ? null : current)}
           onPreview={preview => {
             if (preview.revision !== saved.revision) { setError("手记已更新，请保留原文，重新打开后导入。"); return false; }
-            setDraft(preview); setEditing(false); setHotels(null); setFromImport(true); setError(""); setNotice("识别完成，已填入预览，尚未保存。"); return true;
+            setDraft(preview); setEditing(false); setHotels(null); setFromImport(true); setError(""); setNotice(""); return true;
           }} />
       </section>
       <div className="daily-journal__saved-actions">
