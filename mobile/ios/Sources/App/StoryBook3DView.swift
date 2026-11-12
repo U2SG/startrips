@@ -1,4 +1,5 @@
 import AVKit
+import OSLog
 import StartripsMedia
 import SwiftUI
 import WebKit
@@ -138,6 +139,7 @@ private struct BookScene: UIViewRepresentable {
     }
 
     @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandlerWithReply {
+        private static let logger = Logger(subsystem: "app.startrips.ios", category: "StoryBook")
         private let snapshot: Snapshot
         private let model: StoryModel
         private let pageGeneration: Int
@@ -146,6 +148,7 @@ private struct BookScene: UIViewRepresentable {
         private let play: (MediaAsset) -> Void
         private var server: BundledSceneServer?
         private var localURL: URL?
+        private var startup: Task<Void, Never>?
         private var pictures: [UUID: Task<Void, Never>] = [:]
         private var stopped = false
 
@@ -159,8 +162,9 @@ private struct BookScene: UIViewRepresentable {
         private var isCurrent: Bool { !stopped && pageGeneration == model.pageGeneration }
 
         func start(_ view: WKWebView) {
-            guard let root = Bundle.main.url(forResource: "Scene", withExtension: nil) else {
-                Task { @MainActor in if isCurrent { fail() } }
+            guard let root = Bundle.main.url(forResource: "Scene", withExtension: nil),
+                  FileManager.default.fileExists(atPath: root.appendingPathComponent("book3d.html").path) else {
+                Task { @MainActor in reportFailure("Bundled book document missing") }
                 return
             }
             let server = BundledSceneServer(root: root, mapOrigin: nil)
@@ -169,45 +173,57 @@ private struct BookScene: UIViewRepresentable {
                 try server.start { [weak self, weak view] result in
                     Task { @MainActor in
                         guard let self, self.isCurrent, let view else { return }
-                        guard case .success(let index) = result else { self.fail(); return }
-                        let url = index.deletingLastPathComponent().appendingPathComponent("book3d.html")
+                        guard case .success(let index) = result,
+                              let url = URL(string: "/book3d.html", relativeTo: index)?.absoluteURL else {
+                            self.reportFailure("Could not start loopback book server")
+                            return
+                        }
                         self.localURL = url
+                        self.startup = Task { [weak self] in
+                            do { try await Task.sleep(for: .seconds(12)) } catch { return }
+                            self?.reportFailure("Book module did not request its snapshot")
+                        }
                         view.load(URLRequest(url: url))
                     }
                 }
-            } catch { Task { @MainActor in if isCurrent { fail() } } }
+            } catch { Task { @MainActor in reportFailure("Could not create loopback book server") } }
         }
 
         func stop() {
             stopped = true
+            startup?.cancel()
+            startup = nil
             pictures.values.forEach { $0.cancel() }
             pictures.removeAll()
             server?.stop()
             server = nil
         }
 
+        private func reportFailure(_ reason: String) {
+            guard isCurrent else { return }
+            Self.logger.error("\(reason, privacy: .public)")
+            fail()
+        }
+
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-            decisionHandler(action.targetFrame?.isMainFrame == true && action.request.url == localURL ? .allow : .cancel)
+            decisionHandler(action.targetFrame?.isMainFrame != false && action.request.url == localURL ? .allow : .cancel)
         }
 
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            guard isCurrent, webView.url == localURL else { return }
-            guard let data = try? JSONEncoder().encode(snapshot) else { fail(); return }
-            // Encode again as a string literal before evaluating any user text.
-            guard let quoted = try? JSONEncoder().encode(String(decoding: data, as: UTF8.self)) else { fail(); return }
-            let script = "window.startStoryBook(JSON.parse(" + String(decoding: quoted, as: UTF8.self) + "))"
-            webView.evaluateJavaScript(script) { [weak self] _, error in
-                if error != nil { Task { @MainActor in if let self, self.isCurrent { self.fail() } } }
-            }
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            reportFailure("Book navigation failed: \((error as NSError).code)")
         }
 
-        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { if isCurrent { fail() } }
-        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { if isCurrent { fail() } }
-        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { if isCurrent { fail() } }
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            reportFailure("Book provisional navigation failed: \((error as NSError).code)")
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            reportFailure("Book WebKit process terminated")
+        }
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage,
-                                   replyHandler: @escaping (Any?, String?) -> Void) {
+                                   replyHandler: @escaping @MainActor @Sendable (Any?, String?) -> Void) {
             let origin = message.frameInfo.securityOrigin
             guard isCurrent, message.frameInfo.isMainFrame, origin.protocol == "http",
                   origin.host == "127.0.0.1", origin.port == localURL?.port,
@@ -216,6 +232,14 @@ private struct BookScene: UIViewRepresentable {
 
             let assetID = body["assetId"] as? String
             switch kind {
+            case "ready":
+                startup?.cancel()
+                startup = nil
+                guard let data = try? JSONEncoder().encode(snapshot) else {
+                    replyHandler(nil, "Story Book snapshot unavailable")
+                    return
+                }
+                replyHandler(String(decoding: data, as: UTF8.self), nil)
             case "position":
                 model.follow3DBookPage(routePointID: body["routePointId"] as? String,
                                       assetID: assetID, isCover: body["isCover"] as? Bool == true)

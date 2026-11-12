@@ -15,10 +15,9 @@ type Snapshot = {
 type BookMessage =
   | { kind: "picture" | "video"; assetId: string }
   | { kind: "position"; routePointId: string | null; assetId: string | null; isCover: boolean }
-  | { kind: "fallback" | "close" };
+  | { kind: "ready" | "fallback" | "close" };
 
 type BookWindow = Window & {
-  startStoryBook?: (snapshot: Snapshot) => void;
   webkit?: { messageHandlers?: { storyBook?: { postMessage: (body: BookMessage) => Promise<unknown> } } };
 };
 
@@ -56,7 +55,7 @@ function fallback() {
   notify({ kind: "fallback" });
 }
 
-host.startStoryBook = ({ journey, routePointId, assetId }) => {
+function renderBook({ journey, routePointId, assetId }: Snapshot) {
   // A missing routePointId denotes Journey-level media in the native projection.
   const bookJourney = {
     ...journey,
@@ -79,4 +78,16 @@ host.startStoryBook = ({ journey, routePointId, assetId }) => {
       recoverPresentation={fallback}
     />,
   );
-};
+}
+
+void send({ kind: "ready" }).then((json) => {
+  if (typeof json !== "string") throw new Error("Story Book snapshot unavailable");
+  renderBook(JSON.parse(json));
+}).catch(() => {
+  root.render(
+    <main className="story-book-loading">
+      <p role="status">立体之书暂时无法打开。</p>
+      <button type="button" className="journey-book__text-action" onClick={fallback}>改用旅程之书</button>
+    </main>,
+  );
+});
