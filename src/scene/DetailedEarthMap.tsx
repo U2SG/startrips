@@ -532,6 +532,7 @@ export default function DetailedEarthMap({
     type DebugLayerState = (sourceId: string, layerId: string) => {
       sourcePresent: boolean; sourceLoaded: boolean; sourceFeatures: number;
       layerPresent: boolean; renderedFeatures: number; zoom: number; pitch: number;
+      terrainElevation: number | null;
     };
     let debugLayerState: DebugLayerState | null = null;
     let debugJourneyRoutePointHit: ((clientX: number, clientY: number) => {
@@ -583,6 +584,7 @@ export default function DetailedEarthMap({
           sourceFeatures: sourceLoaded ? map.querySourceFeatures(sourceId).length : 0,
           layerPresent, renderedFeatures: layerPresent ? debugRenderedFeatureCount?.(layerId) ?? 0 : 0,
           zoom: map.getZoom(), pitch: map.getPitch(),
+          terrainElevation: map.getTerrain()?.source === sourceId ? map.queryTerrainElevation(map.getCenter()) ?? null : null,
         };
       };
       debugWindow.__detailedEarthMapLayerState = debugLayerState;
