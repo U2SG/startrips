@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BOOK_OVERLAY_NOTE_LIMIT,
   journeyBookCoverStyle,
+  journeyBookPageForReturn,
   journeyBookPageRoutePointId,
   journeyBookPages,
   journeyBookStartPage,
@@ -194,4 +195,12 @@ describe("journeyBookStartPage", () => {
     expect(journeyBookPageRoutePointId(pages[3])).toBe("b");
     expect(journeyBookPageRoutePointId(pages[0])).toBeNull();
   });
+});
+
+it("returns to the media facing a blank page in a spread", () => {
+  const video = asset("clip", null, 0, "video/mp4");
+  const pages = journeyBookPages({ ...base, media: [video] });
+  expect(shape(pages)).toEqual(["cover", "media:clip", "blank", "end"]);
+  expect(journeyBookPageForReturn(pages, 2, [1, 2])).toBe(pages[1]);
+  expect(journeyBookPageForReturn(pages, 2, [2])).toBeUndefined();
 });

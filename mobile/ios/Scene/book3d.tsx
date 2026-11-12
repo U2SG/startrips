@@ -15,7 +15,7 @@ type Snapshot = {
 type BookMessage =
   | { kind: "picture" | "video"; assetId: string }
   | { kind: "position"; routePointId: string | null; assetId: string | null; isCover: boolean }
-  | { kind: "fallback" };
+  | { kind: "fallback" | "close" };
 
 type BookWindow = Window & {
   startStoryBook?: (snapshot: Snapshot) => void;
@@ -74,7 +74,7 @@ host.startStoryBook = ({ journey, routePointId, assetId }) => {
       initialAssetId={assetId}
       embedded={embedded}
       readMedia={async () => { throw new Error("The embedded book reads pictures through native Story"); }}
-      onClose={fallback}
+      onClose={() => notify({ kind: "close" })}
       onOpenClassic={fallback}
       recoverPresentation={fallback}
     />,

@@ -140,6 +140,7 @@ private struct BookScene: UIViewRepresentable {
     @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandlerWithReply {
         private let snapshot: Snapshot
         private let model: StoryModel
+        private let pageGeneration: Int
         private let useFlatBook: () -> Void
         private let fail: () -> Void
         private let play: (MediaAsset) -> Void
@@ -151,12 +152,15 @@ private struct BookScene: UIViewRepresentable {
         init(snapshot: Snapshot, model: StoryModel, useFlatBook: @escaping () -> Void,
              fail: @escaping () -> Void, play: @escaping (MediaAsset) -> Void) {
             self.snapshot = snapshot; self.model = model; self.useFlatBook = useFlatBook
+            pageGeneration = model.pageGeneration
             self.fail = fail; self.play = play
         }
 
+        private var isCurrent: Bool { !stopped && pageGeneration == model.pageGeneration }
+
         func start(_ view: WKWebView) {
             guard let root = Bundle.main.url(forResource: "Scene", withExtension: nil) else {
-                Task { @MainActor in if !stopped { fail() } }
+                Task { @MainActor in if isCurrent { fail() } }
                 return
             }
             let server = BundledSceneServer(root: root, mapOrigin: nil)
@@ -164,14 +168,14 @@ private struct BookScene: UIViewRepresentable {
             do {
                 try server.start { [weak self, weak view] result in
                     Task { @MainActor in
-                        guard let self, !self.stopped, let view else { return }
+                        guard let self, self.isCurrent, let view else { return }
                         guard case .success(let index) = result else { self.fail(); return }
                         let url = index.deletingLastPathComponent().appendingPathComponent("book3d.html")
                         self.localURL = url
                         view.load(URLRequest(url: url))
                     }
                 }
-            } catch { Task { @MainActor in if !stopped { fail() } } }
+            } catch { Task { @MainActor in if isCurrent { fail() } } }
         }
 
         func stop() {
@@ -188,24 +192,24 @@ private struct BookScene: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            guard !stopped, webView.url == localURL else { return }
+            guard isCurrent, webView.url == localURL else { return }
             guard let data = try? JSONEncoder().encode(snapshot) else { fail(); return }
             // Encode again as a string literal before evaluating any user text.
             guard let quoted = try? JSONEncoder().encode(String(decoding: data, as: UTF8.self)) else { fail(); return }
             let script = "window.startStoryBook(JSON.parse(" + String(decoding: quoted, as: UTF8.self) + "))"
             webView.evaluateJavaScript(script) { [weak self] _, error in
-                if error != nil { Task { @MainActor in if let self, !self.stopped { self.fail() } } }
+                if error != nil { Task { @MainActor in if let self, self.isCurrent { self.fail() } } }
             }
         }
 
-        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { if !stopped { fail() } }
-        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { if !stopped { fail() } }
-        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { if !stopped { fail() } }
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { if isCurrent { fail() } }
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { if isCurrent { fail() } }
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { if isCurrent { fail() } }
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage,
                                    replyHandler: @escaping (Any?, String?) -> Void) {
             let origin = message.frameInfo.securityOrigin
-            guard !stopped, message.frameInfo.isMainFrame, origin.protocol == "http",
+            guard isCurrent, message.frameInfo.isMainFrame, origin.protocol == "http",
                   origin.host == "127.0.0.1", origin.port == localURL?.port,
                   let body = message.body as? [String: Any], let kind = body["kind"] as? String
             else { replyHandler(nil, "Book message rejected"); return }
@@ -219,12 +223,19 @@ private struct BookScene: UIViewRepresentable {
             case "fallback":
                 replyHandler(true, nil)
                 useFlatBook()
+            case "close":
+                replyHandler(true, nil)
+                model.leave()
             case "video":
-                guard let asset = model.activeAsset, asset.isVideo, asset.id == assetID else {
+                guard let asset = snapshot.journey.media.first(where: { $0.id == assetID && $0.mimeType.hasPrefix("video/") }) else {
+                    replyHandler(nil, "Video unavailable"); return
+                }
+                model.follow3DBookPage(routePointID: asset.routePointId, assetID: asset.id, isCover: false)
+                guard let current = model.activeAsset, current.id == asset.id else {
                     replyHandler(nil, "Video unavailable"); return
                 }
                 replyHandler(true, nil)
-                play(asset)
+                play(current)
             case "picture":
                 guard let assetID, assetID.utf8.count <= 256, pictures.count < 16 else {
                     replyHandler(nil, "Picture unavailable"); return
@@ -235,6 +246,7 @@ private struct BookScene: UIViewRepresentable {
                     do {
                         let image = try await model.bookPicture(assetID)
                         try Task.checkCancellation()
+                        guard self?.isCurrent == true else { throw MediaFailure.unavailable }
                         replyHandler(image.base64EncodedString(), nil)
                     } catch { replyHandler(nil, "Picture unavailable") }
                 }
