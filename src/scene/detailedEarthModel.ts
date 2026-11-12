@@ -832,6 +832,19 @@ export function getDetailedEarthStyle(): StyleSpecification | string {
   return getConfiguredStyleUrl() || DEFAULT_DETAILED_EARTH_STYLE_URL;
 }
 
+export function isFiordDetailedEarthStyle(style: StyleSpecification | string, pageUrl: string): boolean {
+  if (typeof style !== "string") return false;
+  try {
+    const configured = new URL(style, pageUrl);
+    const fiord = new URL(DEFAULT_DETAILED_EARTH_STYLE_URL, pageUrl);
+    return configured.origin === fiord.origin
+      && configured.pathname === fiord.pathname
+      && configured.searchParams.toString() === fiord.searchParams.toString();
+  } catch {
+    return false;
+  }
+}
+
 export function createDetailedEarthLabelExpression(
   language: DetailedEarthLanguage,
   schema: DetailedEarthLabelSchema = getDetailedEarthLabelSchema(),

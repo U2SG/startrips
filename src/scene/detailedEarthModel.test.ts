@@ -28,6 +28,7 @@ import {
   getDetailedEarthFocusDuration,
   clampDetailedEarthPitch,
   isDetailedEarthNameLabel,
+  isFiordDetailedEarthStyle,
   isRasterDetailedEarth,
   pickDetailedEarthJourneyRoutePointHit,
   resolveDetailedEarthRenderedRoutePointHit,
@@ -118,6 +119,16 @@ describe("detailedEarthModel", () => {
     expect(getDetailedEarthStyle()).toBe(DEFAULT_DETAILED_EARTH_STYLE_URL);
     expect(isRasterDetailedEarth()).toBe(false);
     expect(useGlobeProjection()).toBe(true);
+  });
+
+  it.each([
+    [DEFAULT_DETAILED_EARTH_STYLE_URL, true],
+    ["https://startrips.example/api/mapstyle?path=styles%2Ffiord", true],
+    ["/api/mapstyle?path=styles/fiord", true],
+    ["/api/mapstyle?path=styles%2Fliberty", false],
+    ["https://other.example/api/mapstyle?path=styles%2Ffiord", false],
+  ])("recognizes the same-origin Fiord proxy %s", (style, expected) => {
+    expect(isFiordDetailedEarthStyle(style, "https://startrips.example/")).toBe(expected);
   });
 
   it("keeps globe projection for vector providers but not raster tiles", () => {
