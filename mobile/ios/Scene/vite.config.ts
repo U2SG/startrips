@@ -8,7 +8,11 @@ const repository = resolve(root, "../../..");
 const output = resolve(root, "../Resources/Scene");
 export default defineConfig({
   root, base: "/", publicDir: false,
-  build: { outDir: output, emptyOutDir: true },
+  build: {
+    outDir: output,
+    emptyOutDir: true,
+    rollupOptions: { input: [resolve(root, "index.html"), resolve(root, "book3d.html")] },
+  },
   plugins: [{
     name: "bundled-production-scene-resources",
     async closeBundle() {

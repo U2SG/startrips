@@ -9,17 +9,10 @@ final class StoryPresentationUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture"]
         app.launch()
+        openStory(app)
         let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
-        XCTAssertTrue(chip.waitForExistence(timeout: 30))
-        chip.tap()
         let point = app.webViews.switches["起点"]
-        XCTAssertTrue(point.waitForExistence(timeout: 10))
-        point.tap()
-        chip.tap()
         let story = app.webViews.buttons["打开故事：起点"].firstMatch
-        XCTAssertTrue(story.waitForExistence(timeout: 10))
-        story.tap()
-        XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10))
         let style = app.buttons["story.style"]
         XCTAssertEqual(style.label, "展示方式")
         XCTAssertEqual(style.value as? String, "默认")
@@ -71,6 +64,56 @@ final class StoryPresentationUITests: XCTestCase {
         choose(app, "默认")
         XCTAssertTrue(photo.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["story.next"].exists)
+    }
+
+    @MainActor
+    func test3DBookLoadsGuestPicturesAndReturnsToTurnedPage() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture", "-atlas-guest-fixture"]
+        app.launch()
+        openStory(app)
+        choose(app, "立体之书")
+        XCTAssertFalse(app.buttons["story.tools"].exists)
+        let book = app.webViews.containing(.button, identifier: "目录").firstMatch
+        let next = book.buttons["下一页"]
+        let first = book.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "synthetic.jpg")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 15))
+        capture(app, "story-style-3d-book")
+        next.tap()
+        let second = book.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "second.png")).firstMatch
+        XCTAssertTrue(second.waitForExistence(timeout: 10))
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let deadline = Date().addingTimeInterval(10)
+        while app.frame.width <= app.frame.height && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTAssertGreaterThan(app.frame.width, app.frame.height)
+        XCTAssertTrue(second.exists)
+        capture(app, "story-style-3d-book-landscape", screen: true)
+
+        XCUIDevice.shared.orientation = .portrait
+        app.buttons["story.close"].tap()
+        let selection = app.staticTexts["atlas.selection.asset"]
+        XCTAssertTrue(selection.waitForExistence(timeout: 10))
+        XCTAssertEqual(selection.label, "asset-second")
+    }
+
+    @MainActor private func openStory(_ app: XCUIApplication) {
+        let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
+        XCTAssertTrue(chip.waitForExistence(timeout: 30))
+        chip.tap()
+        let point = app.webViews.switches["起点"]
+        XCTAssertTrue(point.waitForExistence(timeout: 10))
+        point.tap()
+        chip.tap()
+        let story = app.webViews.buttons["打开故事：起点"].firstMatch
+        XCTAssertTrue(story.waitForExistence(timeout: 10))
+        story.tap()
+        XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10))
     }
 
     @MainActor private func element(_ app: XCUIApplication, _ id: String) -> XCUIElement {

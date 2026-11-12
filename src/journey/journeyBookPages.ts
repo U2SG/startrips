@@ -10,10 +10,15 @@ import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
  * media (route corrections, pass-through positions) carry no story and get no
  * page. Order follows the canonical Route order; media keeps its owner order.
  */
+type BookRoutePoint = Pick<RoutePoint, "id" | "label" | "note" | "latitude" | "longitude">;
+export type BookJourney = Pick<Journey, "id" | "title" | "startedOn" | "endedOn" | "note" | "coverMediaAssetId" | "media"> & {
+  routePoints: readonly BookRoutePoint[];
+};
+
 export type JourneyBookPage =
   | { kind: "cover"; key: string; asset: JourneyMediaAsset | null }
-  | { kind: "media"; key: string; asset: JourneyMediaAsset; routePoint: RoutePoint | null; note: string | null }
-  | { kind: "note"; key: string; routePoint: RoutePoint | null; note: string }
+  | { kind: "media"; key: string; asset: JourneyMediaAsset; routePoint: BookRoutePoint | null; note: string | null }
+  | { kind: "note"; key: string; routePoint: BookRoutePoint | null; note: string }
   | { kind: "blank"; key: string }
   | { kind: "end"; key: string };
 
@@ -30,13 +35,13 @@ function trimmedNote(note: string | null | undefined): string | null {
   return value ? value : null;
 }
 
-function ownerMedia(journey: Journey, routePointId: string | null): JourneyMediaAsset[] {
+function ownerMedia(journey: BookJourney, routePointId: string | null): JourneyMediaAsset[] {
   return journey.media
     .filter((asset) => asset.routePointId === routePointId && isVisualMediaAsset(asset))
     .sort((left, right) => left.sortOrder - right.sortOrder);
 }
 
-function coverAsset(journey: Journey): JourneyMediaAsset | null {
+function coverAsset(journey: BookJourney): JourneyMediaAsset | null {
   const explicit = journey.coverMediaAssetId
     ? journey.media.find((asset) => asset.id === journey.coverMediaAssetId && isVisualMediaAsset(asset))
     : null;
@@ -46,7 +51,7 @@ function coverAsset(journey: Journey): JourneyMediaAsset | null {
 
 function ownerPages(
   media: readonly JourneyMediaAsset[],
-  routePoint: RoutePoint | null,
+  routePoint: BookRoutePoint | null,
   note: string | null,
 ): JourneyBookPage[] {
   const pages: JourneyBookPage[] = [];
@@ -71,7 +76,7 @@ function ownerPages(
   return pages;
 }
 
-export function journeyBookPages(journey: Journey): JourneyBookPage[] {
+export function journeyBookPages(journey: BookJourney): JourneyBookPage[] {
   const journeyNote = trimmedNote(journey.note);
   const pages: JourneyBookPage[] = [{ kind: "cover", key: "cover", asset: coverAsset(journey) }];
   // The Journey note opens the book on its own first page, never on the

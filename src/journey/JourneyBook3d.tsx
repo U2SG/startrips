@@ -10,12 +10,12 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { onMotionPreferenceChange, prefersReducedMotion } from "../motion/preferences";
-import { useAtlasView } from "./atlasView";
 import { journeySoundtrack } from "./journeyModel";
 import {
   journeyBookPageRoutePointId,
   journeyBookPages,
   journeyBookStartPage,
+  type BookJourney,
   type JourneyBookPage,
 } from "./journeyBookPages";
 import { BOOK_PAGE_RATIO, journeyBookLayout, type JourneyBookOrientation } from "./journeyBookLayout";
@@ -42,11 +42,11 @@ import {
   type ReaderRead,
 } from "./journeyReaderMedia";
 import type { JourneyBookOpenTarget } from "./JourneyBook";
-import { useMediaPresentationRecovery } from "./mediaPresentation";
+import type { MediaPresentationStyle } from "./mediaPresentationStyle";
 import { useModalFocus } from "./useModalFocus";
 import { withStillFragment } from "./videoStillFrame";
 import type { StoryLogicalObservation } from "./storyMediaPolicy";
-import type { Journey, JourneyMediaAsset } from "./types";
+import type { JourneyMediaAsset, PrivateMediaRead } from "./types";
 import "../styles/journey-book.css";
 import "../styles/journey-book-3d.css";
 
@@ -152,7 +152,7 @@ type Gesture = {
   onVideo: boolean;
 };
 
-function journeyRange(journey: Journey) {
+function journeyRange(journey: BookJourney) {
   return journey.endedOn && journey.endedOn !== journey.startedOn
     ? `${journey.startedOn} — ${journey.endedOn}`
     : journey.startedOn;
@@ -237,7 +237,7 @@ function loadsWithoutCors(url: string): Promise<boolean> {
  * is overlaid with the one live `<video>`. Portrait reads a page at a time and
  * pans across an open spread, turning paper only between sheets.
  */
-export function JourneyBook3d({
+export function JourneyBook3dReader({
   journeys,
   journeyId,
   routePointId = null,
@@ -247,8 +247,11 @@ export function JourneyBook3d({
   onNavigate,
   onObservationChange,
   onGlobeCoverChange,
+  readMedia,
+  recoverPresentation,
+  embedded,
 }: {
-  journeys: readonly Journey[];
+  journeys: readonly BookJourney[];
   journeyId: string;
   routePointId?: string | null;
   initialAssetId?: string | null;
@@ -258,9 +261,14 @@ export function JourneyBook3d({
   onObservationChange?: (observation: StoryLogicalObservation | null) => void;
   /** The book covers the globe completely, so the globe can stop rendering. */
   onGlobeCoverChange?: (state: { opaqueMediaCover: boolean; coverTransitionActive: boolean }) => void;
+  readMedia: (assetId: string) => Promise<PrivateMediaRead>;
+  recoverPresentation: (style: MediaPresentationStyle) => void;
+  embedded?: {
+    picture: (assetId: string) => Promise<string>;
+    playVideo: (assetId: string) => void;
+    position: (page: JourneyBookPage) => void;
+  };
 }) {
-  const { readMedia } = useAtlasView();
-  const recoverPresentation = useMediaPresentationRecovery();
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeyIndex >= 0 ? journeys[journeyIndex] : null;
   const previousJourney = journeyIndex > 0 ? journeys[journeyIndex - 1] : null;
@@ -270,7 +278,7 @@ export function JourneyBook3d({
   // Fingerprint of what the cover draws from the Route, for its repaint signature.
   const coverRouteKey = `${journey?.routePoints.length ?? 0}:${coverRoute.kind === "point" ? "point" : coverRouteSvgPath(coverRoute, 1000, 1000)}`;
   const faceCount = pages.length;
-  const soundtrack = journey ? journeySoundtrack(journey) : null;
+  const soundtrack = journey && !embedded ? journeySoundtrack(journey) : null;
 
   const [face, setFace] = useState(() => journeyBookStartPage(pages, { routePointId, assetId: initialAssetId }));
   const faceRef = useRef(face);
@@ -342,6 +350,7 @@ export function JourneyBook3d({
       return;
     }
     sceneRef.current = scene;
+    setFailure(null);
     scene.setFaceCount(faceCount);
     scene.jumpTo(spreadOfFace(faceRef.current));
     placedRef.current = false;
@@ -359,15 +368,18 @@ export function JourneyBook3d({
         setSettled(isSettled);
       }
     });
+    const contextLost = () => setFailure("立体之书已暂停。");
+    if (embedded) canvas.addEventListener("webglcontextlost", contextLost);
     const surfaces = surfacesRef.current;
     return () => {
+      canvas.removeEventListener("webglcontextlost", contextLost);
       for (const surface of surfaces.values()) disposeSurface(surface);
       surfaces.clear();
       sceneRef.current = null;
       scene.dispose();
       canvas.remove();
     };
-  }, [faceCount, reduced]);
+  }, [faceCount, reduced, embedded]);
 
   useLayoutEffect(() => {
     const stage = stageRef.current;
@@ -412,7 +424,7 @@ export function JourneyBook3d({
     }
     return assets;
   }, [loadFaces, pages, soundtrack]);
-  const { reads, expireRead, clearRetry } = useReaderReads(readMedia, wantedAssets);
+  const { reads, expireRead, clearRetry } = useReaderReads(readMedia, embedded ? [] : wantedAssets);
   const stills = useVideoStills(reads, wantedAssets);
   const soundtrackRead = soundtrack ? reads[soundtrack.id] : undefined;
   const soundtrackUrl = soundtrackRead?.status === "ready" ? soundtrackRead.read.url : null;
@@ -426,6 +438,23 @@ export function JourneyBook3d({
     for (const asset of wantedAssets) {
       if (asset === soundtrack) continue;
       live.add(asset.id);
+      if (embedded) {
+        const key = asset.id;
+        if (pictureUrlsRef.current.has(key)) continue;
+        const ticket = crypto.randomUUID();
+        pictureUrlsRef.current.set(key, ticket);
+        const urls = pictureUrlsRef.current;
+        void embedded.picture(key).then(loadPicture).then((canvas) => {
+          if (urls.get(key) === ticket) setPictures((previous) => ({
+            ...previous, [key]: { status: "ready", image: canvas, width: canvas.width, height: canvas.height },
+          }));
+        }, () => {
+          if (urls.get(key) === ticket) setPictures((previous) => ({
+            ...previous, [key]: { status: "error", message: "暂时无法读取" },
+          }));
+        });
+        continue;
+      }
       const read = reads[asset.id];
       if (read?.status === "error") {
         if (pictures[asset.id]?.status !== "error") {
@@ -464,7 +493,7 @@ export function JourneyBook3d({
         ? previous
         : Object.fromEntries(kept.map((assetId) => [assetId, previous[assetId]]));
     });
-  }, [wantedAssets, reads, stills, soundtrack, expireRead, clearRetry, pictures]);
+  }, [wantedAssets, reads, stills, soundtrack, expireRead, clearRetry, pictures, embedded]);
 
   // Loads still in flight when the book closes report nothing.
   useEffect(() => {
@@ -701,6 +730,9 @@ export function JourneyBook3d({
       storySnapState: "in-context",
     });
   }, [currentPage, journey, onObservationChange]);
+  useEffect(() => {
+    if (embedded && currentPage && settled) embedded.position(currentPage);
+  }, [currentPage, embedded, settled]);
 
   // ── gestures ──────────────────────────────────────────────────────────
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -879,10 +911,23 @@ export function JourneyBook3d({
     return "";
   }).filter(Boolean).join(" ");
 
+  const tocButton = (
+    <button
+      type="button"
+      className="journey-book__icon"
+      aria-label="目录"
+      aria-expanded={tocOpen}
+      onClick={() => setTocOpen((value) => !value)}
+    ><IconLayoutList size={19} stroke={1.35} aria-hidden="true" /></button>
+  );
+  const currentPicture = currentPage?.kind === "media" && pictures[currentPage.asset.id]?.status === "ready"
+    ? currentPage.asset.fileName : null;
+  const currentVideo = currentPage?.kind === "media" && isVideoAsset(currentPage.asset) ? currentPage.asset : null;
+
   return (
     <div
       ref={rootRef}
-      className="journey-book journey-book-3d"
+      className={`journey-book journey-book-3d${embedded ? " journey-book--embedded" : ""}`}
       role="dialog"
       aria-modal="true"
       aria-label={`${journey.title} · 立体之书`}
@@ -890,7 +935,7 @@ export function JourneyBook3d({
       tabIndex={-1}
       onKeyDown={onKeyDown}
     >
-      <header className="journey-book__header">
+      {!embedded ? <header className="journey-book__header">
         <button type="button" className="journey-book__icon" aria-label="合上书" onClick={onClose}>
           <IconX size={20} stroke={1.35} aria-hidden="true" />
         </button>
@@ -913,16 +958,10 @@ export function JourneyBook3d({
                 : <IconMusicOff size={19} stroke={1.35} aria-hidden="true" />}
             </button>
           ) : null}
-          <button
-            type="button"
-            className="journey-book__icon"
-            aria-label="目录"
-            aria-expanded={tocOpen}
-            onClick={() => setTocOpen((value) => !value)}
-          ><IconLayoutList size={19} stroke={1.35} aria-hidden="true" /></button>
+          {tocButton}
           <StoryPresentationPicker onOpenClassic={() => onOpenClassic(classicTarget)} />
         </div>
-      </header>
+      </header> : null}
       {tocOpen ? (
         <nav className="journey-book__toc" aria-label="目录">
           <ol>
@@ -954,7 +993,7 @@ export function JourneyBook3d({
           <div className="journey-book-3d__failure" role="status">
             <p>{failure ?? "媒体存储不允许跨域读取，立体之书无法显示照片。"}</p>
             <div className="journey-book-3d__failure-actions">
-              <button type="button" className="journey-book__text-action" onClick={() => onOpenClassic(classicTarget)}>打开经典视图</button>
+              {!embedded ? <button type="button" className="journey-book__text-action" onClick={() => onOpenClassic(classicTarget)}>打开经典视图</button> : null}
               <button type="button" className="journey-book__text-action" onClick={() => recoverPresentation("book")}>改用旅程之书</button>
             </div>
           </div>
@@ -978,6 +1017,9 @@ export function JourneyBook3d({
             onCanPlay={() => clearRetry(liveAsset.id)}
             onError={() => expireRead(liveAsset.id)}
           />
+        ) : null}
+        {!failure && settled && currentVideo && embedded ? (
+          <button type="button" className="journey-book-3d__play-video" onClick={() => embedded.playVideo(currentVideo.id)}>播放视频</button>
         ) : null}
         {settled && overflowNote ? (
           <button type="button" className="journey-book-3d__full-note" onClick={() => setFullNote(overflowNote)}>阅读全文</button>
@@ -1011,8 +1053,9 @@ export function JourneyBook3d({
           disabled={face >= faceCount - 1}
           onClick={() => step(1)}
         ><IconArrowRight size={18} stroke={1.35} aria-hidden="true" /></button>
+        {embedded ? <div className="journey-book-3d__embedded-toc">{tocButton}</div> : null}
       </footer>
-      <p className="journey-book-3d__readable" aria-live="polite">{settled ? readable : ""}</p>
+      <p className="journey-book-3d__readable" aria-live="polite">{settled ? [readable, embedded ? currentPicture : null].filter(Boolean).join("。") : ""}</p>
       {fullNote !== null ? (
         <div className="journey-book-3d__note-sheet" role="dialog" aria-label="感想全文" onClick={() => setFullNote(null)}>
           <div onClick={(event) => event.stopPropagation()}>
@@ -1037,5 +1080,3 @@ export function JourneyBook3d({
     </div>
   );
 }
-
-export default JourneyBook3d;

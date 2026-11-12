@@ -1,0 +1,73 @@
+:root {
+  color-scheme: dark;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--archive-bg);
+  color: var(--startrips-starlight);
+  font-family: var(--archive-sans);
+}
+
+.story-book-loading {
+  text-align: center;
+}
+
+.journey-book.journey-book--embedded {
+  grid-template-rows: minmax(0, 1fr) auto;
+  padding: 0 8px;
+  gap: 0;
+}
+
+.journey-book--embedded .journey-book__stage {
+  padding: 0;
+}
+
+.journey-book--embedded .journey-book__controls {
+  position: relative;
+  inset: auto;
+  translate: none;
+  display: grid;
+  grid-template-columns: 44px 44px minmax(0, 1fr) 44px 44px;
+  gap: 4px;
+  width: min(100%, 340px);
+  pointer-events: auto;
+}
+
+.journey-book--embedded .journey-book__status {
+  position: static;
+  clip-path: none;
+}
+
+.journey-book--embedded .journey-book__controls > :first-child { grid-column: 2; }
+.journey-book--embedded .journey-book-3d__embedded-toc { grid-column: 5; }
+
+.journey-book--embedded .journey-book__toc {
+  top: auto;
+  bottom: 48px;
+}
+
+.journey-book--embedded .journey-book-3d__note-sheet > div {
+  box-sizing: border-box;
+}
+
+.journey-book--embedded .journey-book-3d__full-note {
+  min-height: 44px;
+}
+
+.journey-book-3d__play-video {
+  position: absolute;
+  z-index: 2;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--startrips-line);
+  background: var(--archive-bg);
+  color: var(--startrips-starlight);
+  font: inherit;
+}
+
+.journey-book--embedded .journey-book__icon,
+.journey-book--embedded .journey-book__text-action {
+  min-height: 44px;
+}

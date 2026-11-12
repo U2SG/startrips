@@ -1,3 +1,4 @@
+import AVFoundation
 import Combine
 import Foundation
 import ImageIO
@@ -33,6 +34,7 @@ import UIKit
     private var prewarmTask: Task<Void, Never>?
     private var clockTask: Task<Void, Never>?
     private var epoch = 0
+    private var reading3DBook = false
     private var closed = false
     private var committed: PlaybackPosition?
 
@@ -62,6 +64,64 @@ import UIKit
     public var activeAsset: MediaAsset? { playback == nil ? cursor.current?.asset : playback?.current?.asset }
     public var activeText: String { playback == nil ? cursor.current?.note ?? journey.note : playback?.current?.text ?? "" }
     public func appear() { guard !closed else { return }; loadCurrent(); loadSoundtrack() }
+    func setReading3DBook(_ reading: Bool) {
+        guard reading3DBook != reading else { return }
+        reading3DBook = reading
+        loadCurrent()
+    }
+
+    public func follow3DBookPage(routePointID: String?, assetID: String?, isCover: Bool) {
+        let live = currentIntent()
+        guard reading3DBook, !closed, playback == nil, live.requestId == intent.requestId,
+              live.revision == journey.revision else { return }
+        let entries = cursor.entries
+        let target: Int?
+        if isCover { target = entries.firstIndex { $0.role == .journeyCover } }
+        else if let assetID {
+            target = entries.firstIndex { $0.role == .media && $0.asset?.id == assetID && $0.routePointId == routePointID }
+        } else {
+            target = routePointID.flatMap { point in entries.firstIndex { $0.routePointId == point } }
+        }
+        if let target, target != cursor.index { select(target) }
+    }
+
+    public func bookPicture(_ assetID: String) async throws -> Data {
+        let asset = try bookAsset(assetID)
+        let revision = journey.revision
+        let image: UIImage
+        if asset.isVideo {
+            let url = try await session.mediaURL(asset.id)
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 1400, height: 1400)
+            image = UIImage(cgImage: try await generator.image(at: .zero).image)
+        } else {
+            image = try await loadImage(asset, maxPixel: 1400)
+        }
+        try Task.checkCancellation()
+        try await session.revalidate()
+        guard revision == journey.revision, try bookAsset(assetID) == asset,
+              let jpeg = image.jpegData(compressionQuality: 0.82) else { throw MediaFailure.unavailable }
+        return jpeg
+    }
+
+    public func play3DBookVideo(_ assetID: String) async throws {
+        let asset = try bookAsset(assetID)
+        guard asset.isVideo, activeAsset?.id == assetID else { throw MediaFailure.unavailable }
+        let url = try await session.mediaURL(assetID)
+        try Task.checkCancellation()
+        guard try bookAsset(assetID) == asset, activeAsset?.id == assetID else { throw MediaFailure.unavailable }
+        foreground.activate(url: url)
+        setPaused(false)
+    }
+
+    private func bookAsset(_ assetID: String) throws -> MediaAsset {
+        let live = currentIntent()
+        guard reading3DBook, !closed, playback == nil, live.requestId == intent.requestId,
+              live.revision == journey.revision, let asset = journey.media.first(where: { $0.id == assetID && $0.isVisual })
+        else { throw MediaFailure.unavailable }
+        return asset
+    }
     public func disappear() {
         epoch += 1; loadTask?.cancel(); prewarmTask?.cancel(); clockTask?.cancel(); soundtrackTask?.cancel(); foreground.stop()
         images.removeAll(); clearLibrary(); journalTask?.cancel(); journalTask = nil
@@ -212,6 +272,7 @@ import UIKit
     private func loadCurrent() {
         epoch += 1; let ticket = epoch
         loadTask?.cancel(); prewarmTask?.cancel(); foreground.takeOwnership(); foreground.stopVideo(); failure = nil
+        guard !reading3DBook || playback != nil else { return }
         let asset = activeAsset
         var warm: [MediaAsset] = []
         if playback == nil {

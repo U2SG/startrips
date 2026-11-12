@@ -2,21 +2,30 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
+/// The app owns the bundled WebKit renderer and its lifetime.
+public typealias Story3DBookBuilder = @MainActor (StoryModel, @escaping () -> Void) -> AnyView
+
 /// Mounted by FeatureDestinations.story; it owns media presentation, never navigation.
 public struct NativeStoryDestination: View {
     @ObservedObject private var model: StoryModel
     private let importer: PhotosImportModel?
     private let exporter: FilmExportModel?
     private let moveModel: MediaMoveModel?
+    private let book3D: Story3DBookBuilder?
     @State private var toolsPresented = false
     @StateObject private var book = StoryBookState()
     @AppStorage(StoryPresentationStyle.defaultsKey) private var storedStyle = StoryPresentationStyle.classic.rawValue
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    public init(model: StoryModel, importer: PhotosImportModel? = nil, exporter: FilmExportModel? = nil, moveModel: MediaMoveModel? = nil) {
-        self.model = model; self.importer = importer; self.exporter = exporter; self.moveModel = moveModel
+    public init(model: StoryModel, importer: PhotosImportModel? = nil, exporter: FilmExportModel? = nil,
+                moveModel: MediaMoveModel? = nil, book3D: Story3DBookBuilder? = nil) {
+        self.model = model; self.importer = importer; self.exporter = exporter; self.moveModel = moveModel; self.book3D = book3D
     }
-    private var style: StoryPresentationStyle { StoryPresentationStyle(stored: storedStyle) }
+    private var style: StoryPresentationStyle {
+        let preference = StoryPresentationStyle(stored: storedStyle)
+        return preference == .book3D && book3D == nil ? .book : preference
+    }
+    private var shows3DBook: Bool { style == .book3D && model.playback == nil }
     private var pagesBook: Bool { model.playback == nil && style == .book }
     public var body: some View {
         VStack(spacing: 0) {
@@ -28,10 +37,11 @@ public struct NativeStoryDestination: View {
         }
         .foregroundStyle(StoryTheme.ink).tint(StoryTheme.accent)
         .background(StoryTheme.background.ignoresSafeArea())
-        .onAppear { model.appear() }
+        .onAppear { model.setReading3DBook(shows3DBook); model.appear() }
         .onDisappear { model.disappear() }
         .onChange(of: scenePhase) { phase in if phase != .active { model.setPaused(true) } }
         .onChange(of: storedStyle) { _ in model.cancelPaging() }
+        .onChange(of: shows3DBook) { reading in model.setReading3DBook(reading) }
         .sheet(isPresented: $toolsPresented) {
             NavigationStack {
                 ScrollView {
@@ -55,7 +65,7 @@ public struct NativeStoryDestination: View {
             Spacer(minLength: 8)
             Menu {
                 Picker(selection: $storedStyle) {
-                    ForEach(StoryPresentationStyle.allCases) { option in
+                    ForEach(StoryPresentationStyle.allCases.filter { $0 != .book3D || book3D != nil }) { option in
                         Label(option.label, systemImage: option.symbol).tag(option.rawValue)
                     }
                 } label: { EmptyView() }.pickerStyle(.inline).labelsHidden()
@@ -77,6 +87,10 @@ public struct NativeStoryDestination: View {
             switch style {
             case .book:
                 StoryBook(model: model, state: book, reduceMotion: reduceMotion).id(model.pageGeneration)
+            case .book3D:
+                if let book3D {
+                    book3D(model, { storedStyle = StoryPresentationStyle.book.rawValue }).id(model.pageGeneration)
+                }
             case .stream:
                 StoryStream(model: model)
             case .classic, .noteOverlay:
@@ -95,7 +109,7 @@ public struct NativeStoryDestination: View {
 
     private var controls: some View {
         HStack(spacing: 4) {
-            if style != .stream || model.playback != nil {
+            if !shows3DBook && (style != .stream || model.playback != nil) {
                 StoryIconButton(symbol: "chevron.left", label: "上一页", id: "story.previous") { turn(-1) }
             }
             Spacer(minLength: 8)
@@ -117,7 +131,7 @@ public struct NativeStoryDestination: View {
                 }
             }
             Spacer(minLength: 8)
-            if style != .stream || model.playback != nil {
+            if !shows3DBook && (style != .stream || model.playback != nil) {
                 StoryIconButton(symbol: "chevron.right", label: "下一页", id: "story.next") { turn(1) }
             }
         }.frame(minHeight: 44).padding(.horizontal, 8).padding(.vertical, 6)
