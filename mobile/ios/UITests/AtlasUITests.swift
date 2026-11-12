@@ -1,6 +1,11 @@
 import XCTest
 
 final class AtlasUITests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        continueAfterFailure = false
+    }
+
     @MainActor
     func testFirstLaunchShowsDarkFullBleedWelcome() throws {
         let app = XCUIApplication()
@@ -290,8 +295,11 @@ final class AtlasUITests: XCTestCase {
         sheet.name = "native-mobile-v2-journey-sheet"
         sheet.lifetime = .keepAlways
         add(sheet)
-        app.webViews.buttons["返回地球"].tap()
+        let closeSheet = app.webViews.buttons["返回地球"]
+        closeSheet.tap()
+        XCTAssertTrue(closeSheet.waitForNonExistence(timeout: 10))
         XCTAssertTrue(chip.waitForExistence(timeout: 10))
+        XCTAssertTrue(picker.isHittable)
         picker.tap()
         XCTAssertTrue(app.webViews.buttons["切换到旅程：海岸旅程"].waitForExistence(timeout: 10))
         let journeys = XCTAttachment(screenshot: app.screenshot())
@@ -303,7 +311,6 @@ final class AtlasUITests: XCTestCase {
     }
     @MainActor
     func testGlobePointSelectionAndStoryRoundTrip() async throws {
-        continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture"]
         app.launch()

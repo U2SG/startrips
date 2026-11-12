@@ -22,13 +22,14 @@ view.readMedia=async()=>({url:"/artifacts/daily-journal/fictional-photo.svg",exp
 if(new URLSearchParams(location.search).has("layout")) {
 fixture.title="虚构旅行与很长的章节标题".repeat(8);
 fixture.routePoints[0].note="沿途文字与路线记录。".repeat(80);
+if(new URLSearchParams(location.search).has("initial")) fixture.media[0].routePointId=fixture.routePoints[0].id;
 fixture.media.push({id:"music",journeyId:fixture.id,routePointId:null,fileName:"虚构配乐.wav",mimeType:"audio/wav",bytes:50,sortOrder:1,createdAt:fixture.createdAt});
 const read=view.readMedia; view.readMedia=async asset=>asset==="music" ? {url:"data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQgAAACAgICAgICAgA==",expiresAt:"2099-01-01T00:00:00Z"} : read(asset);
 }
 function Harness(){const [journey,setJourney]=useState(fixture);const [epoch,setEpoch]=useState(0);
 useEffect(()=>{const remount=()=>setEpoch(n=>n+1);window.addEventListener("qa-remount-stream",remount);return()=>window.removeEventListener("qa-remount-stream",remount)},[]);
 useEffect(()=>{const switcher=()=>setJourney({...fixture,atlasId:"other-atlas",id:"33333333-3333-4333-8333-333333333333",title:"另一账号"}); window.addEventListener("qa-account-switch",switcher);return()=>window.removeEventListener("qa-account-switch",switcher)},[]);
-return <AtlasViewProvider value={view}><main className="living-atlas"><JourneyStream key={epoch} onJourneyUpdated={j=>{window.__ownerJourney=j;setJourney(j)}} journeys={[journey]} journeyId={journey.id} onClose={()=>{}} onCloseAtPoint={id=>window.__mapPoint=id} onOpenClassic={()=>{}} onObservationChange={v=>window.__observation=v}/></main></AtlasViewProvider>}
+return <AtlasViewProvider value={view}><main className="living-atlas"><JourneyStream key={epoch} onJourneyUpdated={j=>{window.__ownerJourney=j;setJourney(j)}} journeys={[journey]} journeyId={journey.id} initialAssetId={new URLSearchParams(location.search).get("initial")} onClose={()=>{}} onCloseAtPoint={id=>window.__mapPoint=id} onOpenClassic={()=>{}} onObservationChange={v=>window.__observation=v}/></main></AtlasViewProvider>}
 createRoot(document.getElementById("root")).render(<Harness/>);`);
 await writeFile(`${output}/index.html`, '<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div><script type="module" src="./harness.tsx"></script></body></html>');
 await writeFile(`${output}/fictional-photo.svg`, '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400"><rect width="600" height="400" fill="#4a6970"/><circle cx="300" cy="150" r="60" fill="#edce92"/><path d="M0 400L200 220L400 400Z" fill="#193844"/></svg>');
@@ -48,7 +49,7 @@ function fictionalChapters(source) {
     if (!line.trim()) continue;
     const time = line.match(/^(\d{2}:\d{2}) /)?.[1] ?? null;
     chapter.events.push({id:`${chapter.id}-event-${chapter.events.length}`,source:line,text:line,
-      status:line.startsWith("取消：") || line === "计划公园取消" ? "cancelled" : line.startsWith("计划：") ? "planned" : "actual",
+      status:line.startsWith("取消：") || line === "计划公园取消" ? "cancelled" : line.startsWith("计划：") ? "planned" : line.startsWith("待确认：") ? "uncertain" : "actual",
       localDate:null,localTime:time,timeContext:"当地时间（具体时区未确认）",routePointId:null,mediaIds:[],edited:false});
   }
   return chapters;
@@ -117,7 +118,7 @@ try {
     const errors=[]; page.on("pageerror", e => errors.push(e.message));
     await page.goto(`${origin}/${output}/index.html`);
     await page.getByRole("button",{name:"导入手记",exact:true}).click();
-    const source="2027-04-03\n23:30 她出发\n18:20 她抵达\n计划公园取消\n" + "她记下沿途所见。".repeat(120);
+    const source="2027-04-03\n23:30 她出发\n18:20 她抵达\n计划公园取消\n待确认：她记下海面反光。\n起床：未记录\\\n航班号未记录，但我们顺利抵达。\n计划：查看虚构公园\n" + "她记下沿途所见。".repeat(120);
     assert.equal(await page.getByRole("button",{name:"生成导入预览"}).count(),0);
     assert.equal(await page.getByRole("button",{name:"用 AI 整理原文"}).count(),0);
     // Hold a fictional job to prove double clicks do not submit twice and Stop does not save.
@@ -165,7 +166,22 @@ try {
     await page.getByRole("button",{name:"取消预览"}).click();
     assert.equal(await page.locator(".daily-journal__reader").count(),0);
     await page.getByRole("button",{name:"返回旅程",exact:true}).click();
-    await page.getByText("她手工修订了出发记录。",{exact:true}).scrollIntoViewIfNeeded();
+    const journal = page.getByRole("region",{name:"手记",exact:true});
+    const summary = journal.locator("summary");
+    await summary.waitFor();
+    assert.equal((await summary.textContent()).trim(),"2027-04-03");
+    const prose = journal.getByText("她手工修订了出发记录。",{exact:true});
+    assert.equal(await prose.isVisible(),false,"the date is visible before its prose");
+    await page.getByRole("button",{name:"手记",exact:true}).press("Enter");
+    assert.equal(await journal.evaluate(el=>el===document.activeElement),true,"the in-page shortcut moves focus to the journal");
+    await page.keyboard.press("Tab");
+    assert.equal(await summary.evaluate(el=>el===document.activeElement),true);
+    await page.keyboard.press("Space");
+    await prose.waitFor();
+    for (const text of ["她记下海面反光。", "航班号未记录，但我们顺利抵达。", "计划公园取消"]) {
+      await journal.getByText(text,{exact:true}).waitFor();
+    }
+    assert.doesNotMatch(await journal.innerText(),/待确认|起床|查看虚构公园|已取消|实际：/);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),true);
     await page.screenshot({path:`${output}/journal-${width}.png`});
     await page.getByRole("button",{name:"在地图上查看：虚构海湾",exact:true}).click();
@@ -217,11 +233,17 @@ try {
   await page.getByText("手记已保存。",{exact:true}).waitFor();
   await page.getByRole("button",{name:"返回旅程",exact:true}).click();
   const day = page.locator(".journey-stream__journal-day");
+  await day.last().waitFor();
   assert.equal(await day.count(),14);
+  assert.equal(await page.locator(".journey-stream__journal-day[open]").count(),0);
   const photo = page.getByRole("button",{name:"查看 虚构照片.svg",exact:true});
   await photo.scrollIntoViewIfNeeded();
   await page.waitForFunction(()=>document.querySelector("[data-stream-shot] img")?.naturalWidth===600);
-  assert.ok(await photo.evaluate(el=>el.closest("section").previousElementSibling?.classList.contains("journey-stream__journal-day")));
+  assert.equal(await photo.count(),1,"linked media appears only in the journey stream");
+  assert.ok(await photo.evaluate(el=>{
+    const journal=document.querySelector(".journey-stream__journal");
+    return Boolean(journal && (el.compareDocumentPosition(journal) & Node.DOCUMENT_POSITION_FOLLOWING));
+  }),"all media precedes the journal appendix");
   assert.deepEqual(stored.chapters[0].events[0].mediaIds,["photo-one"]);
   assert.equal(stored.chapters.length,14);
   assert.deepEqual(stored.chapters.map(chapter=>chapter.date),Array.from({length:14},(_,i)=>`2027-04-${String(i+1).padStart(2,"0")}`));
@@ -244,15 +266,36 @@ try {
   await page.getByRole("button",{name:"返回旅程",exact:true}).click();
   assert.equal(await day.count(),0);
   await context.close();
-  console.log("daily journal inline media passed");
+  console.log("daily journal follows the media stream");
   for(const [width,height] of [[320,700],[390,844],[844,390],[1112,402],[1280,900]]) {
     const context=await browser.newContext({viewport:{width,height},reducedMotion:"reduce"});
     const page=await context.newPage();
     const long="虚构的长篇记录，保留原有叙事顺序。".repeat(160);
     const chapters=[1,2].map(day=>({id:`day-${day}`,date:`2027-04-0${day}`,importDate:`2027-04-0${day}`,title:"虚构章节".repeat(20),source:long,suggestions:[],events:[{id:`event-${day}`,source:long,text:long,status:"uncertain",localDate:null,localTime:null,timeContext:"当地时间",routePointId:null,mediaIds:[],edited:false}]}));
-    await page.route(/\/api\/journeys\/[^/]+\/journal$/,route=>route.fulfill({json:{journal:{revision:1,chapters}}}));
-    await page.goto(`${origin}/${output}/index.html?media=1&layout=1`);
+    const delayJournal=width===1280;
+    let releaseJournal;
+    const journalGate=new Promise(resolve=>{releaseJournal=resolve;});
+    await page.route(/\/api\/journeys\/[^/]+\/journal$/,async route=>{
+      if(delayJournal) await journalGate;
+      return route.fulfill({json:{journal:{revision:1,chapters}}});
+    });
+    await page.goto(`${origin}/${output}/index.html?media=1&layout=1${delayJournal?"&initial=photo-one":""}`);
     await page.getByRole("button",{name:"导入手记",exact:true}).waitFor();
+    if(delayJournal) {
+      const photo=page.getByRole("button",{name:"查看 虚构照片.svg",exact:true});
+      await photo.waitFor();
+      await page.waitForFunction(()=>window.__observation?.assetId==="photo-one" && document.querySelector("[data-stream-shot] img")?.naturalWidth===600);
+      await photo.focus();
+      const before=await photo.evaluate(el=>{
+        window.__journalQaFirstMedia=el;
+        return el.getBoundingClientRect().top;
+      });
+      releaseJournal();
+      await page.locator(".journey-stream[data-journal]").waitFor();
+      assert.equal(await photo.evaluate(el=>el===window.__journalQaFirstMedia && el===document.activeElement),true);
+      assert.ok(Math.abs((await photo.boundingBox()).y-before)<=2,"the late journal leaves the initial media anchored");
+      assert.equal(await page.evaluate(()=>window.__observation.assetId),"photo-one");
+    }
     await page.locator(".journey-stream[data-journal]").waitFor();
     // Autoplay can succeed in Chromium. Both audio states occupy the same control.
     await page.waitForFunction(() => document.querySelector(
@@ -283,7 +326,8 @@ try {
     await page.evaluate(()=>{const chrome=document.createElement("div");chrome.id="qa-underlying-chrome";chrome.style.cssText="position:fixed;inset:0;z-index:200;background:red";document.querySelector(".living-atlas").append(chrome)});
     const flow=page.locator(".journey-stream__flow");
     const second=flow.locator(".journey-stream__journal-day").last();
-    await second.scrollIntoViewIfNeeded();
+    await second.locator("summary").press("Enter");
+    assert.equal(await second.getAttribute("open"),"");
     assert.equal(await flow.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,"long prose must not overflow horizontally");
     await flow.evaluate(el=>el.scrollTop=el.scrollHeight);
     const bottom=await flow.evaluate(el=>({top:el.scrollTop,max:el.scrollHeight-el.clientHeight,body:document.scrollingElement.scrollTop}));
