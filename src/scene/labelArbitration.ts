@@ -1,5 +1,12 @@
 import type { RoutePointAttentionRole, RoutePointPresentation } from "./routePresentation";
 
+/** Optional presentation supplied by a host following system accessibility settings. */
+export type EarthLabelLegibility = {
+  fontSize: number;
+  boldText: boolean;
+  increasedContrast: boolean;
+};
+
 /**
  * #374: one attention-aware collision policy for the two label families that
  * share the globe - Route Point labels and Place Labels.

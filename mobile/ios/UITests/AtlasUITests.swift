@@ -120,6 +120,7 @@ final class AtlasUITests: XCTestCase {
 
     @MainActor
     func testLargestAccessibilityTextKeepsEntryAndAtlasUsable() throws {
+        continueAfterFailure = false
         let app = XCUIApplication()
         let largest = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         app.launchArguments = largest
@@ -133,9 +134,31 @@ final class AtlasUITests: XCTestCase {
 
         app.launchArguments = ["-atlas-fixture"] + largest
         app.launch()
-        XCTAssertTrue(app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
-            .waitForExistence(timeout: 30))
+        let webView = app.webViews.firstMatch
+        let chip = webView.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
+        XCTAssertTrue(chip.waitForExistence(timeout: 30))
+        XCTAssertGreaterThan(chip.frame.height, 85, "The Atlas dock should grow with system text size")
         assertDarkFullBleed(capture(app, "shell-ax5-atlas"))
+
+        // Landscape makes the AX5 detail taller than the available viewport.
+        addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let window = app.windows.firstMatch
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline && window.frame.width <= window.frame.height {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+        XCTAssertGreaterThan(window.frame.width, window.frame.height)
+        chip.tap()
+        XCTAssertTrue(webView.buttons["返回地球"].waitForExistence(timeout: 10))
+        let story = webView.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "打开故事")).firstMatch
+        for _ in 0..<5 {
+            if story.isHittable { break }
+            webView.swipeUp()
+        }
+        XCTAssertTrue(story.isHittable)
+        story.tap()
+        XCTAssertTrue(app.staticTexts["story.title"].waitForExistence(timeout: 10))
     }
 
     @MainActor

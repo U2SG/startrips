@@ -51,6 +51,7 @@ import {
   type EarthDiveStage,
 } from "./earthDive";
 import type { SemanticZoomSnapshot } from "./semanticZoom";
+import type { EarthLabelLegibility } from "./labelArbitration";
 import { ensurePmtilesProtocol } from "./pmtilesProtocol";
 
 setWorkerUrl(mapLibreWorkerUrl);
@@ -90,6 +91,7 @@ function detailedEarthProjectedPixelsPerRadian(map: MapLibreMap) {
 function installDetailedEarthJourneyOverlay(
   map: MapLibreMap,
   overlay: DetailedEarthJourneyOverlay,
+  labelLegibility?: EarthLabelLegibility,
 ) {
   const lodSelection = selectDetailedEarthJourneyOverlayLod(
     overlay,
@@ -180,13 +182,16 @@ function installDetailedEarthJourneyOverlay(
       },
     });
   }
-  const styleSupportsTextLabels = Boolean(map.getStyle().glyphs);
-  if (styleSupportsTextLabels && !map.getLayer(JOURNEY_OVERLAY_LABEL_LAYER_ID)) {
+  const style = map.getStyle();
+  if (style.glyphs && !map.getLayer(JOURNEY_OVERLAY_LABEL_LAYER_ID)) {
+    const placeLayer = labelLegibility && style.layers.find((layer) => layer.type === "symbol"
+      && (layer["source-layer"] === "place" || layer["source-layer"] === "places"));
+    const placeFont = placeLayer && placeLayer.type === "symbol" ? placeLayer.layout?.["text-font"] : undefined;
     map.addLayer({
       id: JOURNEY_OVERLAY_LABEL_LAYER_ID,
       type: "symbol",
       source: JOURNEY_OVERLAY_SOURCE_ID,
-      minzoom: 7,
+      minzoom: labelLegibility ? DETAILED_EARTH_MIN_ZOOM : 7,
       filter: [
         "all",
         ["==", ["get", "featureKind"], "route-point"],
@@ -205,6 +210,7 @@ function installDetailedEarthJourneyOverlay(
         "text-anchor": "top",
         "text-allow-overlap": false,
         "text-ignore-placement": false,
+        ...(placeFont && { "text-font": placeFont }),
       },
       paint: {
         "text-color": "rgba(241, 247, 248, 0.92)",
@@ -212,6 +218,13 @@ function installDetailedEarthJourneyOverlay(
         "text-halo-width": 1.3,
       },
     });
+    if (labelLegibility) {
+      // MapLibre places the top symbol layer first. Within this layer
+      // let the attended point reserve space before the other stops.
+      map.setLayoutProperty(JOURNEY_OVERLAY_LABEL_LAYER_ID, "symbol-sort-key",
+        ["match", ["get", "attentionRole"], "narrative-current", 0, "selected", 1, 2]);
+      applyLabelLegibility(map, JOURNEY_OVERLAY_LABEL_LAYER_ID, labelLegibility);
+    }
   }
   if (!map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) {
     map.addLayer({
@@ -267,6 +280,7 @@ type DetailedEarthMapProps = {
   focusFlightPending?: boolean;
   focusFlightProfile?: DetailedEarthFocusFlightProfile;
   reduceMotion?: boolean;
+  labelLegibility?: EarthLabelLegibility;
   language: DetailedEarthLanguage;
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
   onGlobeBlankActivate?: () => void;
@@ -301,6 +315,20 @@ function applyMapLanguage(map: MapLibreMap, language: DetailedEarthLanguage) {
     if (!isDetailedEarthNameLabel(currentTextField)) continue;
     map.setLayoutProperty(layer.id, "text-field", textField);
   }
+}
+
+function applyLabelLegibility(map: MapLibreMap, layerId: string, settings: EarthLabelLegibility) {
+  const isJourney = layerId === JOURNEY_OVERLAY_LABEL_LAYER_ID;
+  // Keep the style's existing glyph stack. Not every glyph endpoint ships a
+  // bold face, so give Bold Text slightly larger glyphs in the vector map.
+  const fontSize = settings.fontSize + (settings.boldText ? 1 : 0) - (isJourney ? 0 : 2);
+  map.setLayoutProperty(layerId, "text-size", fontSize);
+  map.setLayoutProperty(layerId, "text-padding", isJourney ? 8 : 12);
+  map.setLayoutProperty(layerId, "text-overlap", "never");
+  map.setLayoutProperty(layerId, "text-ignore-placement", false);
+  map.setPaintProperty(layerId, "text-color", settings.increasedContrast || isJourney ? "#f1f8f4" : "#c7dbd3");
+  map.setPaintProperty(layerId, "text-halo-color", "#020706");
+  map.setPaintProperty(layerId, "text-halo-width", settings.increasedContrast ? 2.5 : 1.8);
 }
 
 function applyDetailedEarthFocus(
@@ -345,6 +373,7 @@ export default function DetailedEarthMap({
   focusFlightPending = false,
   focusFlightProfile,
   reduceMotion = false,
+  labelLegibility,
   language,
   onJourneyRoutePointActivate,
   onGlobeBlankActivate,
@@ -370,6 +399,8 @@ export default function DetailedEarthMap({
   const calibrateRef = useRef<(() => void) | null>(null);
   const revealSyncRef = useRef<((reason: "load" | "stage" | "resize-observer") => void) | null>(null);
   const languageRef = useRef(language);
+  const labelLegibilityRef = useRef(labelLegibility);
+  const syncLabelLegibilityRef = useRef<(() => void) | null>(null);
   const focusPointRef = useRef(focusPoint);
   const focusRouteRef = useRef(focusRoute);
   const journeyOverlayRef = useRef(journeyOverlay);
@@ -609,6 +640,17 @@ export default function DetailedEarthMap({
         .filter((feature) => feature.properties.provenance === "recorded-track" && feature.geometry.type === "LineString")
         .map((feature) => [feature.id, feature.geometry.type === "LineString" ? feature.geometry.coordinates.length : 0]));
     };
+    const syncLabelLegibility = () => {
+      const settings = labelLegibilityRef.current;
+      if (!initialLoadSettled || !settings) return;
+      for (const layer of map.getStyle()?.layers ?? []) {
+        if (layer.type !== "symbol") continue;
+        if (layer.id === JOURNEY_OVERLAY_LABEL_LAYER_ID || isDetailedEarthNameLabel(layer.layout?.["text-field"])) {
+          applyLabelLegibility(map, layer.id, settings);
+        }
+      }
+    };
+    syncLabelLegibilityRef.current = syncLabelLegibility;
     const syncJourneyOverlay = () => {
       if (removed) return false;
       const overlay = journeyOverlayRef.current;
@@ -623,7 +665,7 @@ export default function DetailedEarthMap({
       // and addLayer genuinely require the style to be ready.
       if (!source && !map.isStyleLoaded()) return false;
       try {
-        const lodSelection = installDetailedEarthJourneyOverlay(map, overlay);
+        const lodSelection = installDetailedEarthJourneyOverlay(map, overlay, labelLegibilityRef.current);
         appliedJourneyOverlayRevision = overlay.revision;
         appliedJourneyOverlayLodKey = lodSelection.key;
         publishRecordedTrackLod(lodSelection);
@@ -963,6 +1005,7 @@ export default function DetailedEarthMap({
         return;
       }
       const overlayReady = syncJourneyOverlay();
+      syncLabelLegibility();
       if (overlayReady) syncRevealSurface("stage");
     });
 
@@ -1098,6 +1141,7 @@ export default function DetailedEarthMap({
       // may pop in after the basemap. Install the current authorized revision
       // before calibrating and arming the post-sync reveal frame.
       syncJourneyOverlay();
+      syncLabelLegibility();
       calibrateToParticle();
       syncRevealSurface("load");
     };
@@ -1188,8 +1232,12 @@ export default function DetailedEarthMap({
     const journeyRoutePointHit = (point: { x: number; y: number }) => {
       const projectedHit = projectedJourneyRoutePointHit(point);
       if (projectedHit || !map.getLayer(JOURNEY_OVERLAY_HIT_LAYER_ID)) return projectedHit;
+      const layers = [JOURNEY_OVERLAY_HIT_LAYER_ID];
+      if (labelLegibilityRef.current && map.getLayer(JOURNEY_OVERLAY_LABEL_LAYER_ID)) {
+        layers.push(JOURNEY_OVERLAY_LABEL_LAYER_ID);
+      }
       const [renderedHit] = map.queryRenderedFeatures([point.x, point.y], {
-        layers: [JOURNEY_OVERLAY_HIT_LAYER_ID],
+        layers,
       });
       return resolveDetailedEarthRenderedRoutePointHit(journeyOverlayRef.current, renderedHit?.properties);
     };
@@ -1274,6 +1322,7 @@ export default function DetailedEarthMap({
       calibrateRef.current = null;
       revealSyncRef.current = null;
       syncJourneyOverlayRef.current = null;
+      syncLabelLegibilityRef.current = null;
       if (calibrationHandleRef) calibrationHandleRef.current = null;
       focusFlightActiveRef.current = false;
       host.removeEventListener("click", claimNativeCameraControl, true);
@@ -1324,6 +1373,11 @@ export default function DetailedEarthMap({
     if (!map?.isStyleLoaded()) return;
     applyMapLanguage(map, language);
   }, [language]);
+
+  useLayoutEffect(() => {
+    labelLegibilityRef.current = labelLegibility;
+    syncLabelLegibilityRef.current?.();
+  }, [labelLegibility]);
 
   useEffect(() => {
     const overlayReady = syncJourneyOverlayRef.current?.() ?? false;

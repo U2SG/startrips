@@ -8,7 +8,10 @@ import { useGlobeTimeCursor } from "../../../src/journey/useGlobeTimeCursor";
 import { MobileSheetGrabber, useMobileSheetDetents } from "../../../src/journey/mobileSheetDetents";
 import { toJourneyRoutes } from "../../../src/journey/journeyModel";
 import { LivingAtlasGlobe, PersistentEarthProvider, usePersistentEarth } from "../../../src/scene/LivingAtlasGlobe";
-import { acceptsSnapshot, atlasSceneFocus, decodeSnapshotOrReport, journeySwipeDirection, nextJourneyIndex, renderJourneys, send, type JourneySwipePoint, type Snapshot } from "./bridge";
+import {
+  acceptsSnapshot, atlasSceneFocus, decodeSnapshotOrReport, journeySwipeDirection, nextJourneyIndex, renderJourneys, send,
+  type JourneySwipePoint, type SceneAccessibility, type Snapshot,
+} from "./bridge";
 import "../../../src/styles/tokens.css";
 import "../../../src/styles/controls.css";
 import "../../../src/styles/living-atlas.css";
@@ -19,11 +22,16 @@ import "../../../src/styles/globe-time-scrubber.css";
 import "./scene.css";
 
 // The native page-world receiver exists before deferred module evaluation.
-// Carry any snapshot sent by WKNavigationDelegate.didFinish into React's first effect.
-let pendingSnapshot: string | null =
-  (window.atlasNative as { pending?: string | null } | undefined)?.pending ?? null;
+// Carry values sent by WKNavigationDelegate.didFinish into React's first effects.
+let pendingSnapshot = window.atlasNative?.pending ?? null;
 let deliverSnapshot: ((json: string) => void) | null = null;
-window.atlasNative = { receive(json) { pendingSnapshot = json; deliverSnapshot?.(json); } };
+let sceneAccessibility: SceneAccessibility = window.atlasNative?.accessibility
+  ?? { textScale: 1, accessibilitySize: false, boldText: false, increasedContrast: false };
+let deliverAccessibility: ((settings: SceneAccessibility) => void) | null = null;
+window.atlasNative = {
+  receive(json) { pendingSnapshot = json; deliverSnapshot?.(json); },
+  setAccessibility(settings) { sceneAccessibility = settings; deliverAccessibility?.(settings); },
+};
 
 const reducedMotionQuery = "(prefers-reduced-motion: reduce)";
 
@@ -44,6 +52,20 @@ function AtlasScene() {
   const earth = usePersistentEarth();
   useEffect(() => { earth.setStage("atlas"); return () => earth.setStage("idle"); }, [earth]);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [accessibility, setAccessibility] = useState(sceneAccessibility);
+  const { textScale, accessibilitySize, boldText, increasedContrast } = accessibility;
+  const scrollableDetails = accessibilitySize || textScale > 1 || boldText;
+  const labelLegibility = useMemo(() => ({
+    // Keep space around the anchor on a phone even at the largest text size.
+    fontSize: Math.min(26, 15 * textScale),
+    boldText,
+    increasedContrast,
+  }), [textScale, boldText, increasedContrast]);
+  useEffect(() => {
+    deliverAccessibility = setAccessibility;
+    setAccessibility(sceneAccessibility);
+    return () => { deliverAccessibility = null; };
+  }, []);
   const [interrupted, setInterrupted] = useState(false);
   const [focusRevision, setFocusRevision] = useState(0);
   const [cursorScope, setCursorScope] = useState<string | null>(null);
@@ -124,7 +146,10 @@ function AtlasScene() {
       document.documentElement.style.setProperty("--native-atlas-bottom", "0px");
       return () => document.documentElement.style.removeProperty("--native-atlas-bottom");
     }
-    const update = () => document.documentElement.style.setProperty("--native-atlas-bottom", `${element.getBoundingClientRect().height}px`);
+    const update = () => {
+      const bottom = document.documentElement.clientHeight - element.getBoundingClientRect().top;
+      document.documentElement.style.setProperty("--native-atlas-bottom", `${Math.max(0, bottom)}px`);
+    };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(element);
@@ -200,8 +225,12 @@ function AtlasScene() {
     <StartripsBrandLoader message="正在打开图谱…" />
   </main>;
   return <main className="living-atlas is-mobile-v2 native-atlas" data-mobile-v2="on"
-    data-native-mobile-v2="on" aria-label="图谱地球">
-    <div className="native-atlas__earth" aria-label="旅程地球">
+    data-native-mobile-v2="on" aria-label="图谱地球"
+    data-native-large-text={scrollableDetails || undefined}
+    data-native-bold-text={boldText || undefined}
+    data-native-increased-contrast={increasedContrast || undefined}
+    style={{ "--native-text-scale": textScale } as CSSProperties}>
+    <div className="native-atlas__earth" aria-label="旅程地球" inert={sheetOpen || pickerOpen || undefined}>
       <LivingAtlasGlobe journeyRoutes={routes} activeJourneyRouteId={selected?.id}
         selectedJourneyRoutePoint={selected ? { journeyId: selected.id, routePointId: point?.id } : null}
         temporalReveal={cursorActive ? { journeys: time.reveal.journeyProgress, points: time.reveal.pointProgress,
@@ -209,6 +238,7 @@ function AtlasScene() {
         {...atlasSceneFocus(point, routes.find((route) => route.id === selected?.id))}
         focusRevision={focusRevision} focusEnabled={!interrupted && snapshot.active}
         earthExperiencePolicy={snapshot.earthExperience} routeEditingEnabled={false}
+        labelLegibility={labelLegibility}
         reduceMotion={reduceMotion}
         cinematicActive={!snapshot.active} mediaCoverHint={{ opaqueMediaCover: !snapshot.active, coverTransitionActive: false }}
         onManualCameraInteraction={interrupt} onFocusSettled={() => {
@@ -302,10 +332,15 @@ function AtlasScene() {
         aria-label="关闭旅程详情" onClick={closeSheet}/>
       <section ref={sheet} className="mobile-v2__sheet native-atlas__sheet" role="dialog"
         aria-modal="true" aria-labelledby="native-atlas-sheet-title"
-        tabIndex={-1} onKeyDown={onDialogKeyDown} {...sheetDetents.sheetProps}
+        tabIndex={-1} onKeyDown={onDialogKeyDown}
+        {...(scrollableDetails ? { "data-scrollable": true } : sheetDetents.sheetProps)}
         style={{ "--journey-color": selected.lightColor } as CSSProperties}>
-        <MobileSheetGrabber detent={sheetDetents.detent}
-          onHandleClick={sheetDetents.onHandleClick} toggle={sheetDetents.toggle}/>
+        {scrollableDetails
+          ? <button className="native-atlas__sheet-close" type="button" aria-label="返回地球" onClick={closeSheet}>
+              <IconX size={19} stroke={1.4} aria-hidden="true" />
+            </button>
+          : <MobileSheetGrabber detent={sheetDetents.detent}
+              onHandleClick={sheetDetents.onHandleClick} toggle={sheetDetents.toggle}/>}
         <div className="mobile-v2__sheet-heading">
           <p>{dateRange}</p>
           <h2 id="native-atlas-sheet-title">{selected.title}</h2>
@@ -339,7 +374,7 @@ function AtlasScene() {
               send(snapshot, "story", { journeyId: selected.id,
                 ...(point ? { routePointId: point.id } : {}) });
             }}>打开故事 <IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
-          <button type="button" onClick={closeSheet}>返回地球</button>
+          {!scrollableDetails && <button type="button" onClick={closeSheet}>返回地球</button>}
         </div>
       </section>
     </div>}
