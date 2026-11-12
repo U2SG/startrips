@@ -1,3 +1,4 @@
+import AVFoundation
 import Combine
 import Foundation
 import ImageIO
@@ -80,7 +81,12 @@ import UIKit
     /// prefetched) and never waits more than `mediaWaitLimitMS` for one slow picture.
     public var streamPlayback = false
     static let mediaWaitLimitMS: Double = 2_500
+    static let videoWaitLimitMS: Double = 5_000
     private var mediaWaitMS: Double = 0
+    /// Watchdog: playback that makes no progress at all for this long while not paused skips the beat.
+    static let stuckLimitMS: Double = 8_000
+    private var stuckMS: Double = 0
+    private var lastProgress: (index: Int, elapsed: Double, video: Double?)?
 
     /// Prefetches and pre-decodes upcoming pictures, nearest first, ahead of rows that are
     /// merely visible. Waiting reads no longer needed by playback lose their place.
@@ -93,7 +99,8 @@ import UIKit
     public func requestLibraryImage(_ asset: MediaAsset) { requestLibraryImage(asset, rank: Self.visibleRank) }
 
     func requestLibraryImage(_ asset: MediaAsset, rank: Int) {
-        guard !closed, !asset.isVideo, library[asset.id] == nil, images[asset.id] == nil, libraryTasks[asset.id] == nil,
+        // Videos get a poster (preview image or first frame), so a stream row is never a dark block.
+        guard !closed, asset.isVisual, library[asset.id] == nil, images[asset.id] == nil, libraryTasks[asset.id] == nil,
               journey.media.contains(where: { $0.id == asset.id }) else { return }
         if let queued = libraryQueue.firstIndex(where: { $0.asset.id == asset.id }) {
             libraryQueue[queued].rank = min(libraryQueue[queued].rank, rank)
@@ -113,7 +120,7 @@ import UIKit
                 if ticket == self.libraryEpoch && !Task.isCancelled { self.libraryTasks[asset.id] = nil }
                 if ticket == self.libraryEpoch { self.pumpLibraryQueue() }
             }
-            guard let image = try? await self.loadImage(asset, maxPixel: 1600, display: true),
+            guard let image = try? await (asset.isVideo ? self.loadPoster(asset) : self.loadImage(asset, maxPixel: 1600, display: true)),
                   !Task.isCancelled, ticket == self.libraryEpoch, !self.closed,
                   self.journey.media.contains(where: { $0.id == asset.id }) else { return }
             #if DEBUG
@@ -229,8 +236,37 @@ import UIKit
                     self.mediaWaitMS += delta
                     if self.mediaWaitMS >= Self.mediaWaitLimitMS { ready = true }
                 }
+                // A video that cannot start (or fails) never holds the stream: after a bounded
+                // wait the flow moves on, exactly as if the clip had ended.
+                if self.streamPlayback, asset?.isVideo == true, !self.paused,
+                   !self.foreground.ready || self.foreground.failure != nil {
+                    self.mediaWaitMS += delta
+                    if self.foreground.failure != nil || self.mediaWaitMS >= Self.videoWaitLimitMS {
+                        self.mediaWaitMS = 0
+                        self.videoEnded()
+                        continue
+                    }
+                }
                 self.playback?.tick(milliseconds: delta, mediaReady: ready, videoOwnsCompletion: asset?.isVideo == true)
                 if self.playback?.completed == true { self.finish(.completed); return }
+                // Watchdog: no clock, video or beat progress while playing → log and move on.
+                if !self.paused, let clock = self.playback {
+                    let progress = (clock.index, clock.elapsedMS, self.foreground.progress)
+                    if let last = self.lastProgress, last.index == progress.0, last.elapsed == progress.1, last.video == progress.2 {
+                        self.stuckMS += delta
+                    } else { self.stuckMS = 0 }
+                    self.lastProgress = progress
+                    if self.stuckMS >= Self.stuckLimitMS {
+                        #if DEBUG
+                        Self.timingLog(String(format: "WATCHDOG beat=%d asset=%@ stuck=%.0fms", clock.index,
+                                              clock.current?.asset?.id ?? "-", self.stuckMS))
+                        #endif
+                        self.stuckMS = 0
+                        self.playback?.advance()
+                        if self.playback?.completed == true { self.finish(.completed); return }
+                        self.activateBeat(); continue
+                    }
+                }
                 if previous != self.playback?.index {
                     #if DEBUG
                     if ProcessInfo.processInfo.arguments.contains("-stream-timing"), let beat = self.playback?.current {
@@ -349,6 +385,36 @@ import UIKit
         if displaySizes[asset.id] == nil { displaySizes[asset.id] = image.size }
         return image
     }
+
+    /// A video's still: the server preview when it has one, else the clip's first frame.
+    private func loadPoster(_ asset: MediaAsset) async throws -> UIImage {
+        let read = try await session.mediaDisplay(asset.id)
+        if read.width != nil, let image = try? await loadImage(asset, maxPixel: 1600, display: true) { return image }
+        let url = read.url
+        let image = try await Task.detached(priority: .userInitiated) { () -> UIImage in
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 1600, height: 1600)
+            let (cgImage, _) = try await generator.image(at: .zero)
+            return UIImage(cgImage: cgImage)
+        }.value
+        try Task.checkCancellation(); try await session.revalidate()
+        if displaySizes[asset.id] == nil { displaySizes[asset.id] = image.size }
+        return image
+    }
+
+    #if DEBUG
+    static func timingLog(_ line: String) {
+        guard ProcessInfo.processInfo.arguments.contains("-stream-timing") else { return }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("stream-timing.log")
+        let data = Data(String(format: "%@ at=%.3f\n", line, Date().timeIntervalSince1970).utf8)
+        if let handle = try? FileHandle(forWritingTo: file) { handle.seekToEndOfFile(); handle.write(data); try? handle.close() }
+        else { try? data.write(to: file) }
+    }
+    #endif
+
+    /// Progress of the current beat's video (0...1), so the stream flows while it plays.
+    public var videoProgress: Double? { foreground.progress }
 
     /// Downsampled and fully decoded (`ShouldCacheImmediately`), so drawing it costs nothing later.
     nonisolated static func decode(_ file: URL, maxPixel: Int) throws -> UIImage {

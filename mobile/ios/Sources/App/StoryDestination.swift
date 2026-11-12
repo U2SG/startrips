@@ -163,10 +163,13 @@ extension AtlasSession {
             let bytes = try await self.api(prefix + id + "/read-url", method: "GET", body: nil, scope: scope)
             return try JSONDecoder().decode(Signed.self, from: bytes)
         }
-        return ScopedMediaSession(scopeID: scope, access: access, imageTransport: URLSession(configuration: config),
+        var media = ScopedMediaSession(scopeID: scope, access: access, imageTransport: URLSession(configuration: config),
             read: { assetID in
                 guard self.generation == generation, self.activeIdentity == scope else { throw MediaFailure.accessChanged }
                 #if DEBUG
+                if self.origin == nil && scope == "synthetic-ci", StressPhotos.isVideo(assetID) {
+                    return try await StressPhotos.video(assetID)
+                }
                 if self.origin == nil && scope == "synthetic-ci",
                    self.mediaJourneys.values.contains(where: { $0.media.contains(where: { $0.id == assetID }) }) {
                     return URL(string: "https://fixture.invalid")!.appendingPathComponent(assetID)
@@ -182,6 +185,7 @@ extension AtlasSession {
                 #if DEBUG
                 if self.origin == nil && scope == "synthetic-ci" {
                     let base = URL(string: "https://fixture.invalid")!
+                    if StressPhotos.isVideo(assetID) { return MediaDisplayRead(url: try await StressPhotos.video(assetID)) }
                     guard StressPhotos.isStress(assetID) else { return MediaDisplayRead(url: base.appendingPathComponent(assetID)) }
                     return MediaDisplayRead(url: base.appendingPathComponent("preview").appendingPathComponent(assetID),
                                             width: StressPhotos.previewSize(assetID).width,
@@ -200,6 +204,10 @@ extension AtlasSession {
                 guard self.generation == generation else { throw MediaFailure.accessChanged }
                 try await self.revalidate(scope)
             })
+        #if DEBUG
+        if origin == nil && scope == "synthetic-ci" { media.allowsFileURLs = true }   // generated fixture clips
+        #endif
+        return media
     }
 }
 

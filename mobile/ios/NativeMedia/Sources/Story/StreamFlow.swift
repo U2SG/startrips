@@ -68,7 +68,7 @@ enum StreamFlow {
         var seen = Set<String>()
         var result: [MediaAsset] = []
         for position in index..<beats.count {
-            guard let asset = beats[position].asset, !asset.isVideo, asset.isVisual, seen.insert(asset.id).inserted else { continue }
+            guard let asset = beats[position].asset, asset.isVisual, seen.insert(asset.id).inserted else { continue }
             if starts[position] - now > horizonMS && result.count >= minimum { break }
             result.append(asset)
             if result.count >= maximum { break }
@@ -176,5 +176,19 @@ struct StreamFollower: Equatable {
         let limit = (catchUp ? Self.maxAcceleration * 6 : Self.maxAcceleration) * CGFloat(dt)
         velocity += min(limit, max(-limit, desired - velocity))
         position += velocity * CGFloat(dt)
+    }
+
+    /// A row above the reading point changed height (a picture arrived in a new shape): the
+    /// content under the reader moved by `delta`, so the reading position moves with it.
+    /// This keeps the view still instead of letting the relayout read as a jump.
+    mutating func shift(by delta: CGFloat) { position += delta }
+}
+
+extension StreamFlow {
+    /// Timeline position during a video beat: the clip's own progress, not the clock (which
+    /// holds while the video owns its completion), so the flow keeps moving as the video plays.
+    static func videoSchedule(beatStartMS: Double, durationMS: Double, progress: Double?, sampledMS: Double) -> Double {
+        guard let progress, progress.isFinite else { return sampledMS }
+        return beatStartMS + max(0, durationMS) * min(1, max(0, progress))
     }
 }

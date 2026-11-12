@@ -14,7 +14,18 @@ final class StreamFlowDriver: NSObject, ObservableObject {
         let paused: Bool
         /// Where the reading point must be, and when (see `StreamFlow.knots`).
         let knots: [StreamFlow.Knot]
+        /// The row the first knot belongs to: if its y moves while it stays the anchor, the
+        /// content above it was re-laid out.
+        var anchor: String? = nil
+        /// A video beat flows with the clip's own progress.
+        var videoBeat: (startMS: Double, durationMS: Double)? = nil
+        static func == (lhs: Sample, rhs: Sample) -> Bool {
+            lhs.beat == rhs.beat && lhs.scheduleMS == rhs.scheduleMS && lhs.paused == rhs.paused
+                && lhs.knots == rhs.knots && lhs.anchor == rhs.anchor
+        }
     }
+    /// Read per frame during a video beat.
+    var videoProgress: (() -> Double?)?
 
     weak var scrollView: UIScrollView?
     var onTakeover: (() -> Void)?
@@ -42,7 +53,16 @@ final class StreamFlowDriver: NSObject, ObservableObject {
     func update(_ next: Sample) {
         if let previous = sample {
             if previous.paused, !next.paused { follower = nil }   // resume from where the reader is
-            if next.beat != previous.beat && next.beat != previous.beat + 1 { seeking = true }   // previous/next
+            if next.beat != previous.beat && next.beat != previous.beat + 1 { seeking = true; log("SEEK beat=\(previous.beat)->\(next.beat)") }
+            // Same anchor row, new y: rows above it changed height. Move with the content.
+            if let anchor = next.anchor, anchor == previous.anchor, let old = previous.knots.first?.y,
+               let new = next.knots.first?.y, abs(new - old) > 0.5, let scrollView {
+                let delta = new - old
+                follower?.shift(by: delta)
+                lastOffset = lastOffset.map { $0 + delta }
+                scrollView.contentOffset.y += delta
+                log(String(format: "RELAYOUT anchor=%@ delta=%.1f", anchor, delta))
+            }
         }
         sample = next; sampledAt = CACurrentMediaTime()
         start()
@@ -60,6 +80,12 @@ final class StreamFlowDriver: NSObject, ObservableObject {
         self.link = link
     }
 
+    private func log(_ line: String) {
+        #if DEBUG
+        timing?.write(Data(String(format: "%@ t=%.3f\n", line, CACurrentMediaTime()).utf8))
+        #endif
+    }
+
     private func currentReading() -> CGFloat? {
         guard let scrollView else { return nil }
         return scrollView.contentOffset.y + scrollView.adjustedContentInset.top
@@ -71,8 +97,15 @@ final class StreamFlowDriver: NSObject, ObservableObject {
         defer { lastFrame = now }
         guard let scrollView, let sample else { return }
         // The reader's finger always wins: playback pauses, play resumes the flow.
-        if scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
-            if !sample.paused { onTakeover?() }
+        // Only a real finger counts. `isDecelerating`/`isDragging` can be left set by UIKit's own
+        // content-size adjustments (no touch at all), which used to pause playback by itself.
+        let pan = scrollView.panGestureRecognizer.state
+        if scrollView.isTracking || pan == .began || pan == .changed {
+            if !sample.paused {
+                log(String(format: "USER offset=%.1f tracking=%d dragging=%d decelerating=%d pan=%d", scrollView.contentOffset.y,
+                           scrollView.isTracking ? 1 : 0, scrollView.isDragging ? 1 : 0, scrollView.isDecelerating ? 1 : 0, pan.rawValue))
+                onTakeover?()
+            }
             follower = nil; lastOffset = nil
             return
         }
@@ -86,7 +119,11 @@ final class StreamFlowDriver: NSObject, ObservableObject {
         } else {
             // Between 50ms clock samples the timeline advances with the display, never more
             // than maxLead ahead of a clock that is waiting for a picture.
-            let time = sample.scheduleMS + min(max(0, (now - sampledAt) * 1000), StreamFlow.maxLeadMS)
+            var time = sample.scheduleMS + min(max(0, (now - sampledAt) * 1000), StreamFlow.maxLeadMS)
+            if let video = sample.videoBeat {
+                time = StreamFlow.videoSchedule(beatStartMS: video.startMS, durationMS: video.durationMS,
+                                                progress: videoProgress?(), sampledMS: video.startMS)
+            }
             guard let ahead = StreamFlow.scheduled(sample.knots, at: time + StreamFollower.lead * 1000) else { return }
             var follower = self.follower ?? StreamFollower(position: start)
             let dt = min(0.05, max(0, now - (lastFrame ?? now)))
@@ -100,16 +137,19 @@ final class StreamFlowDriver: NSObject, ObservableObject {
                                        content: scrollView.contentSize.height + inset.top + inset.bottom)
         var y = (offset - inset.top).rounded(toPixelsOf: scrollView)
         // Invariant: while playing, the stream only moves down; a lower offset is only for a seek.
-        if !seeking, !reduceMotion, let lastOffset, y < lastOffset { y = lastOffset }
+        if !seeking, !reduceMotion, let lastOffset, y < lastOffset {
+            log(String(format: "CLAMP wanted=%.1f kept=%.1f", y, lastOffset))   // DEBUG invariant: never back while playing
+            y = lastOffset
+        }
         lastOffset = y
         if abs(scrollView.contentOffset.y - y) > 0.01 { scrollView.contentOffset.y = y }
         #if DEBUG
         frameCount += 1
         if let timing, frameCount % 6 == 0 {
             let knots = sample.knots.map { String(format: "%.0f@%.0f", $0.y, $0.time) }.joined(separator: ",")
-            timing.write(Data(String(format: "FRAME t=%.3f beat=%d schedule=%.0f reading=%.1f offset=%.1f content=%.0f seek=%d knots=%@\n",
+            timing.write(Data(String(format: "FRAME t=%.3f beat=%d schedule=%.0f reading=%.1f offset=%.1f content=%.0f seek=%d video=%d knots=%@\n",
                                      now, sample.beat, sample.scheduleMS, reading, y, scrollView.contentSize.height,
-                                     seeking ? 1 : 0, knots).utf8))
+                                     seeking ? 1 : 0, sample.videoBeat == nil ? 0 : 1, knots).utf8))
         }
         #endif
     }

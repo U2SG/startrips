@@ -1,4 +1,5 @@
 #if DEBUG
+import AVFoundation
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -24,6 +25,10 @@ enum StressPhotos {
     static var enabled: Bool { ProcessInfo.processInfo.arguments.contains("-story-stress-photos") }
 
     static func isStress(_ id: String) -> Bool { id.hasPrefix("stress-") }
+    static func isVideo(_ id: String) -> Bool { id.hasPrefix("stress-video-") }
+    /// Clips of different lengths; the second one's read is slow, the third is portrait.
+    static let videos: [(seconds: Int, width: Int, height: Int, readDelay: Double)] =
+        [(4, 640, 360, 0.3), (8, 640, 360, 2.5), (12, 360, 640, 0.6)]
 
     /// The fixture Journey with `count` extra pictures spread over its route points.
     static func augment(_ journey: MediaJourney) -> MediaJourney {
@@ -42,6 +47,11 @@ enum StressPhotos {
             media.append(["id": "stress-\(index)", "journeyId": journey.id, "routePointId": points[index % max(1, points.count)],
                           "fileName": "stress-\(index).jpg", "mimeType": "image/jpeg", "bytes": 4_000_000,
                           "sortOrder": 100 + index])
+        }
+        for (index, clip) in videos.enumerated() {
+            media.append(["id": "stress-video-\(index)", "journeyId": journey.id, "routePointId": points[(index * 7 + 3) % max(1, points.count)],
+                          "fileName": "clip-\(index).mp4", "mimeType": "video/mp4", "bytes": clip.seconds * 300_000,
+                          "sortOrder": 50 + index * 9])
         }
         object["media"] = media
         guard let data = try? JSONSerialization.data(withJSONObject: object),
@@ -78,6 +88,57 @@ enum StressPhotos {
         guard CGImageDestinationFinalize(destination) else { return nil }
         try? (data as Data).write(to: cache)
         return data as Data
+    }
+
+    /// A generated H.264 clip (colour bands moving each frame), cached; the read waits like a slow server.
+    static func video(_ id: String) async throws -> URL {
+        let index = Int(id.split(separator: "-").last ?? "0") ?? 0
+        let clip = videos[index % videos.count]
+        try await Task.sleep(for: .seconds(clip.readDelay))
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(id).mp4")
+        if FileManager.default.fileExists(atPath: url.path) { return url }
+        try await Task.detached(priority: .userInitiated) { try writeClip(to: url, seconds: clip.seconds, width: clip.width, height: clip.height) }.value
+        return url
+    }
+
+    private static func writeClip(to url: URL, seconds: Int, width: Int, height: Int) throws {
+        let temp = url.appendingPathExtension("tmp.mp4")
+        try? FileManager.default.removeItem(at: temp)
+        let writer = try AVAssetWriter(outputURL: temp, fileType: .mp4)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264,
+                                                                             AVVideoWidthKey: width, AVVideoHeightKey: height])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height])
+        writer.add(input)
+        writer.startWriting(); writer.startSession(atSourceTime: .zero)
+        let fps = 30
+        for frame in 0..<(seconds * fps) {
+            while !input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.002) }
+            guard let pool = adaptor.pixelBufferPool else { break }
+            var buffer: CVPixelBuffer?
+            CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
+            guard let buffer else { break }
+            CVPixelBufferLockBaseAddress(buffer, [])
+            let base = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+            let row = CVPixelBufferGetBytesPerRow(buffer)
+            for y in 0..<height {
+                let band = ((y + frame * 4) / 24) % 2
+                for x in 0..<width {
+                    let p = base + y * row + x * 4
+                    p[0] = UInt8(band == 0 ? 180 : 60); p[1] = UInt8((x * 255) / max(1, width)); p[2] = UInt8((frame * 3) % 255); p[3] = 255
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(buffer, [])
+            adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: CMTimeScale(fps)))
+        }
+        input.markAsFinished()
+        let done = DispatchSemaphore(value: 0)
+        writer.finishWriting { done.signal() }
+        done.wait()
+        guard writer.status == .completed else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
+        try? FileManager.default.removeItem(at: url)
+        try FileManager.default.moveItem(at: temp, to: url)
     }
 }
 #endif

@@ -282,6 +282,8 @@ struct StoryStream: View {
             .onChange(of: model.playback?.index) { _ in prefetch(); sync(proxy) }
             .onChange(of: model.playback?.elapsedMS) { _ in sync(proxy) }
             .onChange(of: model.paused) { _ in sync(proxy) }
+            // Rows realised or resized during a long beat (a video) refresh the anchors.
+            .onChange(of: rowFrames) { _ in if playing { sync(proxy) } }
             .onChange(of: playing) { _ in prefetch(); sync(proxy) }
             .onChange(of: reduceMotion) { driver.reduceMotion = $0 }
         }
@@ -308,8 +310,14 @@ struct StoryStream: View {
             }
             return
         }
-        let schedule = StreamFlow.beatStarts(clock.beats)[clock.index] + clock.elapsedMS
-        driver.update(.init(beat: clock.index, scheduleMS: schedule, paused: model.paused, knots: knots))
+        let start = StreamFlow.beatStarts(clock.beats)[clock.index]
+        let beat = clock.beats[clock.index]
+        // Only a measured row can tell a relayout apart from a refined estimate.
+        let here = StreamFlow.row(for: beat, in: entries)
+        let anchor = here.flatMap { frames[$0] != nil ? entries[$0].id : nil }
+        driver.videoProgress = { [weak model] in model?.videoProgress }
+        driver.update(.init(beat: clock.index, scheduleMS: start + clock.elapsedMS, paused: model.paused, knots: knots,
+                            anchor: anchor, videoBeat: beat.asset?.isVideo == true ? (start, beat.durationMS) : nil))
     }
 
     private func point(_ id: String?) -> MediaRoutePoint? { id.flatMap { id in model.journey.routePoints.first { $0.id == id } } }
@@ -435,24 +443,26 @@ private struct StoryStreamMedia: View, Equatable {
     }
 
     private var aspect: CGFloat {
-        if asset.isVideo { return 16 / 9 }
         let known = size ?? image?.size
-        guard let known, known.width > 0, known.height > 0 else { return 4 / 3 }
+        guard let known, known.width > 0, known.height > 0 else { return asset.isVideo ? 16 / 9 : 4 / 3 }
         return known.width / known.height
     }
 
     var body: some View {
         Group {
             if asset.isVideo {
-                if playsVideo, let foreground {
-                    ForegroundVideo(playback: foreground)
-                } else {
-                    Button(action: select) {
-                        ZStack {
-                            StoryTheme.surface
-                            Image(systemName: "play.circle").font(.largeTitle).foregroundStyle(StoryTheme.ink.opacity(0.8))
-                        }
-                    }.accessibilityLabel("播放视频：\(asset.fileName)")
+                // The poster (preview or first frame) is always underneath, so a video row is a
+                // picture before and while its clip loads, never a dark block.
+                ZStack {
+                    if let image { Image(uiImage: image).resizable().scaledToFill() } else { StoryTheme.surface }
+                    if playsVideo, let foreground {
+                        ForegroundVideo(playback: foreground, fill: true)
+                    } else {
+                        Button(action: select) {
+                            Image(systemName: "play.circle").font(.largeTitle).foregroundStyle(StoryTheme.ink.opacity(0.85))
+                                .shadow(color: .black.opacity(0.5), radius: 6)
+                        }.accessibilityLabel("播放视频：\(asset.fileName)")
+                    }
                 }
             } else if let image {
                 Image(uiImage: image).resizable().scaledToFill()

@@ -85,6 +85,9 @@ public struct StoryIntent: Codable, Equatable, Sendable {
     public let revalidate: () async throws -> Void
     /// The server's display preview when one is ready (smaller, with its pixel size), else the original.
     public let readDisplay: ((String) async throws -> MediaDisplayRead)?
+    /// DEBUG fixtures only: local generated media. Production reads stay HTTPS-only.
+    public var allowsFileURLs = false
+    private func allowed(_ url: URL) -> Bool { url.scheme == "https" || (allowsFileURLs && url.isFileURL) }
     public init(scopeID: String, access: Access,
                 imageTransport: URLSession = URLSession(configuration: .ephemeral),
                 read: @escaping (String) async throws -> URL,
@@ -107,7 +110,7 @@ public struct StoryIntent: Codable, Equatable, Sendable {
         let read = try await readDisplay(assetID)
         try Task.checkCancellation()
         try await revalidate()
-        guard read.url.scheme == "https" else { throw MediaFailure.unavailable }
+        guard allowed(read.url) else { throw MediaFailure.unavailable }
         return read
     }
     public func mediaURL(_ assetID: String) async throws -> URL {
@@ -115,7 +118,7 @@ public struct StoryIntent: Codable, Equatable, Sendable {
         let url = try await read(assetID)
         try Task.checkCancellation()
         try await revalidate()
-        guard url.scheme == "https" else { throw MediaFailure.unavailable }
+        guard allowed(url) else { throw MediaFailure.unavailable }
         return url
     }
 }

@@ -103,9 +103,11 @@ final class StreamFlowTests: XCTestCase {
         XCTAssertEqual(starts.first, 0)
         XCTAssertTrue(zip(starts, starts.dropFirst()).allSatisfy { $0 <= $1 })
         let ahead = StreamFlow.lookahead(beats: beats, index: 0, elapsedMS: 0, horizonMS: .infinity, minimum: 0, maximum: 99)
-        let expected = beats.compactMap(\.asset).filter { !$0.isVideo && $0.isVisual }
+        // Videos are included: their poster is prefetched like a picture.
+        let expected = beats.compactMap(\.asset).filter { $0.isVisual }
             .reduce(into: [MediaAsset]()) { list, asset in if !list.contains(where: { $0.id == asset.id }) { list.append(asset) } }
         XCTAssertEqual(ahead.map(\.id), expected.map(\.id), "in playback order, nearest first, no duplicates")
+        XCTAssertEqual(ahead.contains(where: \.isVideo), expected.contains(where: \.isVideo))
         // A zero horizon still keeps the minimum; the maximum bounds memory.
         XCTAssertEqual(StreamFlow.lookahead(beats: beats, index: 0, elapsedMS: 0, horizonMS: 0, minimum: 1, maximum: 9).count,
                        min(1, expected.count))
@@ -214,5 +216,45 @@ final class StreamFlowTests: XCTestCase {
             XCTAssertLessThanOrEqual(follower.velocity, StreamFollower.maxSpeed)
             last = follower.position
         }
+    }
+
+    // MARK: Videos, tempo and relayout
+
+    /// A video beat's clock holds (the clip owns completion); the stream follows the clip instead.
+    func testVideoBeatsFlowWithTheClipNotTheHeldClock() {
+        XCTAssertEqual(StreamFlow.videoSchedule(beatStartMS: 10_000, durationMS: 6000, progress: 0.5, sampledMS: 10_000), 13_000)
+        XCTAssertEqual(StreamFlow.videoSchedule(beatStartMS: 10_000, durationMS: 6000, progress: 1.4, sampledMS: 10_000), 16_000)
+        XCTAssertEqual(StreamFlow.videoSchedule(beatStartMS: 10_000, durationMS: 6000, progress: nil, sampledMS: 10_000), 10_000,
+                       "not started yet: hold at the row")
+        XCTAssertEqual(StreamFlow.videoSchedule(beatStartMS: 10_000, durationMS: 6000, progress: .nan, sampledMS: 10_000), 10_000)
+    }
+
+    /// 沉浸 < 标准 < 轻快 in speed: the same rows are crossed over proportionally longer/shorter
+    /// timelines, and a mid-run change keeps the beat and its progress (no jump).
+    func testTempoScalesTheTimelineAndKeepsPositionWhenChanged() throws {
+        let journey = try MediaFixtures.journey()
+        func total(_ tempo: NarrativeTempo) -> Double {
+            JourneyPlaybackPlan.build(journey, tempo: tempo).reduce(0) { $0 + $1.durationMS }
+        }
+        XCTAssertGreaterThan(total(.immersive), total(.standard))
+        XCTAssertGreaterThan(total(.standard), total(.fast))
+        var clock = PlaybackClock(beats: JourneyPlaybackPlan.build(journey, tempo: .standard))
+        clock.tick(milliseconds: 300, mediaReady: true, videoOwnsCompletion: false)
+        let beat = clock.index, fraction = clock.elapsedMS / (clock.current?.durationMS ?? 1)
+        clock.changeTempo(to: JourneyPlaybackPlan.build(journey, tempo: .fast))
+        XCTAssertEqual(clock.index, beat)
+        XCTAssertEqual(clock.elapsedMS / (clock.current?.durationMS ?? 1), fraction, accuracy: 0.0001)
+        // The follower absorbs whatever small target change remains, with bounded acceleration.
+        var follower = StreamFollower(position: 400, velocity: 200)
+        follower.step(ahead: 400 + 0.6 * 600, dt: 1.0 / 60)   // faster schedule: speeds up gradually
+        XCTAssertLessThanOrEqual(follower.velocity - 200, StreamFollower.maxAcceleration / 60 + 0.001)
+        XCTAssertGreaterThan(follower.velocity, 200)
+    }
+
+    func testRelayoutShiftMovesWithTheContent() {
+        var follower = StreamFollower(position: 1000, velocity: 120)
+        follower.shift(by: -340)
+        XCTAssertEqual(follower.position, 660)
+        XCTAssertEqual(follower.velocity, 120, "a relayout is not motion")
     }
 }

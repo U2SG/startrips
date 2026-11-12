@@ -32,7 +32,10 @@ public struct NativeStoryDestination: View {
             model.appear()
             #if DEBUG
             // Screenshot probe only: start playback without a tap.
-            if ProcessInfo.processInfo.arguments.contains("-story-autoplay") { model.playJourney() }
+            let arguments = ProcessInfo.processInfo.arguments
+            if let flag = arguments.firstIndex(of: "-story-tempo"), arguments.indices.contains(flag + 1),
+               let tempo = NarrativeTempo(rawValue: arguments[flag + 1]) { model.changeTempo(tempo) }
+            if arguments.contains("-story-autoplay") { model.playJourney() }
             #endif
         }
         .onDisappear { model.disappear() }
