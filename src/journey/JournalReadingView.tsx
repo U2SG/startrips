@@ -24,8 +24,8 @@ export function visibleJournalChapters(chapters: JournalChapter[], rows: ReturnT
     .filter(({ chapter }) => (!date || chapter.date === date) && (!(status || query.trim()) || rows.some(row => row.chapter.id === chapter.id)));
 }
 
-type Props = { chapters: JournalChapter[]; journey: Journey; busy: boolean; onPoint: (id: string) => void; renderMedia: (ids: string[]) => ReactNode };
-export function JournalReadingView({ chapters, journey, busy, onPoint, renderMedia }: Props) {
+type Props = { chapters: JournalChapter[]; journey: Journey; renderMedia: (ids: string[]) => ReactNode };
+export function JournalReadingView({ chapters, journey, renderMedia }: Props) {
   const [view, setView] = useState<"reading" | "table">("reading");
   const [date, setDate] = useState("");
   const [status, setStatus] = useState("");
@@ -38,7 +38,7 @@ export function JournalReadingView({ chapters, journey, busy, onPoint, renderMed
   const filtered = !!(date || status || query.trim());
   const visibleChapters = visibleJournalChapters(chapters, rows, date, status, query);
   const place = (row: typeof rows[number]) => row.point
-    ? <><button disabled={busy} onClick={() => onPoint(row.point!.id)}>在 Stream 中查看地点：{row.point.label || "未命名路线点"}</button>{row.point.occurredAt ? <small>地点已有时间记录：<time dateTime={row.point.occurredAt}>{row.point.occurredAt}</time>（不替代手记当地时间）</small> : null}</>
+    ? <><span>{row.point.label || "未命名路线点"}</span>{row.point.occurredAt ? <small>地点已有时间记录：<time dateTime={row.point.occurredAt}>{row.point.occurredAt}</time>（不替代手记当地时间）</small> : null}</>
     : <span className="daily-journal__muted">未关联地图点</span>;
   const body = ({ event, suggestion }: typeof rows[number]) => {
     const media = journalMediaGroups(event, journey.media ?? []);

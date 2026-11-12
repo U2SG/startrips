@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { previewJournalImport } from "./dailyJournal";
 import {
   journeyStreamEntries,
   journeyStreamLayout,
   streamAspect,
   streamDate,
   streamPictureSize,
+  withJourneyStreamJournal,
   type JourneyStreamEntry,
 } from "./journeyStreamModel";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
@@ -86,6 +88,29 @@ describe("journeyStreamEntries", () => {
     expect(shape(entries)).toEqual(["intro", "media:intro-photo"]);
     expect(entries[0]).toMatchObject({ note: "整段旅程" });
   });
+});
+
+it("reads journal days in order with matching media and retains unassigned media", () => {
+  const chapters = previewJournalImport(
+    "2026-08-12 第二天\n实际：海边散步\n2026-08-11 第一天\n实际：城市住宿\n计划：看海",
+    base.startedOn,
+  );
+  const earlier = chapters.find(chapter => chapter.date === base.startedOn)!;
+  const later = chapters.find(chapter => chapter.date !== base.startedOn)!;
+  earlier.events[0].routePointId = "hotel";
+  earlier.events[0].mediaIds = ["manual"];
+  earlier.events[1].routePointId = "coast";
+  later.events[0].mediaIds = ["manual"];
+  const journey = {
+    ...base,
+    routePoints: [point("coast", null, "2026-08-12T15:00:00Z"), point("hotel")],
+    media: [asset("coast-photo", "coast", 0), asset("hotel-photo", "hotel", 0), asset("manual", null, 0), asset("extra", null, 1)],
+  };
+  const entries = withJourneyStreamJournal(journeyStreamEntries(journey), chapters);
+  expect(entries.map(entry => entry.key)).toEqual([
+    "intro", `journal:${earlier.id}`, "media:manual", "media:hotel-photo",
+    `journal:${later.id}`, "media:coast-photo", "media:extra",
+  ]);
 });
 
 describe("stream sizing", () => {

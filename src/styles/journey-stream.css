@@ -464,3 +464,60 @@
   .journey-stream__item::before,
   .journey-stream__item::after { transition: none; }
 }
+
+/* A saved journal is read at the reader's pace, including days taller than the screen. */
+.journey-stream[data-journal] .journey-stream__flow {
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y pinch-zoom;
+  cursor: auto;
+}
+.journey-stream[data-journal] .journey-stream__strip {
+  position: relative;
+  padding: clamp(24px, 7vh, 64px) 0 max(48px, var(--reader-half-height), env(safe-area-inset-bottom));
+  will-change: auto;
+}
+.journey-stream[data-journal] .journey-stream__thread { display: none; }
+.journey-stream[data-journal] .journey-stream__item::before,
+.journey-stream[data-journal] .journey-stream__item::after { display: none; }
+
+.journey-stream__journal-day {
+  box-sizing: border-box;
+  width: min(38rem, calc(100% - 48px));
+  border-block-start: 1px solid var(--startrips-line);
+  padding-block-start: 24px;
+  overflow-wrap: anywhere;
+}
+.journey-stream__journal-day h2 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 14px;
+  margin: 0 0 16px;
+  font: 400 clamp(20px, 3vw, 26px)/1.35 var(--archive-serif);
+}
+.journey-stream__journal-day h2 time,
+.journey-stream__journal-meta {
+  color: var(--accent);
+  font: 500 0.875rem/1.5 var(--archive-sans);
+  font-variant-numeric: tabular-nums;
+}
+.journey-stream__journal-meta { display: flex; flex-wrap: wrap; gap: 10px; }
+.journey-stream__journal-meta:empty { display: none; }
+.journey-stream__journal-day ol { margin: 0; padding: 0; list-style: none; }
+.journey-stream__journal-day li + li { margin-top: 16px; }
+.journey-stream__journal-day p { margin: 4px 0; white-space: pre-wrap; font-size: 1rem; line-height: 1.75; }
+.journey-stream .journey-stream__journal-place {
+  min-height: 44px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: 500 0.875rem/1.4 var(--archive-sans);
+  text-align: start;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}

@@ -6,7 +6,7 @@ const browser = await launchQaBrowser();
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const journeyId = "11111111-1111-4111-8111-111111111111";
 const pointId = "44444444-4444-4444-8444-444444444444";
-const source = "23:40 她在虚构城入住星桥酒店。";
+const source = "住宿：星桥酒店";
 const journal = { revision: 1, chapters: [{ id: "chapter-hotel", date: "2027-04-03", title: "住宿", source,
   events: [{ id: "event-hotel", source, text: "她保留的手工正文。", edited: true, status: "uncertain", localDate: "2027-04-03", localTime: "23:40", timeContext: "当地时间", routePointId: null, mediaIds: [] }], suggestions: [] }] };
 try {
@@ -27,11 +27,14 @@ try {
         await new Promise(resolve => { releaseApply = resolve; });
         const saved = structuredClone(journal); saved.revision = 2; saved.chapters[0].events[0].status = "actual"; saved.chapters[0].events[0].routePointId = pointId;
         stored = saved;
-        await route.fulfill({ json: { journal: saved, journey: { id: journeyId, atlasId: "fictional-atlas", title: "虚构旅行手记验收", note: "", startedOn: "2027-04-03", endedOn: null, lightColor: "#74e7d0", revision: 2, createdByUserId: "fictional-owner", createdAt: "2027-04-03T00:00:00Z", updatedAt: "2027-04-03T00:00:00Z", media: [], routePoints: [{ id: pointId, journeyId, sortOrder: 0, latitude: 10, longitude: 20, label: "星桥酒店", isStop: true, occurredAt: null }] } } });
+        await route.fulfill({ json: { journal: saved, journey: { id: journeyId, atlasId: "fictional-atlas", title: "虚构旅行手记验收", note: "", startedOn: "2027-04-03", endedOn: null, lightColor: "#74e7d0", revision: 2, createdByUserId: "fictional-owner", createdAt: "2027-04-03T00:00:00Z", updatedAt: "2027-04-03T00:00:00Z", media: [], routePoints: [{ id: pointId, journeyId, sortOrder: 0, latitude: 10, longitude: 20, label: "星桥酒店", isStop: true, placeRole: "accommodation", occurredAt: null }] } } });
       } else await route.fulfill({ json: { journal: url.includes(journeyId) ? stored : { revision: 0, chapters: [] } } });
     });
     await page.goto(`${origin}/artifacts/daily-journal/index.html`);
-    await page.getByRole("button", { name: "每日手记", exact: true }).click();
+    const lodging = page.locator(".journey-stream__journal-day").getByText("住宿", { exact: true }).last();
+    await lodging.waitFor();
+    assert.equal(await page.getByRole("button", { name: "在地图上查看：星桥酒店" }).count(), 0);
+    await page.getByRole("button", { name: "导入手记", exact: true }).click();
     const preview = () => page.getByRole("button", { name: "用 AI 查找已入住酒店" });
     await preview().waitFor();
     // A journal without a saved import offers no undo.
@@ -44,22 +47,23 @@ try {
     await apply.evaluate(button => { button.click(); button.click(); });
     await page.getByText("正在保存…", { exact: true }).waitFor(); assert.equal(writes, 1);
     assert.equal(await page.getByRole("button", { name: "取消酒店预览" }).isDisabled(), true);
-    assert.equal(await page.getByRole("button", { name: "返回 Stream" }).isDisabled(), true);
-    await page.keyboard.press("Escape"); assert.equal(await page.getByRole("dialog", { name: "每日手记" }).count(), 1);
+    assert.equal(await page.getByRole("button", { name: "返回旅程" }).isDisabled(), true);
+    await page.keyboard.press("Escape"); assert.equal(await page.getByRole("dialog", { name: "导入手记" }).count(), 1);
     releaseApply(); await page.getByText("酒店地点及手记关联已保存。", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "返回旅程", exact: true }).click();
     await page.getByText("她保留的手工正文。", { exact: true }).waitFor();
     await page.screenshot({ path: `artifacts/daily-journal/hotels-${width}.png`, fullPage: true });
-    await page.getByRole("button", { name: "在 Stream 中查看地点：星桥酒店" }).click();
-    await page.waitForFunction(id => window.__observation?.routePointId === id, pointId);
-    await page.getByRole("button", { name: "每日手记", exact: true }).click();
+    await page.getByRole("button", { name: "在地图上查看：星桥酒店" }).click();
+    await page.waitForFunction(id => window.__mapPoint === id, pointId);
+    await page.getByRole("button", { name: "导入手记", exact: true }).click();
     assert.equal(await page.evaluate(() => window.__ownerJourney.routePoints.some(p => p.id === "44444444-4444-4444-8444-444444444444")), true);
     await page.evaluate(() => window.dispatchEvent(new Event("qa-remount-stream")));
-    await page.getByRole("button", { name: "每日手记", exact: true }).click();
-    await page.getByRole("button", { name: "在 Stream 中查看地点：星桥酒店" }).waitFor();
+    await page.getByRole("button", { name: "在地图上查看：星桥酒店" }).waitFor();
+    await page.getByRole("button", { name: "导入手记", exact: true }).click();
     // A late preview must not land in the newly selected account.
     await preview().click(); await page.getByText("正在检索酒店…", { exact: true }).waitFor();
     await page.evaluate(() => window.dispatchEvent(new Event("qa-account-switch")));
-    releasePreview(); await page.getByRole("button", { name: "每日手记", exact: true }).click();
+    releasePreview(); await page.getByRole("button", { name: "导入手记", exact: true }).click();
     await page.getByLabel("原始流水账").waitFor();
     assert.equal(await page.getByRole("button", { name: "确认批量添加及关联" }).count(), 0);
     assert.equal(previews, 3); assert.deepEqual(errors, []);

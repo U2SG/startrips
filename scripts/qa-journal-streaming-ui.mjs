@@ -52,7 +52,7 @@ const client = { importJournal:createJournalImportClient(fetcher), read:async()=
 function Harness() {
   const [scope,setScope]=useState(0), [account,setAccount]=useState(0), [open,setOpen]=useState(true);
   qa.switchJourney=()=>{qa.scope++;setScope(qa.scope)}; qa.switchAccount=()=>{qa.account++;setAccount(qa.account)};
-  return <AtlasViewProvider value={createOwnerAtlasView()}>{open ? <DailyJournalPanel key={account+':'+scope} journey={inputFor(scope)} client={client} onClose={()=>{qa.closed++;setOpen(false)}} onPoint={()=>{}}/> : <p>面板已关闭</p>}</AtlasViewProvider>;
+  return <AtlasViewProvider value={createOwnerAtlasView()}>{open ? <DailyJournalPanel key={account+':'+scope} journey={inputFor(scope)} client={client} onClose={()=>{qa.closed++;setOpen(false)}}/> : <p>面板已关闭</p>}</AtlasViewProvider>;
 }
 createRoot(document.getElementById('root')).render(<Harness/>);
 `);
@@ -136,7 +136,7 @@ try {
 
     await open(); await fill('断流'); await start(); await page.evaluate(()=>window.__qa.failPartial(0)); await page.getByRole('alert').filter({hasText:'未能完成导入'}).waitFor(); await noOverflow(); await page.locator('.daily-journal__import-status').scrollIntoViewIfNeeded(); await page.screenshot({path:`${output}/failed-${viewport.width}x${viewport.height}.png`}); await noDraft(); assert.equal(await page.evaluate(()=>window.__qa.writes),0); cases++;
 
-    await open(); await fill('离开前停止'); await start(); await page.evaluate(()=>window.__qa.holdCancel=true); await page.getByRole('button',{name:'返回 Stream',exact:true}).click();
+    await open(); await fill('离开前停止'); await start(); await page.evaluate(()=>window.__qa.holdCancel=true); await page.getByRole('button',{name:'返回旅程',exact:true}).click();
     await page.getByRole('button',{name:'丢弃并返回',exact:true}).click(); await page.waitForFunction(()=>window.__qa.cancels===1); assert.equal(await page.evaluate(()=>window.__qa.closed),0);
     await page.evaluate(()=>window.__qa.cancelled()); await page.getByText('面板已关闭',{exact:true}).waitFor(); assert.equal(await page.evaluate(()=>window.__qa.closed),1); cases++;
     assert.deepEqual(errors,[]); await context.close();

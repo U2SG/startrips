@@ -31,8 +31,10 @@ function JournalMedia({ assets }: { assets: JourneyMediaAsset[] }) {
   })}</div>;
 }
 
-export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourneyChanged }: {
-  journey: Journey; client: DailyJournalClient; onClose: () => void; onPoint: (id: string) => void; onJourneyChanged?: (journey: Journey) => void;
+export function DailyJournalPanel({ journey, client, onClose, onJourneyChanged, onJournalChanged }: {
+  journey: Journey; client: DailyJournalClient; onClose: () => void;
+  onJourneyChanged?: (journey: Journey) => void;
+  onJournalChanged?: (journal: DailyJournal) => void;
 }) {
   const [saved, setSaved] = useState<DailyJournal | null>(null);
   const [draft, setDraft] = useState<DailyJournal | null>(null);
@@ -43,9 +45,7 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [hotels, setHotels] = useState<HotelPreview | null>(null);
-  // An AI-imported preview that was saved goes straight on to the hotel step.
   const [fromImport, setFromImport] = useState(false);
-  const [findHotels, setFindHotels] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   // null: no undo pending; 0: plain confirmation; n: n imported chapters were edited since.
   const [confirmUndo, setConfirmUndo] = useState<number | null>(null);
@@ -79,20 +79,13 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
     if (importControl.current && !await importControl.current.stop()) return;
     requests.current.cancel(); onClose();
   }
-  function searchHotels(keepNotice?: string) {
+  function searchHotels() {
     return run("检索酒店", async signal => {
-      // run() clears messages; the automatic step keeps the save confirmation.
-      if (keepNotice) setNotice(keepNotice);
       setHotels(null);
       const preview = await client.previewHotels!(journey.id, signal);
       if (!signal.aborted) setHotels(preview);
     });
   }
-  useEffect(() => {
-    if (!findHotels || busy) return;
-    setFindHotels(false);
-    void searchHotels("手记已保存。");
-  }, [findHotels, busy]); // eslint-disable-line react-hooks/exhaustive-deps
   function stopOperation() {
     requests.current.cancel(); setBusy(null); setError(""); setNotice("已停止，原文和草稿已保留。");
   }
@@ -112,20 +105,19 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
       const result = await client.undoImport!(journey.id, latestImport.id, saved.revision, confirmEdited, signal);
       if (signal.aborted) return;
       if (result.status === "edited") { setConfirmUndo(result.edited); return; }
-      setConfirmUndo(null); setHotels(null); setSaved(result.journal); onJourneyChanged?.(result.journey); setNotice("已撤销这次导入。");
+      setConfirmUndo(null); setHotels(null); setSaved(result.journal); onJournalChanged?.(result.journal); onJourneyChanged?.(result.journey); setNotice("已撤销这次导入。");
     });
   }
-  const journal = draft ?? saved;
-  const ordered = journal?.chapters.map((c, index) => ({ c, index })).sort((a, b) => a.c.date.localeCompare(b.c.date) || a.index - b.index) ?? [];
+  const ordered = draft?.chapters.map((c, index) => ({ c, index })).sort((a, b) => a.c.date.localeCompare(b.c.date) || a.index - b.index) ?? [];
   const visual = journey.media.filter((m) => /^(image|video)\//.test(m.mimeType));
   const firstPlaceMedia = firstJournalPlaceMediaEvents(ordered.flatMap(({ c }) => c.events), visual);
-  return <div className="daily-journal" role="dialog" aria-modal="true" aria-label="每日手记" ref={root} tabIndex={-1}>
-    <header><div><h1>{journey.title}</h1></div><button disabled={busy === "保存"} onClick={requestClose}>返回 Stream</button></header>
+  return <div className="daily-journal" role="dialog" aria-modal="true" aria-label="导入手记" ref={root} tabIndex={-1}>
+    <header><h1>导入手记</h1><button disabled={busy === "保存"} onClick={requestClose}>返回旅程</button></header>
     {confirmClose ? <div role="alert" className="daily-journal__confirm"><p>当前有未保存内容，离开会丢弃草稿。</p><div className="daily-journal__confirm-actions"><button onClick={() => setConfirmClose(false)}>继续编辑</button><button className="is-destructive" disabled={busy === "保存"} onClick={() => { void discardAndClose(); }}>丢弃并返回</button></div></div> : null}
     {error ? <p role="alert">{error}</p> : null}{notice ? <p role="status">{notice}</p> : null}
     {busy && busy !== "导入" ? <JournalOperationStatus label={`正在${busy}…`} onStop={busy === "保存" || busy === "读取" || busy === "撤销" ? undefined : stopOperation} /> : null}
     {saved ? <>
-      <section className="daily-journal__import" aria-label="导入手记">
+      <section className="daily-journal__import" aria-label="原文导入">
         <label>原始流水账<textarea aria-describedby={sourceCountId} value={source} maxLength={200000} placeholder="粘贴整份游记，AI 会识别日期、钟点与事件状态。" disabled={!!busy || !!draft} onChange={(e) => setSource(e.target.value)} /></label>
         <p id={sourceCountId} className="daily-journal__source-count">原文 {sourceCharacters.toLocaleString("zh-CN")} 字符</p>
         <JournalImportControl client={client.importJournal}
@@ -134,37 +126,39 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
           onBusy={value => setBusy(current => value ? "导入" : current === "导入" ? null : current)}
           onPreview={preview => {
             if (preview.revision !== saved.revision) { setError("手记已更新，请保留原文，重新打开后导入。"); return false; }
-            setDraft(preview); setEditing(false); setHotels(null); setFromImport(true); setError(""); setNotice(`识别完成，已填入 ${preview.chapters.length} 章、${preview.chapters.reduce((count, chapter) => count + chapter.events.length, 0)} 条记录的完整预览，尚未保存。缺失或有歧义的内容单独列出，可在编辑中调整。`); return true;
+            setDraft(preview); setEditing(false); setHotels(null); setFromImport(true); setError(""); setNotice("识别完成，已填入预览，尚未保存。"); return true;
           }} />
       </section>
-      {!draft && saved.chapters.length > 0 ? <button disabled={!!busy || !!hotels} onClick={() => { setDraft(structuredClone(saved)); setEditing(true); }}>编辑已有手记</button> : null}
-      {!draft && !source && latestImport && client.undoImport ? <button disabled={!!busy || confirmUndo !== null} onClick={() => setConfirmUndo(0)}>撤销这次导入</button> : null}
-      {!draft && latestImport && confirmUndo !== null ? <div role="alert" className="daily-journal__confirm">
-        <p>{confirmUndo ? `其中 ${confirmUndo} 章导入后有修改，撤销会一并丢失。` : `撤销这次导入会移除 ${latestImport.chapters} 章。`}</p>
-        <div className="daily-journal__confirm-actions">
-          <button disabled={!!busy} onClick={() => setConfirmUndo(null)}>取消</button>
-          <button className="is-destructive" disabled={!!busy} onClick={() => void undoImport(confirmUndo > 0)}>确认撤销</button>
-        </div>
-      </div> : null}
-      {!draft && !source && saved.chapters.length > 0 && client.previewHotels && client.applyHotels ? <section aria-label="酒店工具导入">
-        <button disabled={!!busy} onClick={() => void searchHotels()}>用 AI 查找已入住酒店</button>
-        {hotels ? <><ul>{hotels.hotels.map(h => <li key={h.eventId}><strong>{h.label}</strong> · {h.context}<p>原文：{h.evidence}</p><span>{h.existingPointId ? "复用已有地点" : "新增地点"}</span></li>)}</ul>
-          {hotels.questions.map((q, i) => <p key={i}>{q}</p>)}
-          {!hotels.hotels.length ? <p>没有可可靠确认的住宿地点；未写入。</p> : null}
-          <button disabled={!!busy || !hotels.hotels.length} onClick={() => run("保存", async signal => {
-            const result = await client.applyHotels!(journey.id, hotels.token, signal);
-            if (!signal.aborted) { setSaved(result.journal); setHotels(null); onJourneyChanged?.(result.journey); setNotice("酒店地点及手记关联已保存。"); }
-          })}>确认批量添加及关联</button>
-          <button disabled={busy === "保存"} onClick={() => { requests.current.cancel(); setBusy(null); setHotels(null); }}>取消酒店预览</button>
-        </> : null}
-      </section> : null}
+      <div className="daily-journal__saved-actions">
+        {!draft && saved.chapters.length > 0 ? <button disabled={!!busy || !!hotels} onClick={() => { setDraft(structuredClone(saved)); setEditing(true); }}>编辑已有手记</button> : null}
+        {!draft && !source && latestImport && client.undoImport ? <button disabled={!!busy || confirmUndo !== null} onClick={() => setConfirmUndo(0)}>撤销这次导入</button> : null}
+        {!draft && latestImport && confirmUndo !== null ? <div role="alert" className="daily-journal__confirm">
+          <p>{confirmUndo ? `其中 ${confirmUndo} 章导入后有修改，撤销会一并丢失。` : `撤销这次导入会移除 ${latestImport.chapters} 章。`}</p>
+          <div className="daily-journal__confirm-actions">
+            <button disabled={!!busy} onClick={() => setConfirmUndo(null)}>取消</button>
+            <button className="is-destructive" disabled={!!busy} onClick={() => void undoImport(confirmUndo > 0)}>确认撤销</button>
+          </div>
+        </div> : null}
+        {!draft && !source && saved.chapters.length > 0 && client.previewHotels && client.applyHotels ? <section aria-label="酒店工具导入">
+          <button disabled={!!busy} onClick={() => void searchHotels()}>用 AI 查找已入住酒店</button>
+          {hotels ? <><ul>{hotels.hotels.map(h => <li key={h.eventId}><strong>{h.label}</strong> · {h.context}<p>原文：{h.evidence}</p><span>{h.existingPointId ? "复用已有地点" : "新增地点"}</span></li>)}</ul>
+            {hotels.questions.map((q, i) => <p key={i}>{q}</p>)}
+            {!hotels.hotels.length ? <p>没有可可靠确认的住宿地点；未写入。</p> : null}
+            <button disabled={!!busy || !hotels.hotels.length} onClick={() => run("保存", async signal => {
+              const result = await client.applyHotels!(journey.id, hotels.token, signal);
+              if (!signal.aborted) { setSaved(result.journal); onJournalChanged?.(result.journal); setHotels(null); onJourneyChanged?.(result.journey); setNotice("酒店地点及手记关联已保存。"); }
+            })}>确认批量添加及关联</button>
+            <button disabled={busy === "保存"} onClick={() => { requests.current.cancel(); setBusy(null); setHotels(null); }}>取消酒店预览</button>
+          </> : null}
+        </section> : null}
+      </div>
       {draft ? <div className="daily-journal__toolbar">
         <strong>未保存预览</strong>
         <button disabled={!!busy} aria-pressed={editing} onClick={() => setEditing(value => !value)}>{editing ? "返回阅读" : "编辑预览"}</button>
         <button disabled={!!busy} onClick={() => run("保存", async (signal) => {
           const imported = fromImport ? draft.chapters.filter(c => !saved.chapters.some(old => old.id === c.id)).map(c => c.id) : undefined;
           const result = await client.save(journey.id, draft, signal, imported);
-          if (!signal.aborted) { setSaved(result); setDraft(null); setEditing(false); setSource(""); setNotice("手记已保存。"); setFindHotels(fromImport && !!client.previewHotels && !!client.applyHotels); setFromImport(false); }
+          if (!signal.aborted) { setSaved(result); onJournalChanged?.(result); setDraft(null); setEditing(false); setSource(""); setNotice("手记已保存。"); setFromImport(false); }
         })}>确认保存</button>
         <button disabled={busy === "保存"} onClick={cancelDraft}>取消预览</button>
       </div> : null}
@@ -179,7 +173,6 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
         {c.events.map((event, index) => {
           const suggestion = c.suggestions.find((s) => s.eventId === event.id);
           const eventMedia = journalMediaGroups(event, visual);
-          const point = event.status === "actual" ? journey.routePoints.find((p) => p.id === event.routePointId) : null;
           return <section key={event.id} className="daily-journal__event" aria-label={`事件 ${index + 1}`}>
             <p className="daily-journal__metadata">{statusLabels[event.status]}{event.localDate ? ` · ${event.localDate}` : ""}{event.localTime ? ` · ${event.localTime} ${event.timeContext}` : ""}</p>
             {draft ? <fieldset disabled={!!busy}>
@@ -194,7 +187,6 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
               {visual.length ? <label>额外关联照片或视频（可多选）<select aria-label="关联照片或视频（可多选）" multiple value={event.mediaIds} onChange={(e) => updateEvent(c.id, event.id, { mediaIds: Array.from(e.target.selectedOptions, (option) => option.value) })}>{visual.map((m) => <option key={m.id} value={m.id}>{m.fileName}</option>)}</select></label> : null}
               </details>
             </fieldset> : <p className="daily-journal__prose">{event.text}</p>}
-            {point && !draft ? <button disabled={!!busy} onClick={() => onPoint(point.id)}>在 Stream 中查看地点：{point.label}</button> : null}
             {eventMedia.manual.length ? <div><p>手动关联的照片/视频</p><JournalMedia assets={visual.filter(m => eventMedia.manual.includes(m.id))} /></div> : null}
             {eventMedia.place.length && event.routePointId ? <JournalPlaceMedia pointId={event.routePointId} first={firstPlaceMedia.get(event.routePointId) === event.id} ids={eventMedia.place} renderMedia={ids => <JournalMedia assets={visual.filter(m => ids.includes(m.id))} />} /> : null}
             {hasJournalReadingSuggestion(event, suggestion) && suggestion ? <details><summary tabIndex={0}>AI 阅读建议</summary><p className="daily-journal__prose">{suggestion.text}</p>{suggestion.background ? <p>背景补充（未经检索核实，不属于亲历记录）：{suggestion.background}</p> : null}
@@ -203,7 +195,7 @@ export function DailyJournalPanel({ journey, client, onClose, onPoint, onJourney
           </section>;
         })}
       </article>)}
-      </> : ordered.length ? <JournalReadingView chapters={journal?.chapters ?? []} journey={journey} busy={!!busy || !!draft || !!source} onPoint={onPoint} renderMedia={ids => <JournalMedia assets={visual.filter(media => ids.includes(media.id))} />} /> : null}
+      </> : draft ? <JournalReadingView chapters={draft.chapters} journey={journey} renderMedia={ids => <JournalMedia assets={visual.filter(media => ids.includes(media.id))} />} /> : null}
     </> : null}
   </div>;
 }

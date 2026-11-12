@@ -88,3 +88,6 @@
   .daily-journal__import-activity span { animation: none; display: none; }
   .daily-journal__import-activity[aria-valuenow] span { display: block; transition: none; }
 }
+
+.daily-journal__saved-actions:empty { display: none; }
+.daily-journal__saved-actions > button, .daily-journal__saved-actions > section > button:first-child { min-height: 44px; }
