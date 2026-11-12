@@ -10,6 +10,8 @@ import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
  * media (route corrections, pass-through positions) carry no story and get no
  * page. Order follows the canonical Route order; media keeps its owner order.
  */
+export type JourneyBookOpenTarget = { routePointId: string | null; assetId: string | null };
+
 type BookRoutePoint = Pick<RoutePoint, "id" | "label" | "note" | "latitude" | "longitude">;
 export type BookJourney = Pick<Journey, "id" | "title" | "startedOn" | "endedOn" | "note" | "coverMediaAssetId" | "media"> & {
   routePoints: readonly BookRoutePoint[];

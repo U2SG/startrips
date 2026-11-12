@@ -16,6 +16,7 @@ import {
   journeyBookPages,
   journeyBookStartPage,
   type BookJourney,
+  type JourneyBookOpenTarget,
   type JourneyBookPage,
 } from "./journeyBookPages";
 import { BOOK_PAGE_RATIO, journeyBookLayout, type JourneyBookOrientation } from "./journeyBookLayout";
@@ -41,7 +42,6 @@ import {
   useVideoStills,
   type ReaderRead,
 } from "./journeyReaderMedia";
-import type { JourneyBookOpenTarget } from "./JourneyBook";
 import type { MediaPresentationStyle } from "./mediaPresentationStyle";
 import { useModalFocus } from "./useModalFocus";
 import { withStillFragment } from "./videoStillFrame";
