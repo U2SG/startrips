@@ -28,7 +28,13 @@ public struct NativeStoryDestination: View {
         }
         .foregroundStyle(StoryTheme.ink).tint(StoryTheme.ink)
         .background(StoryTheme.background.ignoresSafeArea())
-        .onAppear { model.appear() }
+        .onAppear {
+            model.appear()
+            #if DEBUG
+            // Screenshot probe only: start playback without a tap.
+            if ProcessInfo.processInfo.arguments.contains("-story-autoplay") { model.playJourney() }
+            #endif
+        }
         .onDisappear { model.disappear() }
         .onChange(of: scenePhase) { phase in if phase != .active { model.setPaused(true) } }
         .onChange(of: storedStyle) { _ in model.cancelPaging() }
@@ -78,7 +84,8 @@ public struct NativeStoryDestination: View {
     }
 
     @ViewBuilder private var content: some View {
-        if model.playback != nil {
+        // 旅程之流 plays as one continuous flow inside the stream itself, never page by page.
+        if model.playback != nil && style != .stream {
             StoryPage(model: model, entry: nil, overlay: style == .noteOverlay).id(model.playback?.current?.id)
         } else {
             switch style {
