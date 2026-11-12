@@ -9,8 +9,18 @@ import UniformTypeIdentifiers
 /// JPEGs to the fixture Journey so stream playback exposes real image loading.
 enum StressPhotos {
     static let count = 30
-    static let originalSize = (width: 4032, height: 3024)
-    static let previewSize = (width: 1600, height: 1200)
+    /// Mixed shapes: landscape, portrait, wide and square, like a real camera roll.
+    static let shapes = [(4032, 3024), (3024, 4032), (4032, 2268), (3024, 3024)]
+    static func originalSize(_ id: String) -> (width: Int, height: Int) { shapes[index(id) % shapes.count] }
+    static func previewSize(_ id: String) -> (width: Int, height: Int) {
+        let original = originalSize(id)
+        let scale = 1600.0 / Double(max(original.0, original.1))
+        return (Int(Double(original.0) * scale), Int(Double(original.1) * scale))
+    }
+    static func index(_ id: String) -> Int { Int(id.split(separator: "-").last ?? "0") ?? 0 }
+    static let notes = ["清晨的海面很安静。", "沿着海岸线走了很久，风一直很大，云在不停地变化，远处的灯塔一会儿出现一会儿又被雾遮住。",
+                        "午饭。", "日落之前赶到了山顶，天色从金色慢慢变成紫色，再变成深蓝。所有人都没有说话，只是站在那里看着。",
+                        "夜里下了一场雨。", "最后一天。"]
     static var enabled: Bool { ProcessInfo.processInfo.arguments.contains("-story-stress-photos") }
 
     static func isStress(_ id: String) -> Bool { id.hasPrefix("stress-") }
@@ -20,7 +30,14 @@ enum StressPhotos {
         guard !journey.media.contains(where: { isStress($0.id) }),
               var object = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(journey))) as? [String: Any],
               var media = object["media"] as? [[String: Any]] else { return journey }
-        let points = journey.routePoints.map(\.id)
+        // Extra stops with notes of very different lengths, so rows range from a line of text to a tall photo.
+        var routePoints = object["routePoints"] as? [[String: Any]] ?? []
+        for (index, note) in notes.enumerated() {
+            routePoints.append(["id": "stress-point-\(index)", "latitude": 1.3 + Double(index) * 0.1, "longitude": 104.0 + Double(index) * 0.1,
+                                "label": "停靠 \(index + 1)", "isStop": true, "note": note])
+        }
+        object["routePoints"] = routePoints
+        let points = routePoints.compactMap { $0["id"] as? String }
         for index in 0..<count {
             media.append(["id": "stress-\(index)", "journeyId": journey.id, "routePointId": points[index % max(1, points.count)],
                           "fileName": "stress-\(index).jpg", "mimeType": "image/jpeg", "bytes": 4_000_000,
@@ -34,7 +51,7 @@ enum StressPhotos {
 
     /// A deterministic, detailed JPEG (gradients and stripes so frames can be told apart).
     static func jpeg(_ id: String, preview: Bool) -> Data? {
-        let size = preview ? previewSize : originalSize
+        let size = preview ? previewSize(id) : originalSize(id)
         let cache = FileManager.default.temporaryDirectory
             .appendingPathComponent("stress-\(id)-\(size.width).jpg")
         if let data = try? Data(contentsOf: cache) { return data }

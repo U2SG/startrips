@@ -271,11 +271,12 @@ struct StoryStream: View {
             .accessibilityElement(children: .contain).accessibilityIdentifier("story.stream")
             .onAppear {
                 model.loadJournal()
+                model.streamPlayback = true
                 driver.reduceMotion = reduceMotion
                 driver.onTakeover = { [weak model] in model?.setPaused(true) }
                 if let current = model.cursor.current, current.role != .journeyCover { proxy.scrollTo(current.id, anchor: .top) }
             }
-            .onDisappear { driver.stop() }
+            .onDisappear { driver.stop(); model.streamPlayback = false }
             .onChange(of: model.playback?.index) { _ in prefetch(); sync(proxy) }
             .onChange(of: model.playback?.elapsedMS) { _ in sync(proxy) }
             .onChange(of: model.paused) { _ in sync(proxy) }
@@ -286,24 +287,35 @@ struct StoryStream: View {
 
     /// Fetch and decode the next pictures before the flow reaches them.
     private func prefetch() {
-        guard playing else { return }
-        model.prefetchLibrary(StreamFlow.lookahead(from: currentRow, entries: streamEntries))
+        guard let clock = model.playback else { return }
+        model.prefetchLibrary(StreamFlow.lookahead(beats: clock.beats, index: clock.index, elapsedMS: clock.elapsedMS))
     }
 
-    /// Hands one clock sample to the driver; the driver interpolates per display frame.
+    /// Hands one clock sample and the upcoming knots to the driver; it moves per display frame.
     private func sync(_ proxy: ScrollViewProxy) {
         guard let clock = model.playback, let beat = clock.current else { driver.stop(); return }
         let entries = streamEntries
-        let here = StreamFlow.row(for: beat, in: entries)
-        func y(_ row: Int?) -> CGFloat? { row.map { rowY[entries[$0].id] } ?? 0 }
-        guard driver.attached, let from = y(here) else {
+        // Rows not laid out yet (lazy) get an estimate from the rows that are; the follower
+        // absorbs the small correction once they are, instead of stopping at an unknown row.
+        let known = entries.indices.compactMap { index in rowY[entries[index].id].map { (index, $0) } }
+        let pitch: CGFloat = known.count > 1
+            ? (known.last!.1 - known.first!.1) / CGFloat(max(1, known.last!.0 - known.first!.0)) : 600
+        func y(_ row: Int?) -> CGFloat? {
+            guard let row else { return 0 }
+            if let value = rowY[entries[row].id] { return value }
+            guard let last = known.last(where: { $0.0 < row }) else { return nil }
+            return last.1 + pitch * CGFloat(row - last.0)
+        }
+        let knots = StreamFlow.knots(index: clock.index, beats: clock.beats, entries: entries, y: y)
+        guard driver.attached, !knots.isEmpty else {
             // Not laid out yet (lazy) or no UIKit scroll view: bring the row in once.
-            if let here { proxy.scrollTo(entries[here].id, anchor: UnitPoint(x: 0.5, y: StreamFlow.readingLine)) }
+            if let here = StreamFlow.row(for: beat, in: entries) {
+                proxy.scrollTo(entries[here].id, anchor: UnitPoint(x: 0.5, y: StreamFlow.readingLine))
+            }
             return
         }
-        let to = StreamFlow.nextRow(after: clock.index, beats: clock.beats, entries: entries).flatMap { y($0) }
-        driver.update(.init(beat: clock.index, elapsedMS: clock.elapsedMS, durationMS: beat.durationMS,
-                            paused: model.paused, from: from, to: to))
+        let schedule = StreamFlow.beatStarts(clock.beats)[clock.index] + clock.elapsedMS
+        driver.update(.init(beat: clock.index, scheduleMS: schedule, paused: model.paused, knots: knots))
     }
 
     private func point(_ id: String?) -> MediaRoutePoint? { id.flatMap { id in model.journey.routePoints.first { $0.id == id } } }

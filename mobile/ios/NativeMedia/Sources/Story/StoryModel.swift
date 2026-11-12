@@ -71,18 +71,42 @@ import UIKit
     @Published public private(set) var displaySizes: [String: CGSize] = [:]
     static let libraryLimit = 16
     /// At most this many picture reads at once; the rest wait their turn (server rate limits).
-    static let libraryConcurrency = 3
-    private var libraryQueue: [MediaAsset] = []
+    static let libraryConcurrency = 4
+    /// Waiting reads, nearest-needed first (`rank`: 0 = the next beat's picture; rows that
+    /// merely scrolled into view during playback come after everything playback needs).
+    private var libraryQueue: [(asset: MediaAsset, rank: Int)] = []
+    static let visibleRank = 1_000
+    /// Set by 旅程之流: playback reads its pictures through the stream's library (preview,
+    /// prefetched) and never waits more than `mediaWaitLimitMS` for one slow picture.
+    public var streamPlayback = false
+    static let mediaWaitLimitMS: Double = 2_500
+    private var mediaWaitMS: Double = 0
 
-    /// Prefetches and pre-decodes upcoming pictures (stream lookahead). Bounded by the library cache.
-    public func prefetchLibrary(_ assets: [MediaAsset]) { assets.forEach(requestLibraryImage) }
+    /// Prefetches and pre-decodes upcoming pictures, nearest first, ahead of rows that are
+    /// merely visible. Waiting reads no longer needed by playback lose their place.
+    public func prefetchLibrary(_ assets: [MediaAsset]) {
+        let wanted = Set(assets.map(\.id))
+        libraryQueue = libraryQueue.map { wanted.contains($0.asset.id) ? $0 : ($0.asset, max($0.rank, Self.visibleRank)) }
+        for (rank, asset) in assets.enumerated() { requestLibraryImage(asset, rank: rank) }
+    }
 
-    public func requestLibraryImage(_ asset: MediaAsset) {
+    public func requestLibraryImage(_ asset: MediaAsset) { requestLibraryImage(asset, rank: Self.visibleRank) }
+
+    func requestLibraryImage(_ asset: MediaAsset, rank: Int) {
         guard !closed, !asset.isVideo, library[asset.id] == nil, images[asset.id] == nil, libraryTasks[asset.id] == nil,
-              !libraryQueue.contains(where: { $0.id == asset.id }),
               journey.media.contains(where: { $0.id == asset.id }) else { return }
-        guard libraryTasks.count < Self.libraryConcurrency else { libraryQueue.append(asset); return }
+        if let queued = libraryQueue.firstIndex(where: { $0.asset.id == asset.id }) {
+            libraryQueue[queued].rank = min(libraryQueue[queued].rank, rank)
+            libraryQueue.sort { $0.rank < $1.rank }
+            return
+        }
+        guard libraryTasks.count < Self.libraryConcurrency else {
+            libraryQueue.append((asset, rank)); libraryQueue.sort { $0.rank < $1.rank }; return
+        }
         let ticket = libraryEpoch
+        #if DEBUG
+        let requested = Date()
+        #endif
         libraryTasks[asset.id] = Task { [weak self] in
             guard let self else { return }
             defer {
@@ -92,19 +116,29 @@ import UIKit
             guard let image = try? await self.loadImage(asset, maxPixel: 1600, display: true),
                   !Task.isCancelled, ticket == self.libraryEpoch, !self.closed,
                   self.journey.media.contains(where: { $0.id == asset.id }) else { return }
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-stream-timing") {
+                let line = String(format: "STREAMLOAD %@ rank=%d total=%.0fms at=%.3f playbackIndex=%d\n", asset.id, rank,
+                                  Date().timeIntervalSince(requested) * 1000, Date().timeIntervalSince1970, self.playback?.index ?? -1)
+                let file = FileManager.default.temporaryDirectory.appendingPathComponent("stream-timing.log")
+                if let handle = try? FileHandle(forWritingTo: file) { handle.seekToEndOfFile(); handle.write(Data(line.utf8)); try? handle.close() }
+                else { try? Data(line.utf8).write(to: file) }
+            }
+            #endif
             self.library[asset.id] = image
             self.libraryOrder.removeAll { $0 == asset.id }; self.libraryOrder.append(asset.id)
             while self.libraryOrder.count > Self.libraryLimit { self.library[self.libraryOrder.removeFirst()] = nil }
         }
     }
     public func cancelLibraryImage(_ assetID: String) {
-        libraryQueue.removeAll { $0.id == assetID }
+        libraryQueue.removeAll { $0.asset.id == assetID }
         libraryTasks.removeValue(forKey: assetID)?.cancel()
         pumpLibraryQueue()
     }
     private func pumpLibraryQueue() {
         while libraryTasks.count < Self.libraryConcurrency, !libraryQueue.isEmpty {
-            requestLibraryImage(libraryQueue.removeFirst())
+            let next = libraryQueue.removeFirst()
+            requestLibraryImage(next.asset, rank: next.rank)
         }
     }
     public func image(for assetID: String) -> UIImage? { images[assetID] ?? library[assetID] }
@@ -188,10 +222,26 @@ import UIKit
                 let delta = (now - last) * 1000; last = now
                 let previous = self.playback?.index
                 let asset = self.activeAsset
-                let ready = asset == nil || (asset?.isVideo == true ? self.foreground.ready : self.image(for: asset!.id) != nil)
+                var ready = asset == nil || (asset?.isVideo == true ? self.foreground.ready : self.image(for: asset!.id) != nil)
+                // The stream never stalls on one slow picture: after a short wait it flows on
+                // and the picture fades in when it arrives.
+                if !ready && self.streamPlayback && asset?.isVideo == false && !self.paused {
+                    self.mediaWaitMS += delta
+                    if self.mediaWaitMS >= Self.mediaWaitLimitMS { ready = true }
+                }
                 self.playback?.tick(milliseconds: delta, mediaReady: ready, videoOwnsCompletion: asset?.isVideo == true)
                 if self.playback?.completed == true { self.finish(.completed); return }
-                if previous != self.playback?.index { self.activateBeat() }
+                if previous != self.playback?.index {
+                    #if DEBUG
+                    if ProcessInfo.processInfo.arguments.contains("-stream-timing"), let beat = self.playback?.current {
+                        let waited = String(format: "BEAT %d asset=%@ ready=%@ at=%.3f\n", self.playback?.index ?? -1, beat.asset?.id ?? "-",
+                                            beat.asset.map { self.image(for: $0.id) != nil ? "yes" : "NO" } ?? "n/a", Date().timeIntervalSince1970)
+                        let file = FileManager.default.temporaryDirectory.appendingPathComponent("stream-timing.log")
+                        if let handle = try? FileHandle(forWritingTo: file) { handle.seekToEndOfFile(); handle.write(Data(waited.utf8)); try? handle.close() }
+                    }
+                    #endif
+                    self.activateBeat()
+                }
             }
         }
     }
@@ -201,6 +251,7 @@ import UIKit
         if playback?.completed == true { finish(.completed) } else { activateBeat() }
     }
     private func activateBeat() {
+        mediaWaitMS = 0
         let live = currentIntent()
         guard live.requestId == intent.requestId, live.revision == intent.revision, let beat = playback?.current else { return }
         if beat.asset != nil || beat.routePointId != nil {
@@ -256,6 +307,9 @@ import UIKit
                         guard ticket == self.epoch, !Task.isCancelled else { return }
                         self.foreground.activate(url: url, trim: self.playback?.current?.trim)
                         self.foreground.setPaused(self.paused)
+                    } else if self.streamPlayback && self.playback != nil {
+                        // The stream shows library pictures: ask for this one first, never the original.
+                        self.requestLibraryImage(asset, rank: -1)
                     } else if self.images[asset.id] == nil, let decoded = self.library[asset.id], self.playback != nil {
                         // A prefetched stream picture is already decoded: never download it twice.
                         self.images[asset.id] = decoded

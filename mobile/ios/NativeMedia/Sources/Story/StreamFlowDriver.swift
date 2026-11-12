@@ -9,12 +9,11 @@ import UIKit
 final class StreamFlowDriver: NSObject, ObservableObject {
     struct Sample: Equatable {
         let beat: Int
-        let elapsedMS: Double
-        let durationMS: Double
+        /// Position on the playback timeline (ms) when sampled.
+        let scheduleMS: Double
         let paused: Bool
-        /// Content y of this beat's row, and of the next beat that lands elsewhere.
-        let from: CGFloat
-        let to: CGFloat?
+        /// Where the reading point must be, and when (see `StreamFlow.knots`).
+        let knots: [StreamFlow.Knot]
     }
 
     weak var scrollView: UIScrollView?
@@ -23,30 +22,20 @@ final class StreamFlowDriver: NSObject, ObservableObject {
     private var link: CADisplayLink?
     private var sample: Sample?
     private var sampledAt: CFTimeInterval = 0
-    private var reading: CGFloat?
-    private var glide: (from: CGFloat, start: CFTimeInterval)?
+    private var follower: StreamFollower?
+    private var lastFrame: CFTimeInterval?
 
     var attached: Bool { scrollView != nil }
 
     func update(_ next: Sample) {
-        let now = CACurrentMediaTime()
-        if let previous = sample {
-            let resumed = previous.paused && !next.paused
-            // Natural advances are continuous already; seeks and resumes glide.
-            if resumed || (previous.beat != next.beat && next.beat != previous.beat + 1) {
-                glide = (currentReading() ?? reading ?? next.from, now)
-                reading = nil
-            } else if previous.beat != next.beat {
-                reading = nil
-            }
-        }
-        sample = next; sampledAt = now
+        if let previous = sample, previous.paused, !next.paused { follower = nil }   // resume from where the reader is
+        sample = next; sampledAt = CACurrentMediaTime()
         start()
     }
 
     func stop() {
         link?.invalidate(); link = nil
-        sample = nil; reading = nil; glide = nil
+        sample = nil; follower = nil; lastFrame = nil
     }
 
     private func start() {
@@ -63,28 +52,34 @@ final class StreamFlowDriver: NSObject, ObservableObject {
     }
 
     @objc private func frame(_ link: CADisplayLink) {
+        let now = link.targetTimestamp
+        defer { lastFrame = now }
         guard let scrollView, let sample else { return }
         // The reader's finger always wins: playback pauses, play resumes the flow.
         if scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
             if !sample.paused { onTakeover?() }
+            follower = nil
             return
         }
-        guard !sample.paused else { return }
-        let now = link.targetTimestamp
-        let elapsed = StreamFlow.elapsed(sampled: sample.elapsedMS, sinceSampleMS: (now - sampledAt) * 1000,
-                                         duration: sample.durationMS, paused: sample.paused)
-        let fraction = sample.durationMS > 0 ? elapsed / sample.durationMS : 0
-        var target = reduceMotion ? sample.from : StreamFlow.reading(from: sample.from, to: sample.to, fraction: fraction)
-        if let reading, target < reading, glide == nil { target = reading }   // never runs backwards within a beat
-        if let glide {
-            let t = now - glide.start
-            target = StreamFlow.glide(from: glide.from, to: target, elapsed: t, reduceMotion: reduceMotion)
-            if t >= StreamFlow.seekSeconds || reduceMotion { self.glide = nil }
-        }
-        reading = target
-        let inset = scrollView.adjustedContentInset
+        guard !sample.paused, let first = sample.knots.first else { follower?.velocity = 0; return }
         let viewport = scrollView.bounds.height
-        let offset = StreamFlow.offset(reading: target, viewport: viewport,
+        let reading: CGFloat
+        if reduceMotion {
+            // Step to the row being read, no motion in between.
+            reading = first.y
+        } else {
+            // Between 50ms clock samples the timeline advances with the display, never more
+            // than maxLead ahead of a clock that is waiting for a picture.
+            let time = sample.scheduleMS + min(max(0, (now - sampledAt) * 1000), StreamFlow.maxLeadMS)
+            guard let ahead = StreamFlow.scheduled(sample.knots, at: time + StreamFollower.lead * 1000) else { return }
+            var follower = self.follower ?? StreamFollower(position: currentReading() ?? first.y)
+            let dt = min(0.05, max(0, now - (lastFrame ?? now)))
+            follower.step(ahead: ahead, dt: dt, catchUp: abs(ahead - follower.position) > viewport)
+            self.follower = follower
+            reading = follower.position
+        }
+        let inset = scrollView.adjustedContentInset
+        let offset = StreamFlow.offset(reading: reading, viewport: viewport,
                                        content: scrollView.contentSize.height + inset.top + inset.bottom)
         let y = (offset - inset.top).rounded(toPixelsOf: scrollView)
         if abs(scrollView.contentOffset.y - y) > 0.01 { scrollView.contentOffset.y = y }

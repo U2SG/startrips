@@ -93,4 +93,85 @@ final class StreamFlowTests: XCTestCase {
             last = reading
         }
     }
+
+    // MARK: Even flow and time-based prefetch
+
+    func testTimeLookaheadIsNearestFirstAndCoversTheHorizon() throws {
+        let journey = try MediaFixtures.journey()
+        let beats = JourneyPlaybackPlan.build(journey)
+        let starts = StreamFlow.beatStarts(beats)
+        XCTAssertEqual(starts.first, 0)
+        XCTAssertTrue(zip(starts, starts.dropFirst()).allSatisfy { $0 <= $1 })
+        let ahead = StreamFlow.lookahead(beats: beats, index: 0, elapsedMS: 0, horizonMS: .infinity, minimum: 0, maximum: 99)
+        let expected = beats.compactMap(\.asset).filter { !$0.isVideo && $0.isVisual }
+            .reduce(into: [MediaAsset]()) { list, asset in if !list.contains(where: { $0.id == asset.id }) { list.append(asset) } }
+        XCTAssertEqual(ahead.map(\.id), expected.map(\.id), "in playback order, nearest first, no duplicates")
+        // A zero horizon still keeps the minimum; the maximum bounds memory.
+        XCTAssertEqual(StreamFlow.lookahead(beats: beats, index: 0, elapsedMS: 0, horizonMS: 0, minimum: 1, maximum: 9).count,
+                       min(1, expected.count))
+        XCTAssertLessThanOrEqual(StreamFlow.lookahead(beats: beats, index: 0, elapsedMS: 0, maximum: 1).count, 1)
+        XCTAssertTrue(StreamFlow.lookahead(beats: beats, index: beats.count, elapsedMS: 0).isEmpty)
+    }
+
+    func testKnotsMakeSharedRowsOneRunAndHitEveryRowWhenItsFirstBeatStarts() throws {
+        let journey = try MediaFixtures.journey()
+        let entries = journey.storySequence(includeCover: false)
+        let beats = JourneyPlaybackPlan.build(journey)
+        let starts = StreamFlow.beatStarts(beats)
+        let rows = beats.map { StreamFlow.row(for: $0, in: entries) }
+        let knots = StreamFlow.knots(index: 0, beats: beats, entries: entries, count: 99) { row in CGFloat((row ?? -1) + 1) * 500 }
+        XCTAssertFalse(knots.isEmpty)
+        XCTAssertTrue(zip(knots, knots.dropFirst()).allSatisfy { $0.time < $1.time }, "one knot per run")
+        for knot in knots {
+            let beat = try XCTUnwrap(starts.firstIndex(of: knot.time))
+            XCTAssertTrue(beat == 0 || rows[beat - 1] != rows[beat], "a knot opens a run")
+        }
+        // Mid-run, the knots still start at the run's first beat.
+        if let shared = rows.indices.dropFirst().first(where: { rows[$0] == rows[$0 - 1] }) {
+            let mid = StreamFlow.knots(index: shared, beats: beats, entries: entries) { row in CGFloat((row ?? -1) + 1) * 500 }
+            XCTAssertLessThan(try XCTUnwrap(mid.first).time, starts[shared])
+        }
+        // Unknown rows end the list instead of inventing a target.
+        XCTAssertEqual(StreamFlow.knots(index: 0, beats: beats, entries: entries) { _ in nil }, [])
+        // Linear between knots, holding at both ends.
+        let line = [StreamFlow.Knot(time: 0, y: 0), StreamFlow.Knot(time: 1000, y: 800)]
+        XCTAssertEqual(StreamFlow.scheduled(line, at: -5), 0)
+        XCTAssertEqual(StreamFlow.scheduled(line, at: 250), 200)
+        XCTAssertEqual(StreamFlow.scheduled(line, at: 5000), 800)
+        XCTAssertNil(StreamFlow.scheduled([], at: 0))
+    }
+
+    /// A tall photo after a short note: speeds differ 10x between runs. The follower must keep
+    /// acceleration bounded, never stop while the schedule moves, and pass each row on time.
+    func testFollowerIsEvenBoundedAndOnSchedule() {
+        let knots = [StreamFlow.Knot(time: 0, y: 0), .init(time: 4000, y: 150), .init(time: 7000, y: 1600),
+                     .init(time: 9000, y: 1750), .init(time: 14000, y: 3300), .init(time: 20000, y: 3400)]
+        var follower = StreamFollower(position: 0)
+        let dt = 1.0 / 60
+        var previousVelocity: CGFloat = 0
+        var maxAcceleration: CGFloat = 0
+        var stoppedFrames = 0
+        var worstMiss: CGFloat = 0
+        var time = 0.0
+        while time < 20000 {
+            let ahead = StreamFlow.scheduled(knots, at: time + StreamFollower.lead * 1000)!
+            follower.step(ahead: ahead, dt: dt)
+            maxAcceleration = max(maxAcceleration, abs(follower.velocity - previousVelocity) / CGFloat(dt))
+            previousVelocity = follower.velocity
+            if time > 500 && time < 19_000 && follower.velocity < 1 { stoppedFrames += 1 }
+            if let knot = knots.first(where: { abs($0.time - time) < 8 }) { worstMiss = max(worstMiss, abs(follower.position - knot.y)) }
+            time += dt * 1000
+        }
+        XCTAssertLessThanOrEqual(maxAcceleration, StreamFollower.maxAcceleration + 1)
+        XCTAssertEqual(stoppedFrames, 0, "a dwell is a slow drift, never a stop")
+        XCTAssertLessThan(worstMiss, 160, "each row is reached on schedule within tolerance")
+        XCTAssertLessThanOrEqual(follower.velocity, StreamFollower.maxSpeed)
+        // Playing never runs back up the thread; a seek may (catch-up).
+        var forward = StreamFollower(position: 500)
+        forward.step(ahead: 0, dt: dt)
+        XCTAssertGreaterThanOrEqual(forward.velocity, 0)
+        var seek = StreamFollower(position: 5000)
+        seek.step(ahead: 0, dt: dt, catchUp: true)
+        XCTAssertLessThan(seek.velocity, 0)
+    }
 }

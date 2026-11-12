@@ -184,7 +184,8 @@ extension AtlasSession {
                     let base = URL(string: "https://fixture.invalid")!
                     guard StressPhotos.isStress(assetID) else { return MediaDisplayRead(url: base.appendingPathComponent(assetID)) }
                     return MediaDisplayRead(url: base.appendingPathComponent("preview").appendingPathComponent(assetID),
-                                            width: StressPhotos.previewSize.width, height: StressPhotos.previewSize.height)
+                                            width: StressPhotos.previewSize(assetID).width,
+                                            height: StressPhotos.previewSize(assetID).height)
                 }
                 #endif
                 // The server's preview (#260) when ready: same frame as the original, a fraction of the bytes.
