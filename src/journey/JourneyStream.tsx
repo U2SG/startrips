@@ -1,20 +1,20 @@
-import type { DailyJournal, JournalChapter } from "./dailyJournal";
+import type { DailyJournal } from "./dailyJournal";
 import { DailyJournalPanel } from "./DailyJournalPanel";
 import { StoryPresentationPicker } from "./StoryPresentationPicker";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type Ref, type RefObject, type WheelEvent } from "react";
 import { IconArrowUp, IconChevronLeft, IconChevronRight, IconMusic, IconMusicOff, IconPlayerPlay, IconX } from "@tabler/icons-react";
 import { onMotionPreferenceChange, prefersReducedMotion } from "../motion/preferences";
 import { useAtlasView } from "./atlasView";
-import { isLodgingLabelLine } from "./journalHotels";
 import { journeySoundtrack } from "./journeyModel";
 import {
   journeyStreamEntries,
+  journeyStreamJournalDays,
   journeyStreamLayout,
   streamAspect,
   streamOffsetFor,
   streamPictureSize,
-  withJourneyStreamJournal,
   type JourneyStreamEntry,
+  type JourneyStreamJournalDay,
   type JourneyStreamLayout,
 } from "./journeyStreamModel";
 import {
@@ -107,18 +107,16 @@ function JourneyStreamContent({
   const journey = journeyIndex >= 0 ? journeys[journeyIndex] : null;
   const previousJourney = journeyIndex > 0 ? journeys[journeyIndex - 1] : null;
   const nextJourney = journeyIndex >= 0 && journeyIndex < journeys.length - 1 ? journeys[journeyIndex + 1] : null;
-  // Oldest first; drawn newest at the top so the downward flow plays forward.
-  const readingJournal = Boolean(journal?.chapters.length);
-  const entries = useMemo(() => {
-    if (!journey) return [];
-    const route = journeyStreamEntries(journey, routePointId);
-    return journal ? withJourneyStreamJournal(route, journal.chapters) : route;
-  }, [journey, routePointId, journal]);
-  const points = useMemo(() => new Map<string, Journey["routePoints"][number]>(journey?.routePoints.map(point => [point.id, point])), [journey]);
+  const entries = useMemo(() => journey ? journeyStreamEntries(journey, routePointId) : [], [journey, routePointId]);
+  const journalDays = useMemo(() => journal ? journeyStreamJournalDays(
+    journal.chapters, new Map(journey?.routePoints.map(point => [point.id, point])),
+  ) : [], [journey, journal]);
+  const readingJournal = journalDays.length > 0;
   const soundtrack = journey ? journeySoundtrack(journey) : null;
 
   const [reduced, setReduced] = useState(prefersReducedMotion);
-  const [phase, setPhase] = useState<Phase>(() => (readingJournal || prefersReducedMotion() ? "unfolded" : "pouring"));
+  const [streamPhase, setPhase] = useState<Phase>(() => (prefersReducedMotion() ? "unfolded" : "pouring"));
+  const phase = readingJournal && streamPhase !== "closing" ? "unfolded" : streamPhase;
   const [viewport, setViewport] = useState<{ width: number; height: number } | null>(null);
   const [active, setActive] = useState(() => {
     const byAsset = initialAssetId ? entries.findIndex((entry) => entryAsset(entry)?.id === initialAssetId) : -1;
@@ -135,8 +133,11 @@ function JourneyStreamContent({
   const [videoPlaying, setVideoPlaying] = useState(false);
   const flowRef = useRef<HTMLDivElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
+  const journalRef = useRef<HTMLElement>(null);
   const itemRefs = useRef<(HTMLElement | null)[]>([]);
+  const itemTopsRef = useRef<number[]>([]);
   const centersRef = useRef<number[]>([]);
+  const readingModeRef = useRef(readingJournal);
   const motionRef = useRef({ offset: 0, target: 0, velocity: 0, drift: 0, placed: false });
   // Restarts the flow loop after it has settled; anything that moves the
   // motion state from outside the loop calls it.
@@ -193,7 +194,7 @@ function JourneyStreamContent({
 
   // Opening sequence.
   useEffect(() => {
-    if (readingJournal || prefersReducedMotion()) return;
+    if (prefersReducedMotion()) return;
     timersRef.current.push(window.setTimeout(() => setPhase("centered"), POUR_MS));
     timersRef.current.push(window.setTimeout(() => setPhase("unfolded"), UNFOLD_AT_MS));
   }, []);
@@ -267,28 +268,44 @@ function JourneyStreamContent({
     const measure = () => {
       const anchor = activeRef.current;
       const before = centersRef.current[anchor];
-      centersRef.current = entries.map((_, index) => {
-        const item = itemRefs.current[index];
-        return item ? item.offsetTop + item.offsetHeight / 2 : Number.NaN;
-      });
+      const beforeTop = itemTopsRef.current[anchor];
+      const modeChanged = readingModeRef.current !== readingJournal;
+      readingModeRef.current = readingJournal;
+      const items = entries.map((_, index) => itemRefs.current[index]);
+      itemTopsRef.current = items.map(item => item?.offsetTop ?? Number.NaN);
+      centersRef.current = items.map((item, index) => itemTopsRef.current[index] + (item?.offsetHeight ?? 0) / 2);
       const motion = motionRef.current;
+      const after = centersRef.current[anchor];
+      const flow = flowRef.current;
       if (readingJournal) {
         const item = itemRefs.current[anchor];
-        if (!motion.placed && item && flowRef.current) {
-          flowRef.current.scrollTop = anchor === 0 ? 0 : item.offsetTop;
+        if (modeChanged) {
+          stopStreamMotion();
+          strip.style.removeProperty("transform");
+          itemRefs.current.forEach(entry => entry?.style.removeProperty("opacity"));
+        }
+        if ((!motion.placed || modeChanged) && item && flow) {
+          // Keep the top of the media anchored as its route note moves below it.
+          const scrollTop = motion.placed && Number.isFinite(beforeTop)
+            ? item.offsetTop - (beforeTop + motion.offset - flow.scrollTop)
+            : after - flow.clientHeight / 2;
+          flow.scrollTop = anchor === 0 ? 0 : scrollTop;
           motion.placed = true;
         }
         return;
       }
+      if (modeChanged) {
+        if (flow) flow.scrollTop = 0;
+        motion.placed = false;
+      }
       // A picture that loads late changes the heights above the reader; keep
       // the entry being read where it is.
-      const after = centersRef.current[anchor];
       if (motion.placed && !dragRef.current?.moved && Number.isFinite(before) && Number.isFinite(after) && before !== after) {
         motion.offset -= after - before;
         motion.target -= after - before;
       }
       if (!motion.placed && viewport && centersRef.current.length) {
-        motion.offset = motion.target = streamOffsetFor(centersRef.current[active] ?? 0, viewport.height);
+        motion.offset = motion.target = streamOffsetFor(after ?? 0, viewport.height);
         motion.placed = true;
       }
       wakeRef.current();
@@ -300,7 +317,7 @@ function JourneyStreamContent({
     // Placement uses the opening entry once; later layouts only re-measure.
   }, [layout?.beside, layout?.pictureWidth, entries, viewport, readingJournal]);
 
-  const flowing = phase === "unfolded" && !reduced && !paused && !lightbox && !hovering && !videoPlaying;
+  const flowing = !readingJournal && phase === "unfolded" && !reduced && !paused && !lightbox && !hovering && !videoPlaying;
   const flowingRef = useRef(flowing);
   flowingRef.current = flowing;
   useEffect(() => {
@@ -316,6 +333,7 @@ function JourneyStreamContent({
     let last = performance.now();
     let running = false;
     const tick = (now: number) => {
+      if (readingModeRef.current) return;
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       const pointer = dragRef.current;
@@ -406,6 +424,7 @@ function JourneyStreamContent({
     const flow = flowRef.current;
     if (!flow || !motionRef.current.placed) return;
     const readingLine = flow.scrollTop + flow.clientHeight / 2;
+    if (journalRef.current && readingLine >= journalRef.current.offsetTop) return;
     let nearest = activeRef.current;
     let distance = Infinity;
     itemRefs.current.forEach((item, index) => {
@@ -414,6 +433,14 @@ function JourneyStreamContent({
       if (gap < distance) { nearest = index; distance = gap; }
     });
     if (nearest !== activeRef.current) setActive(nearest);
+  }
+
+  function jumpToJournal() {
+    const journalSection = journalRef.current;
+    const flow = flowRef.current;
+    if (!journalSection || !flow) return;
+    flow.scrollTop = journalSection.offsetTop;
+    journalSection.focus({ preventScroll: true });
   }
 
   function centreOn(index: number) {
@@ -518,7 +545,7 @@ function JourneyStreamContent({
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (lightbox || closingRef.current || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
     const target = event.target as HTMLElement;
-    if (target.closest("video, input, textarea, select")) return;
+    if (target.closest("video, input, textarea, select, .journey-stream__journal")) return;
     if (readingJournal && ["ArrowUp", "ArrowDown", " "].includes(event.key)) return;
     if (event.key === "ArrowUp" || event.key === "ArrowDown") {
       event.preventDefault();
@@ -544,10 +571,6 @@ function JourneyStreamContent({
     routePointId: activeEntry && activeEntry.kind !== "intro" ? activeEntry.routePoint?.id ?? null : null,
     assetId: entryAsset(activeEntry)?.id ?? null,
   };
-  // The animated media stream flows downward; the journal reads top to bottom.
-  const drawn = entries.map((entry, index) => ({ entry, index }));
-  if (!readingJournal) drawn.reverse();
-
   return (
     <div
       ref={rootRef}
@@ -601,17 +624,13 @@ function JourneyStreamContent({
         }}
       >
         <div ref={stripRef} className="journey-stream__strip">
-          {layout ? drawn.map(({ entry, index }, position) => entry.kind === "journal" ? (
-            <JournalDay key={entry.key} chapter={entry.chapter} points={points}
-              onMapPoint={onCloseAtPoint ? requestClose : undefined}
-              ref={(element) => { itemRefs.current[index] = element; }} />
-          ) : (
+          {layout ? entries.map((entry, index) => (
             <StreamItem
               key={entry.key}
               ref={(element) => { itemRefs.current[index] = element; }}
               journey={journey}
               entry={entry}
-              side={position % 2 === 0 ? "left" : "right"}
+              side={(readingJournal ? index : entries.length - 1 - index) % 2 === 0 ? "left" : "right"}
               layout={layout}
               read={entryAsset(entry) ? reads[entryAsset(entry)!.id] : undefined}
               still={entryAsset(entry) ? stills[entryAsset(entry)!.id] ?? null : null}
@@ -635,10 +654,17 @@ function JourneyStreamContent({
                 }
               }}
               onPlay={() => { if (!readingJournal) centreOn(index); }}
+              onJumpToJournal={readingJournal ? jumpToJournal : undefined}
               onExpired={expireRead}
               onLoaded={clearRetry}
             />
           )) : null}
+          {readingJournal ? (
+            <section ref={journalRef} className="journey-stream__journal" aria-label="手记" tabIndex={-1}>
+              <h2>手记</h2>
+              {journalDays.map(day => <JournalDay key={day.date} day={day} onMapPoint={onCloseAtPoint ? requestClose : undefined} />)}
+            </section>
+          ) : null}
         </div>
       </div>
       <header className="journey-stream__header" inert={Boolean(lightbox) || phase === "closing"}>
@@ -685,7 +711,7 @@ function JourneyStreamContent({
           onClick={() => onNavigate(nextJourney.id)}
         ><IconChevronRight size={20} stroke={1.35} aria-hidden="true" /></button>
       ) : null}
-      {paused ? <p className="journey-stream__paused" role="status">已暂停流动 · 空格继续</p> : null}
+      {paused && !readingJournal ? <p className="journey-stream__paused" role="status">已暂停流动 · 空格继续</p> : null}
       {lightbox && lightboxEntry?.kind === "media" ? (
         <div ref={lightboxRef} className="journey-stream__lightbox" role="dialog" aria-modal="true"
           data-focus-trap-exempt tabIndex={-1} aria-label="大图" onClick={() => setLightbox(null)}>
@@ -725,41 +751,37 @@ function JourneyStreamContent({
   );
 }
 
-function JournalDay({ chapter, points, onMapPoint, ref }: {
-  chapter: JournalChapter;
-  points: ReadonlyMap<string, Journey["routePoints"][number]>;
+function JournalDay({ day, onMapPoint }: {
+  day: JourneyStreamJournalDay;
   onMapPoint?: (id: string) => void;
-  ref: Ref<HTMLElement>;
 }) {
-  const title = chapter.title.trim();
-  return <article ref={ref} className="journey-stream__item journey-stream__journal-day">
-    <h2><time dateTime={chapter.date}>{chapter.date}</time>{title ? <span>{title}</span> : null}</h2>
-    {chapter.events.length ? <ol>
-      {chapter.events.map(event => {
-        const point = event.status === "actual" && event.routePointId ? points.get(event.routePointId) : null;
-        const lodging = point?.placeRole === "accommodation" || isLodgingLabelLine(event.source);
-        const status = event.status === "planned" ? "计划" : event.status === "cancelled" ? "已取消" : event.status === "uncertain" ? "待确认" : null;
-        return <li key={event.id}>
-          <div className="journey-stream__journal-meta">
-            {event.localDate && event.localDate !== chapter.date ? <time dateTime={event.localDate}>{event.localDate}</time> : null}
-            {event.localTime ? <time dateTime={event.localTime}>{event.localTime}</time> : null}
-            {lodging ? <span>住宿</span> : null}
-            {status ? <span>{status}</span> : null}
-          </div>
-          <p>{event.text || event.source}</p>
-          {point && onMapPoint ? <button type="button" className="journey-stream__journal-place"
-            aria-label={`在地图上查看：${point.label || "地图地点"}`} onClick={() => onMapPoint(point.id)}>
-            {point.label || "地图地点"}
-          </button> : null}
-        </li>;
-      })}
-    </ol> : <p>{chapter.source}</p>}
-  </article>;
+  return <details className="journey-stream__journal-day">
+    <summary tabIndex={0}><time dateTime={day.date}>{day.date}</time></summary>
+    <div className="journey-stream__journal-body">
+      {day.chapters.map(chapter => <div key={chapter.id}>
+        {chapter.title ? <h3>{chapter.title}</h3> : null}
+        {chapter.source ? <p>{chapter.source}</p> : null}
+        {chapter.events.length ? <ol>
+          {chapter.events.map(({ id, localDate, localTime, point, text }) => <li key={id}>
+            <div className="journey-stream__journal-meta">
+              {localDate && localDate !== day.date ? <time dateTime={localDate}>{localDate}</time> : null}
+              {localTime ? <time dateTime={localTime}>{localTime}</time> : null}
+            </div>
+            {text ? <p>{text}</p> : null}
+            {point && onMapPoint ? <button type="button" className="journey-stream__journal-place"
+              aria-label={`在地图上查看：${point.label || "地图地点"}`} onClick={() => onMapPoint(point.id)}>
+              {point.label || "地图地点"}
+            </button> : point && !text ? <p>{point.label || "地图地点"}</p> : null}
+          </li>)}
+        </ol> : null}
+      </div>)}
+    </div>
+  </details>;
 }
 
 type StreamItemProps = {
   journey: Journey;
-  entry: Exclude<JourneyStreamEntry, { kind: "journal" }>;
+  entry: JourneyStreamEntry;
   side: "left" | "right";
   layout: JourneyStreamLayout;
   read: ReaderRead | undefined;
@@ -772,6 +794,7 @@ type StreamItemProps = {
   onNatural: (assetId: string, size: { width: number; height: number }) => void;
   onOpen: (assetId: string) => void;
   onPlay: () => void;
+  onJumpToJournal?: () => void;
   onExpired: (assetId: string) => void;
   onLoaded: (assetId: string) => void;
   ref?: Ref<HTMLElement>;
@@ -789,7 +812,7 @@ function StreamNote({ place, date, note, side }: { place: string | null; date: s
 
 function StreamItem({
   journey, entry, side, layout, read, still, natural, live, near, videoRef,
-  onVideoChange, onNatural, onOpen, onPlay, onExpired, onLoaded, ref,
+  onVideoChange, onNatural, onOpen, onPlay, onJumpToJournal, onExpired, onLoaded, ref,
 }: StreamItemProps) {
   if (entry.kind === "intro") {
     return (
@@ -798,6 +821,7 @@ function StreamItem({
         <h2>{journey.title}</h2>
         <span className="journey-stream__note-meta">{journeyRange(journey)}</span>
         {entry.note ? <p>{entry.note}</p> : null}
+        {onJumpToJournal ? <button type="button" className="journey-stream__journal-jump" onClick={onJumpToJournal}>手记</button> : null}
       </section>
     );
   }
@@ -913,7 +937,7 @@ export function JourneyStream(props: Omit<Parameters<typeof JourneyStreamContent
     onJournalChanged={journal => setRead({ scope, client: dailyJournal, journal })}
     onClose={() => setOpenFor(null)} />;
   const journal = read && read.scope === scope && read.client === dailyJournal ? read.journal : undefined;
-  return <JourneyStreamContent {...props} key={`${scope}:${Boolean(journal?.chapters.length)}`} journeys={journeys} journal={journal}
+  return <JourneyStreamContent {...props} key={scope} journeys={journeys} journal={journal}
     onOpenJournal={dailyJournal && scope ? () => setOpenFor(scope) : undefined} />;
 }
 

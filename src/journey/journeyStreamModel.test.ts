@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { previewJournalImport } from "./dailyJournal";
 import {
   journeyStreamEntries,
+  journeyStreamJournalDays,
   journeyStreamLayout,
   streamAspect,
   streamDate,
   streamPictureSize,
-  withJourneyStreamJournal,
   type JourneyStreamEntry,
 } from "./journeyStreamModel";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
@@ -90,27 +90,60 @@ describe("journeyStreamEntries", () => {
   });
 });
 
-it("reads journal days in order with matching media and retains unassigned media", () => {
+it("groups readable chapters by date without regrouping Route media", () => {
   const chapters = previewJournalImport(
-    "2026-08-12 第二天\n实际：海边散步\n2026-08-11 第一天\n实际：城市住宿\n计划：看海",
+    "2026-08-12 第二天\n待确认：她沿海边散步（未核实）\n2026-08-11 第一天\n实际：抵达市区\n计划：看海\n起床：未记录\\\n小票：未核实\n航班号未记录，但我们顺利抵达。\n取消：原定花园\n取消：因下雨没去成花园，改去看展。\n2026-08-11 补记\n睡前：看见满天星光。",
     base.startedOn,
   );
-  const earlier = chapters.find(chapter => chapter.date === base.startedOn)!;
-  const later = chapters.find(chapter => chapter.date !== base.startedOn)!;
-  earlier.events[0].routePointId = "hotel";
+  const [later, earlier] = chapters;
+  earlier.title = "### 第一天\\";
+  earlier.events[0].routePointId = "city";
   earlier.events[0].mediaIds = ["manual"];
-  earlier.events[1].routePointId = "coast";
   later.events[0].mediaIds = ["manual"];
   const journey = {
     ...base,
-    routePoints: [point("coast", null, "2026-08-12T15:00:00Z"), point("hotel")],
-    media: [asset("coast-photo", "coast", 0), asset("hotel-photo", "hotel", 0), asset("manual", null, 0), asset("extra", null, 1)],
+    routePoints: [point("coast", null, "2026-08-12T15:00:00Z"), point("city")],
+    media: [asset("coast-photo", "coast", 0), asset("city-photo", "city", 0), asset("manual", null, 0), asset("extra", null, 1)],
   };
-  const entries = withJourneyStreamJournal(journeyStreamEntries(journey), chapters);
-  expect(entries.map(entry => entry.key)).toEqual([
-    "intro", `journal:${earlier.id}`, "media:manual", "media:hotel-photo",
-    `journal:${later.id}`, "media:coast-photo", "media:extra",
+  const original = structuredClone(chapters);
+  const days = journeyStreamJournalDays(chapters, new Map(journey.routePoints.map(routePoint => [routePoint.id, routePoint])));
+  expect(days.map(day => day.date)).toEqual(["2026-08-11", "2026-08-12"]);
+  expect(days.map(day => day.chapters.map(chapter => chapter.title))).toEqual([["第一天", "补记"], ["第二天"]]);
+  expect(days.map(day => day.chapters.flatMap(chapter => chapter.events.map(event => event.text)))).toEqual([
+    ["抵达市区", "航班号未记录，但我们顺利抵达。", "因下雨没去成花园，改去看展。", "睡前：看见满天星光。"],
+    ["她沿海边散步"],
   ]);
+  expect(days[0].chapters[0].events[0].point?.id).toBe("city");
+  expect(journeyStreamEntries(journey).map(entry => entry.key)).toEqual([
+    "intro", "media:manual", "media:extra", "media:coast-photo", "media:city-photo",
+  ]);
+  expect(chapters).toEqual(original);
+});
+
+it("keeps an explicitly linked accommodation from older planned and uncertain imports", () => {
+  const [chapter] = previewJournalImport(
+    "2026-08-11\n住宿：虚构酒店\n住宿：另一间虚构酒店\n计划：看海\n住宿：未记录",
+    base.startedOn,
+  );
+  const hotel = { ...point("hotel"), placeRole: "accommodation" as const };
+  chapter.events[0] = { ...chapter.events[0], status: "planned", routePointId: hotel.id };
+  chapter.events[1] = { ...chapter.events[1], status: "uncertain", routePointId: hotel.id };
+  chapter.events[2].routePointId = hotel.id;
+  const [day] = journeyStreamJournalDays([chapter], new Map([[hotel.id, hotel]]));
+  expect(day.chapters[0].events.map(({ text, point }) => [text, point?.id])).toEqual([
+    ["住宿：虚构酒店", hotel.id], ["住宿：另一间虚构酒店", hotel.id],
+  ]);
+});
+
+it("retains legacy source paragraphs and drops days made entirely of placeholders", () => {
+  const chapters = previewJournalImport(
+    "2026-08-11\n起床：未记录\\\n睡前：未确认\n2026-08-12\n她在码头看日落。\n\n小票：未记录\\\n第二段正文。",
+    base.startedOn,
+  ).map(chapter => ({ ...chapter, events: [] }));
+  expect(journeyStreamJournalDays(chapters, new Map())).toEqual([{
+    date: "2026-08-12",
+    chapters: [{ id: chapters[1].id, title: "", source: "她在码头看日落。\n\n第二段正文。", events: [] }],
+  }]);
 });
 
 describe("stream sizing", () => {

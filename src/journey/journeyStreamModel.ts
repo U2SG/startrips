@@ -1,4 +1,5 @@
-import type { JournalChapter } from "./dailyJournal";
+import { JOURNAL_DATE_HEADING, type JournalChapter, type JournalEvent } from "./dailyJournal";
+import { isLodgingLabelLine } from "./journalHotels";
 import { isVisualMediaAsset } from "./journeyModel";
 import type { Journey, JourneyMediaAsset, MediaPreviewRead, RoutePoint } from "./types";
 
@@ -12,7 +13,6 @@ import type { Journey, JourneyMediaAsset, MediaPreviewRead, RoutePoint } from ".
  */
 export type JourneyStreamEntry =
   | { kind: "intro"; key: string; note: string | null }
-  | { kind: "journal"; key: string; routePoint: null; chapter: JournalChapter }
   | {
     kind: "media";
     key: string;
@@ -24,8 +24,6 @@ export type JourneyStreamEntry =
     note: string | null;
   }
   | { kind: "note"; key: string; routePoint: RoutePoint; place: string | null; date: string | null; note: string };
-
-type JourneyStreamRouteEntry = Exclude<JourneyStreamEntry, { kind: "journal" }>;
 
 function trimmed(value: string | null | undefined): string | null {
   const text = value?.trim();
@@ -45,8 +43,8 @@ function ownerMedia(journey: Journey, routePointId: string | null): JourneyMedia
 }
 
 /** Entries oldest first, in canonical Route order. */
-export function journeyStreamEntries(journey: Journey, focusPointId: string | null = null): JourneyStreamRouteEntry[] {
-  const entries: JourneyStreamRouteEntry[] = [{ kind: "intro", key: "intro", note: trimmed(journey.note) }];
+export function journeyStreamEntries(journey: Journey, focusPointId: string | null = null): JourneyStreamEntry[] {
+  const entries: JourneyStreamEntry[] = [{ kind: "intro", key: "intro", note: trimmed(journey.note) }];
   for (const asset of ownerMedia(journey, null)) {
     entries.push({ kind: "media", key: `media:${asset.id}`, asset, routePoint: null, place: null, date: null, note: null });
   }
@@ -74,49 +72,60 @@ export function journeyStreamEntries(journey: Journey, focusPointId: string | nu
   return entries;
 }
 
-/** Keep the journal's day and source order. Place each existing media entry once. */
-export function withJourneyStreamJournal(
-  entries: JourneyStreamRouteEntry[], chapters: readonly JournalChapter[],
-): JourneyStreamEntry[] {
-  if (!chapters.length) return entries;
-  const ordered = [...chapters].sort((a, b) => a.date.localeCompare(b.date));
-  const byDate = new Map<string, string>();
-  const byPoint = new Map<string, string>();
-  const byAsset = new Map<string, string>();
-  for (const chapter of ordered) {
-    if (!byDate.has(chapter.date)) byDate.set(chapter.date, chapter.id);
-    for (const event of chapter.events) {
-      if (event.status === "actual" && event.routePointId && !byPoint.has(event.routePointId)) {
-        byPoint.set(event.routePointId, chapter.id);
-      }
-      for (const id of event.mediaIds) if (!byAsset.has(id)) byAsset.set(id, chapter.id);
-    }
+type JournalReadingEvent = Pick<JournalEvent, "id" | "text" | "localDate" | "localTime"> & { point?: RoutePoint };
+type JournalReadingChapter = { id: string; title: string; source: string; events: JournalReadingEvent[] };
+export type JourneyStreamJournalDay = { date: string; chapters: JournalReadingChapter[] };
+
+const journalStatusPrefix = /^(?:[【\[（(]\s*(实际(?:发生)?|计划|(?:已)?取消|(?:状态)?待确认|(?:状态)?未确认|未核实|待核实|未记录)\s*[】\]）)]\s*[：:]?|(实际(?:发生)?|计划|(?:已)?取消|(?:状态)?待确认|(?:状态)?未确认|未核实|待核实|未记录)\s*[：:])\s*/u;
+const journalStatusSuffix = /\s*[（(]\s*(?:(?:状态)?(?:待确认|未确认)|未核实|待核实|未记录)\s*[）)]$/u;
+const journalMissingLine = /^(?:[\p{L}\p{N}、/]{1,8}\s*[：:]\s*|(?:状态|日期|时间|时区|地点|位置|住宿|酒店|交通|餐饮|天气|行程|活动|备注)\s*)?[【\[（(]?\s*(?:暂无记录|无记录|未提及|未注明|不详|(?:尚)?未(?:确认|核实|记录|填写|提供|标注|关联)|待(?:确认|核实|补充)|无)\s*[】\]）)]?[。.!！…]*$/u;
+const journalCancellationNarrative = /取消|改签|改期|改去|改走|改道|(?:没|未)(?:去成|能去|赶上)|不去了|因为|后来|最终/u;
+
+function cleanJournalLine(line: string) {
+  return line.trim().replace(/^#{1,6}\s+/, "").replace(/\\+$/, "").trimEnd();
+}
+
+function journalReadingText(value: string, status?: JournalEvent["status"]): string {
+  if (status === "planned") return "";
+  return value.split(/\r\n?|\n/).flatMap(line => {
+    const clean = cleanJournalLine(line);
+    if (!clean) return [""];
+    const content = clean.replace(/^(?:[-*•]|\d+[.)])\s+/, "");
+    const marker = content.match(journalStatusPrefix);
+    const label = marker?.[1] ?? marker?.[2];
+    const prose = (marker ? content.slice(marker[0].length) : clean).replace(journalStatusSuffix, "");
+    if (!prose || label === "计划" || /^(?:实际(?:发生)?|计划|(?:已)?取消)$/.test(prose)) return [];
+    if ((label === "取消" || label === "已取消") && !journalCancellationNarrative.test(prose) && !/[，,；;]/.test(prose)) return [];
+    return journalMissingLine.test(prose.replace(/^(?:[-*•]|\d+[.)])\s+/, "").replace(/\*\*/g, ""))
+      ? []
+      : [prose];
+  }).join("\n").trim();
+}
+
+/** Readable excerpts stay in source order and never participate in media placement. */
+export function journeyStreamJournalDays(
+  chapters: readonly JournalChapter[], points: ReadonlyMap<string, RoutePoint>,
+): JourneyStreamJournalDay[] {
+  const days = new Map<string, JournalReadingChapter[]>();
+  for (const chapter of chapters) {
+    const title = journalReadingText(chapter.title);
+    const events = chapter.events.flatMap(event => {
+      const linkedPoint = event.routePointId ? points.get(event.routePointId) : undefined;
+      const confirmedLodging = (event.status === "planned" || event.status === "uncertain")
+        && linkedPoint?.placeRole === "accommodation" && isLodgingLabelLine(event.source);
+      const point = event.status === "actual" || confirmedLodging ? linkedPoint : undefined;
+      const text = journalReadingText(event.text.trim() || event.source, confirmedLodging ? undefined : event.status);
+      return text || point ? [{ id: event.id, text, localDate: event.localDate, localTime: event.localTime, point }] : [];
+    });
+    const source = chapter.events.length ? "" : journalReadingText(chapter.source.trim().replace(/^([^\r\n]*)(?:\r\n?|\n|$)/, (line, first: string) => (
+      JOURNAL_DATE_HEADING.test(first) ? "" : line
+    )));
+    if (!title && !events.length && !source) continue;
+    const group = days.get(chapter.date) ?? [];
+    group.push({ id: chapter.id, title, events, source });
+    days.set(chapter.date, group);
   }
-  const opening: JourneyStreamEntry[] = [];
-  const remaining: JourneyStreamEntry[] = [];
-  const byChapter = new Map<string, JourneyStreamEntry[]>();
-  for (const entry of entries) {
-    if (entry.kind === "intro") {
-      opening.push(entry);
-      continue;
-    }
-    const point = entry.routePoint;
-    const date = streamDate(point?.occurredAt);
-    const chapterId = (entry.kind === "media" ? byAsset.get(entry.asset.id) : undefined)
-      ?? (date ? byDate.get(date) : undefined)
-      ?? (point ? byPoint.get(point.id) : undefined);
-    if (!chapterId) {
-      remaining.push(entry);
-      continue;
-    }
-    const group = byChapter.get(chapterId) ?? [];
-    group.push(entry);
-    byChapter.set(chapterId, group);
-  }
-  return [...opening, ...ordered.flatMap((chapter): JourneyStreamEntry[] => [
-    { kind: "journal", key: `journal:${chapter.id}`, routePoint: null, chapter },
-    ...(byChapter.get(chapter.id) ?? []),
-  ]), ...remaining];
+  return [...days].sort(([left], [right]) => left.localeCompare(right)).map(([date, chapters]) => ({ date, chapters }));
 }
 
 /** Width / height of a picture, from the best size known so far. */
