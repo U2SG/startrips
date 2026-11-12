@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { serverConfig } from "../config";
 
 const OPENFREEMAP_ORIGIN = "https://tiles.openfreemap.org";
+const TERRAIN_ORIGIN = "https://tiles.mapterhorn.com";
+const MAX_TERRAIN_ZOOM = 12;
 const ALLOWED_PATH_PREFIXES = [
   "styles/",
   "planet/",
@@ -75,6 +77,15 @@ export function isAllowedOpenFreemapPath(path: string): boolean {
     || ALLOWED_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
+/** Fixed provider, canonical XYZ only. Keep clients within the global terrain archive. */
+export function isAllowedMapTerrainPath(path: string): boolean {
+  const tile = /^terrain\/(0|[1-9]\d?)\/(0|[1-9]\d{0,3})\/(0|[1-9]\d{0,3})\.webp$/.exec(path);
+  if (!tile) return false;
+  const z = Number(tile[1]);
+  const limit = 2 ** z;
+  return z <= MAX_TERRAIN_ZOOM && Number(tile[2]) < limit && Number(tile[3]) < limit;
+}
+
 function cacheKeyFor(path: string): string {
   return createHash("sha256").update(path).digest("hex");
 }
@@ -110,7 +121,10 @@ type MapStyleReadResult =
 async function fetchMapAsset(path: string, accept: string): Promise<
   { ok: true; response: Response } | { ok: false; message: string }
 > {
-  const url = new URL(`${OPENFREEMAP_ORIGIN}/${path}`);
+  const terrain = isAllowedMapTerrainPath(path);
+  const url = terrain
+    ? new URL(path.slice("terrain".length), TERRAIN_ORIGIN)
+    : new URL(`${OPENFREEMAP_ORIGIN}/${path}`);
   // The upstream request outlives browser cancellations so MapLibre retries can
   // still use the populated cache. Only this service owns its timeout signal.
   const controller = new AbortController();
@@ -120,6 +134,7 @@ async function fetchMapAsset(path: string, accept: string): Promise<
     response = await fetch(url, {
       headers: { Accept: accept, "User-Agent": "Startrips/1.0 (map proxy)" },
       signal: controller.signal,
+      ...(terrain ? { redirect: "error" } : {}),
     });
   } catch {
     return { ok: false, message: "Map style provider request failed" };
@@ -133,6 +148,7 @@ async function fetchMapAsset(path: string, accept: string): Promise<
 
 export async function readMapStyleAsset(path: string): Promise<MapStyleReadResult> {
   const isJson = path.startsWith("styles/") || path === "planet";
+  const terrain = isAllowedMapTerrainPath(path);
   const ttlMs = isJson ? STYLE_CACHE_TTL_MS : TILE_CACHE_TTL_MS;
   const cached = await readCached(path, ttlMs);
   if (cached) {
@@ -142,13 +158,16 @@ export async function readMapStyleAsset(path: string): Promise<MapStyleReadResul
         ? "application/vnd.mapbox-vector-tile"
         : path.endsWith(".png")
           ? "image/png"
-          : "application/octet-stream";
+          : terrain ? "image/webp" : "application/octet-stream";
     return { ok: true, body: cached, contentType, maxAgeSeconds: Math.round(ttlMs / 1000) };
   }
   const upstream = await fetchMapAsset(path, "application/json, application/x-protobuf, image/*, */*");
   if (!upstream.ok) return upstream;
   const { response } = upstream;
   const contentType = response.headers.get("content-type") ?? "application/octet-stream";
+  if (terrain && contentType.split(";")[0].trim() !== "image/webp") {
+    return { ok: false, message: "Terrain provider did not return a WebP tile" };
+  }
   if (isJson) {
     const text = await response.text();
     const rewritten = rewriteOpenFreemapUrls(text, serverConfig.appOrigin);

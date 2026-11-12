@@ -449,6 +449,12 @@ self-hosted MapLibre style without changing application code. A replacement styl
 must allow browser CORS access from `https://${APP_HOST}` and expose `name:zh` or
 `name:zh-Hans` fields when Chinese labels are required.
 
+The default detail map can load global Terrarium elevation tiles from
+[Mapterhorn](https://mapterhorn.com/data-access/) through the same-origin map
+cache. The proxy accepts only XYZ WebP tiles through zoom 12; farther zooms
+reuse those tiles. The browser does not contact the elevation provider
+directly. Existing style and terrain-provider configuration is not required.
+
 `ATLAS_PMTILES_URL` (with `ATLAS_PMTILES_GLYPHS_URL`) enables the optional,
 deployment-owned Protomaps PMTiles path. The approved validation asset is a
 versioned Guangdong + Hong Kong + Macau extract, with Shenzhen/Hong Kong/PRD as

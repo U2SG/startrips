@@ -30,6 +30,10 @@ describe("map resource HTTP contract", () => {
   it.each([
     "/api/mapstyle?path=styles%2F..%2Fsecret",
     "/api/mapstyle/sprite/fonts/font.json",
+    "/api/mapstyle?path=terrain/8/256/101.webp",
+    "/api/mapstyle?path=terrain/13/0/0.webp",
+    "/api/mapstyle?path=terrain/8/043/101.webp",
+    "/api/mapstyle?path=terrain/8/43/101.webp%3Furl%3Dhttps%3A%2F%2Fexample.com",
   ])("rejects invalid paths before cache or provider access: %s", async (path) => {
     const response = await app.request(path);
     expect(response.status).toBe(400);
@@ -67,6 +71,24 @@ describe("map resource HTTP contract", () => {
     expect(response.headers.get("content-type")).toBe("application/vnd.mapbox-vector-tile");
     expect(response.headers.get("cache-control")).toBe("public, max-age=604800");
     expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("serves terrain tiles through the same-origin cache with a fixed provider", async () => {
+    const bytes = Buffer.from([82, 73, 70, 70]);
+    upstream.mockResolvedValue(new Response(Uint8Array.from(bytes), { headers: { "content-type": "image/webp" } }));
+    const tilePath = "/api/mapstyle?path=terrain/8/43/101.webp";
+    const response = await app.request(tilePath);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/webp");
+    expect(upstream.mock.calls[0][0].toString()).toBe("https://tiles.mapterhorn.com/8/43/101.webp");
+    expect(upstream.mock.calls[0][1]?.redirect).toBe("error");
+    expect(cache.writeFile).toHaveBeenCalledWith(expect.any(String), bytes);
+    cache.readFile.mockResolvedValue(bytes);
+    const cached = await app.request(tilePath);
+    expect(cached.headers.get("content-type")).toBe("image/webp");
+    expect(cached.headers.get("cache-control")).toBe("public, max-age=604800");
+    expect(Buffer.from(await cached.arrayBuffer())).toEqual(bytes);
+    expect(upstream).toHaveBeenCalledTimes(1);
   });
 
   it("replaces expired styles even while a tile of the same age remains usable", async () => {

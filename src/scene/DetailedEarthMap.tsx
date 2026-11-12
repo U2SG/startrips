@@ -13,6 +13,7 @@ import { RouteCandidateEditor } from "./RouteCandidateEditor";
 import { recordedTrackLodConstructionCount } from "../journey/journeyModel";
 import {
   createDetailedEarthLabelExpression,
+  DEFAULT_DETAILED_EARTH_STYLE_URL,
   DETAILED_EARTH_DRAG_PAN_OPTIONS,
   getDetailedEarthRouteFrame,
   getDetailedEarthFocusDuration,
@@ -76,6 +77,38 @@ const JOURNEY_OVERLAY_ROUTE_LAYER_ID = "startrips-active-journey-route";
 const JOURNEY_OVERLAY_POINT_LAYER_ID = "startrips-active-journey-points";
 const JOURNEY_OVERLAY_LABEL_LAYER_ID = "startrips-active-journey-labels";
 const JOURNEY_OVERLAY_HIT_LAYER_ID = "startrips-active-journey-hit-targets";
+
+const DEFAULT_TERRAIN_SOURCE_ID = "startrips-mapterhorn";
+
+function installFiordTerrain(map: MapLibreMap) {
+  // Fiord's water fill masks the relief at sea and the later layers keep roads
+  // and labels above it. Leave styles that already provide terrain in charge.
+  if (map.getTerrain() || map.getLayer("water")?.type !== "fill") return;
+
+  map.addSource(DEFAULT_TERRAIN_SOURCE_ID, {
+    type: "raster-dem",
+    tiles: ["/api/mapstyle?path=terrain/{z}/{x}/{y}.webp"],
+    encoding: "terrarium",
+    tileSize: 512,
+    maxzoom: 12,
+    attribution: '<a href="https://mapterhorn.com/attribution/">Mapterhorn</a>',
+  });
+  // Share the DEM with hillshade. MapLibre uses a flat mesh where DEM tiles
+  // are unavailable, so the underlying vector basemap can still draw.
+  map.setTerrain({ source: DEFAULT_TERRAIN_SOURCE_ID });
+  map.addLayer({
+    id: "startrips-terrain-hillshade",
+    type: "hillshade",
+    source: DEFAULT_TERRAIN_SOURCE_ID,
+    paint: {
+      "hillshade-illumination-anchor": "map",
+      "hillshade-exaggeration": 0.45,
+      "hillshade-shadow-color": "#151d2e",
+      "hillshade-highlight-color": "#727d95",
+      "hillshade-accent-color": "#222d41",
+    },
+  }, "water");
+}
 
 function detailedEarthProjectedPixelsPerRadian(map: MapLibreMap) {
   const center = map.getCenter();
@@ -295,7 +328,7 @@ type DetailedEarthMapProps = {
 
 function applyMapLanguage(map: MapLibreMap, language: DetailedEarthLanguage) {
   const textField = createDetailedEarthLabelExpression(language);
-  for (const layer of map.getStyle().layers ?? []) {
+  for (const layer of map.getStyle()?.layers ?? []) {
     if (layer.type !== "symbol") continue;
     const currentTextField = layer.layout?.["text-field"];
     if (!isDetailedEarthNameLabel(currentTextField)) continue;
@@ -447,6 +480,8 @@ export default function DetailedEarthMap({
       rotateSpeed: DETAILED_EARTH_ROTATE_SPEED,
       pitchSpeed: DETAILED_EARTH_PITCH_SPEED,
       renderWorldCopies: true,
+      // Smooth the projected globe silhouette at the existing device DPR.
+      canvasContextAttributes: { antialias: useGlobeProjection() },
       attributionControl: false,
       cooperativeGestures: false,
       // The hidden/prewarming renderer must never ingest particle-owned input.
@@ -1321,8 +1356,8 @@ export default function DetailedEarthMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map?.isStyleLoaded()) return;
-    applyMapLanguage(map, language);
+    // The label layers remain writable while optional terrain tiles are loading.
+    if (map) applyMapLanguage(map, language);
   }, [language]);
 
   useEffect(() => {
@@ -1425,6 +1460,18 @@ export default function DetailedEarthMap({
       map.doubleClickZoom.disable();
     }
   }, [diveOwner]);
+
+  useEffect(() => {
+    if (!mapInstance || diveOwner !== "detail" || getDetailedEarthStyle() !== DEFAULT_DETAILED_EARTH_STYLE_URL) return;
+    // DEM requests start after the visual handoff, independently of its readiness.
+    const installTerrain = () => installFiordTerrain(mapInstance);
+    if (mapInstance.getLayer("water")) {
+      installTerrain();
+      return;
+    }
+    mapInstance.once("load", installTerrain);
+    return () => { mapInstance.off("load", installTerrain); };
+  }, [diveOwner, mapInstance]);
 
   useEffect(() => {
     const canvas = mapRef.current?.getCanvas();
