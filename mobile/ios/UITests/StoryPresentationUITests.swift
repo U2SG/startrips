@@ -56,8 +56,8 @@ final class StoryPresentationUITests: XCTestCase {
         let thread = element(app, "story.stream.thread")
         XCTAssertTrue(thread.waitForExistence(timeout: 10))
         XCTAssertEqual(thread.frame.midX, app.windows.firstMatch.frame.midX, accuracy: 1)
-        XCTAssertLessThanOrEqual(thread.frame.minY, streamed.frame.minY)
-        XCTAssertGreaterThanOrEqual(thread.frame.maxY, streamed.frame.maxY)
+        // The thread is fixed to the viewport behind the rows, so it spans the whole stream view.
+        XCTAssertGreaterThanOrEqual(thread.frame.height, element(app, "story.stream").frame.height - 1)
 
         // Play flows down the stream itself: no pager, the content keeps moving, pause freezes it.
         app.buttons["story.play"].tap()
@@ -67,15 +67,15 @@ final class StoryPresentationUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
             XCTAssertTrue(element(app, "story.stream").exists, "the stream stays on screen while playing")
             XCTAssertFalse(element(app, "story.photo.media:asset-fixture").exists, "no page-by-page player")
-            samples.append(thread.frame.minY)
+            samples.append(streamed.frame.minY)
         }
         XCTAssertGreaterThan((samples.max() ?? 0) - (samples.min() ?? 0), 40, "the stream flows while playing")
         capture(app, "story-style-stream-playing")
         app.buttons["story.pause"].tap()
         RunLoop.current.run(until: Date().addingTimeInterval(1))
-        let frozen = thread.frame.minY
+        let frozen = streamed.frame.minY
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
-        XCTAssertEqual(thread.frame.minY, frozen, accuracy: 1, "pause freezes the flow")
+        XCTAssertEqual(streamed.frame.minY, frozen, accuracy: 1, "pause freezes the flow")
         // The first close ends playback and stays in Story, as in every style.
         app.buttons["story.close"].tap()
         XCTAssertTrue(app.buttons["story.play"].waitForExistence(timeout: 5))

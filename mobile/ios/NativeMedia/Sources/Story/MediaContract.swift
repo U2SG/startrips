@@ -83,19 +83,32 @@ public struct StoryIntent: Codable, Equatable, Sendable {
     public let request: (String, String, Data?) async throws -> Data
     public let imageTransport: URLSession
     public let revalidate: () async throws -> Void
+    /// The server's display preview when one is ready (smaller, with its pixel size), else the original.
+    public let readDisplay: ((String) async throws -> MediaDisplayRead)?
     public init(scopeID: String, access: Access,
                 imageTransport: URLSession = URLSession(configuration: .ephemeral),
                 read: @escaping (String) async throws -> URL,
+                readDisplay: ((String) async throws -> MediaDisplayRead)? = nil,
                 request: @escaping (String, String, Data?) async throws -> Data,
                 revalidate: @escaping () async throws -> Void) {
         self.scopeID = scopeID; self.access = access; self.read = read; self.imageTransport = imageTransport
-        self.request = request; self.revalidate = revalidate
+        self.readDisplay = readDisplay; self.request = request; self.revalidate = revalidate
     }
     public func write(_ path: String, method: String = "POST", body: Data? = nil) async throws -> Data {
         guard access == .owner else { throw MediaFailure.readOnly }
         try await revalidate()
         try Task.checkCancellation()
         return try await request(path, method, body)
+    }
+    /// Same scoped, revalidated read as `mediaURL`, preferring the display preview.
+    public func mediaDisplay(_ assetID: String) async throws -> MediaDisplayRead {
+        guard let readDisplay else { return MediaDisplayRead(url: try await mediaURL(assetID)) }
+        try await revalidate()
+        let read = try await readDisplay(assetID)
+        try Task.checkCancellation()
+        try await revalidate()
+        guard read.url.scheme == "https" else { throw MediaFailure.unavailable }
+        return read
     }
     public func mediaURL(_ assetID: String) async throws -> URL {
         try await revalidate()
@@ -105,4 +118,12 @@ public struct StoryIntent: Codable, Equatable, Sendable {
         guard url.scheme == "https" else { throw MediaFailure.unavailable }
         return url
     }
+}
+
+/// A signed display read: the preview's pixel size lets a row reserve its frame before the bytes arrive.
+public struct MediaDisplayRead: Equatable, Sendable {
+    public let url: URL
+    public let width: Int?
+    public let height: Int?
+    public init(url: URL, width: Int? = nil, height: Int? = nil) { self.url = url; self.width = width; self.height = height }
 }

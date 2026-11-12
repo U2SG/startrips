@@ -222,18 +222,14 @@ private struct StoryBookPageView: View {
 /// Port of the web stream (`journey-stream.css`): one gold thread down the
 /// centre is the spine every picture hangs on. Pictures cover it, so it shows
 /// as connectors in the gaps; headings and notes sit on a small break in it.
-/// The thread fills downward as the reader scrolls; Reduce Motion shows it whole.
+/// Playing flows down the stream itself: a display-link driver moves the
+/// scroll view every frame, and upcoming pictures are fetched and decoded ahead.
 struct StoryStream: View {
     @ObservedObject var model: StoryModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var viewport: CGFloat = 0
-    @State private var scrolled: CGFloat = 0
-    @State private var poured = false
-    /// Content y of each rendered row, for the playback flow.
+    @StateObject private var driver = StreamFlowDriver()
+    /// Content y of each laid-out row; changes only with layout, never with scrolling.
     @State private var rowY: [String: CGFloat] = [:]
-    /// Where the reading point is during playback (content y).
-    @State private var reading: CGFloat = 0
-    @State private var glide: (from: CGFloat, start: Date)?
 
     private var playing: Bool { model.playback != nil }
     private var streamEntries: [StoryEntry] { model.cursor.entries.filter { $0.role != .journeyCover } }
@@ -241,6 +237,7 @@ struct StoryStream: View {
 
     var body: some View {
         let entries = Array(model.cursor.entries.enumerated()).filter { $0.element.role != .journeyCover }
+        let current = currentRow.map { streamEntries[$0] }
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .center, spacing: StoryTheme.grid(5)) {
@@ -252,7 +249,8 @@ struct StoryStream: View {
                             .multilineTextAlignment(.center).onThread()
                     }
                     ForEach(entries, id: \.element.id) { index, entry in
-                        row(index, entry, previous: index > 0 ? model.cursor.entries[index - 1] : nil).id(entry.id)
+                        row(index, entry, previous: index > 0 ? model.cursor.entries[index - 1] : nil, current: current)
+                            .id(entry.id)
                             .background(GeometryReader { geometry in
                                 Color.clear.preference(key: StreamRowKey.self,
                                                        value: [entry.id: geometry.frame(in: .named("story.stream.content")).minY])
@@ -264,94 +262,57 @@ struct StoryStream: View {
                 .frame(maxWidth: 680)
                 .coordinateSpace(name: "story.stream.content")
                 .onPreferenceChange(StreamRowKey.self) { rowY.merge($0) { _, new in new } }
-                .background { thread }
-                // The reading point, as a 1pt marker the scroll view follows during playback.
-                .overlay(alignment: .top) {
-                    Color.clear.frame(height: 1).padding(.top, max(0, reading)).id(Self.marker).allowsHitTesting(false)
-                }
                 .frame(maxWidth: .infinity)
-                .background(GeometryReader { geometry in
-                    Color.clear.preference(key: StreamOffsetKey.self, value: -geometry.frame(in: .named("story.stream")).minY)
-                })
+                .background(StreamScrollViewFinder { driver.scrollView = $0 })
             }
-            .coordinateSpace(name: "story.stream")
-            .background(GeometryReader { geometry in Color.clear.onAppear { viewport = geometry.size.height }
-                .onChange(of: geometry.size.height) { viewport = $0 } })
-            .onPreferenceChange(StreamOffsetKey.self) { scrolled = $0 }
-            .takeoverPausesPlayback(playing) { model.setPaused(true) }
-            .onChange(of: model.playback?.index) { _ in
-                guard playing else { glide = nil; return }
-                glide = (reading, Date()); follow(proxy)
-            }
-            .onChange(of: model.playback?.elapsedMS) { _ in follow(proxy) }
-            // Resuming after a takeover glides back from wherever the reader scrolled.
-            .onChange(of: model.paused) { paused in
-                if !paused && playing { glide = (scrolled + viewport * StreamFlow.readingLine, Date()) }
-            }
+            // The thread is fixed to the viewport, behind the content: rows cover it, and
+            // its gold reach is the reading line. Nothing in it changes per frame.
+            .background { StreamThread(reach: playing ? StreamFlow.readingLine : 0.6, reduceMotion: reduceMotion) }
             .accessibilityElement(children: .contain).accessibilityIdentifier("story.stream")
             .onAppear {
                 model.loadJournal()
+                driver.reduceMotion = reduceMotion
+                driver.onTakeover = { [weak model] in model?.setPaused(true) }
                 if let current = model.cursor.current, current.role != .journeyCover { proxy.scrollTo(current.id, anchor: .top) }
-                if reduceMotion { poured = true } else { withAnimation(.easeOut(duration: 0.6)) { poured = true } }
             }
+            .onDisappear { driver.stop() }
+            .onChange(of: model.playback?.index) { _ in prefetch(); sync(proxy) }
+            .onChange(of: model.playback?.elapsedMS) { _ in sync(proxy) }
+            .onChange(of: model.paused) { _ in sync(proxy) }
+            .onChange(of: playing) { _ in prefetch(); sync(proxy) }
+            .onChange(of: reduceMotion) { driver.reduceMotion = $0 }
         }
     }
 
-    /// The spine: a faint full-length line plus a gold fill down to the reading point.
-    private var thread: some View {
-        GeometryReader { geometry in
-            let height = geometry.size.height
-            let reach = reduceMotion ? height
-                : min(height, max(0, playing ? reading : scrolled + viewport * 0.6))
-            let fade = Gradient(stops: [.init(color: .clear, location: 0), .init(color: StoryTheme.accent, location: 0.04),
-                                        .init(color: StoryTheme.accent, location: 0.96), .init(color: .clear, location: 1)])
-            ZStack(alignment: .top) {
-                LinearGradient(gradient: fade, startPoint: .top, endPoint: .bottom).opacity(0.32)
-                LinearGradient(gradient: fade, startPoint: .top, endPoint: .bottom).opacity(0.9)
-                    .frame(height: height)
-                    .mask(alignment: .top) { Rectangle().frame(height: poured ? reach : 0) }
-            }
-            .frame(width: 1, height: height)
-            .frame(maxWidth: .infinity)
-        }
-        .allowsHitTesting(false)
-        .streamThreadIdentifier()
+    /// Fetch and decode the next pictures before the flow reaches them.
+    private func prefetch() {
+        guard playing else { return }
+        model.prefetchLibrary(StreamFlow.lookahead(from: currentRow, entries: streamEntries))
     }
 
-    private static let marker = "story.stream.reading"
-
-    /// One playback tick: move the reading point along the thread and keep it on the reading line.
-    private func follow(_ proxy: ScrollViewProxy) {
-        guard let clock = model.playback, let beat = clock.current else { return }
+    /// Hands one clock sample to the driver; the driver interpolates per display frame.
+    private func sync(_ proxy: ScrollViewProxy) {
+        guard let clock = model.playback, let beat = clock.current else { driver.stop(); return }
         let entries = streamEntries
         let here = StreamFlow.row(for: beat, in: entries)
         func y(_ row: Int?) -> CGFloat? { row.map { rowY[entries[$0].id] } ?? 0 }
-        guard let from = y(here) else {
-            // Not laid out yet (lazy): bring the row in, the next tick continues smoothly.
+        guard driver.attached, let from = y(here) else {
+            // Not laid out yet (lazy) or no UIKit scroll view: bring the row in once.
             if let here { proxy.scrollTo(entries[here].id, anchor: UnitPoint(x: 0.5, y: StreamFlow.readingLine)) }
             return
         }
-        let next = StreamFlow.nextRow(after: clock.index, beats: clock.beats, entries: entries)
-        let to: CGFloat? = next.flatMap { y($0) }
-        let fraction = beat.durationMS > 0 ? clock.elapsedMS / beat.durationMS : 0
-        var target = reduceMotion ? from : StreamFlow.reading(from: from, to: to, fraction: fraction)
-        if let glide {
-            let elapsed = Date().timeIntervalSince(glide.start)
-            target = StreamFlow.glide(from: glide.from, to: target, elapsed: elapsed, reduceMotion: reduceMotion)
-            if elapsed >= StreamFlow.seekSeconds { self.glide = nil }
-        }
-        reading = target
-        proxy.scrollTo(Self.marker, anchor: UnitPoint(x: 0.5, y: StreamFlow.readingLine))
+        let to = StreamFlow.nextRow(after: clock.index, beats: clock.beats, entries: entries).flatMap { y($0) }
+        driver.update(.init(beat: clock.index, elapsedMS: clock.elapsedMS, durationMS: beat.durationMS,
+                            paused: model.paused, from: from, to: to))
     }
 
     private func point(_ id: String?) -> MediaRoutePoint? { id.flatMap { id in model.journey.routePoints.first { $0.id == id } } }
 
     /// A route point's place and note are said once, at its first row, as a mark on the thread.
-    @ViewBuilder private func row(_ index: Int, _ entry: StoryEntry, previous: StoryEntry?) -> some View {
+    @ViewBuilder private func row(_ index: Int, _ entry: StoryEntry, previous: StoryEntry?, current: StoryEntry?) -> some View {
         let opensPoint = entry.routePointId != nil && entry.routePointId != previous?.routePointId
         // While playing, the place being read is in full ink; the others step back.
-        let quiet = playing && currentRow.map { streamEntries[$0].chapterRoutePointId ?? streamEntries[$0].routePointId }
-            != .some(entry.chapterRoutePointId ?? entry.routePointId)
+        let quiet = playing && (current?.chapterRoutePointId ?? current?.routePointId) != (entry.chapterRoutePointId ?? entry.routePointId)
         VStack(alignment: .center, spacing: StoryTheme.grid(3)) {
             if opensPoint, let point = point(entry.routePointId) {
                 VStack(spacing: StoryTheme.grid(2)) {
@@ -363,7 +324,15 @@ struct StoryStream: View {
                 .opacity(quiet ? 0.55 : 1)
                 .onThread().padding(.top, StoryTheme.grid(3))
             }
-            if let asset = entry.asset { StoryStreamMedia(model: model, asset: asset, index: index, entryID: entry.id) }
+            if let asset = entry.asset {
+                let playsVideo = asset.isVideo && (model.playback.map { $0.current?.asset?.id == asset.id } ?? (model.cursor.index == index))
+                StoryStreamMedia(asset: asset, entryID: entry.id, image: model.image(for: asset.id),
+                                 size: model.displaySizes[asset.id], playsVideo: playsVideo,
+                                 foreground: playsVideo ? model.foreground : nil) { model.select(index) }
+                    .equatable()
+                    .onAppear { model.requestLibraryImage(asset) }
+                    .onDisappear { if !playing { model.cancelLibraryImage(asset.id) } }
+            }
             if opensPoint, let note = point(entry.routePointId)?.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
                 Text(note).font(StoryTheme.serif(.body)).lineSpacing(6).multilineTextAlignment(.center)
                     .opacity(quiet ? 0.55 : 1).onThread()
@@ -402,20 +371,28 @@ private struct StreamRowKey: PreferenceKey {
     }
 }
 
-private extension View {
-    /// Touching the stream during playback takes over: playback pauses, play resumes the flow.
-    @ViewBuilder func takeoverPausesPlayback(_ playing: Bool, pause: @escaping () -> Void) -> some View {
-        if #available(iOS 18.0, *) {
-            onScrollPhaseChange { _, phase in if playing && phase == .interacting { pause() } }
-        } else {
-            simultaneousGesture(DragGesture(minimumDistance: 12).onChanged { _ in if playing { pause() } })
+/// The spine, fixed to the viewport: a faint full line and a gold reach down to the reading line.
+private struct StreamThread: View {
+    let reach: CGFloat
+    let reduceMotion: Bool
+    @State private var poured = false
+    var body: some View {
+        GeometryReader { geometry in
+            let height = geometry.size.height
+            ZStack(alignment: .top) {
+                Rectangle().fill(StoryTheme.accent.opacity(0.32))
+                Rectangle().fill(LinearGradient(colors: [StoryTheme.accent.opacity(0), StoryTheme.accent.opacity(0.9)],
+                                                startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.15)))
+                    .frame(height: poured ? height * reach : 0)
+            }
+            .frame(width: 1, height: height)
+            .frame(maxWidth: .infinity)
         }
+        .allowsHitTesting(false)
+        .onAppear { if reduceMotion { poured = true } else { withAnimation(.easeOut(duration: 0.6)) { poured = true } } }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: reach)
+        .streamThreadIdentifier()
     }
-}
-
-private struct StreamOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 private extension View {
@@ -434,39 +411,53 @@ private extension View {
     }
 }
 
-private struct StoryStreamMedia: View {
-    @ObservedObject var model: StoryModel
+/// One picture in the stream. Its frame is reserved from the picture's pixel size as soon
+/// as that is known, so rows never jump when bytes arrive; equatable, so a playback tick
+/// does not redraw pictures that did not change.
+private struct StoryStreamMedia: View, Equatable {
     let asset: MediaAsset
-    let index: Int
     let entryID: String
+    let image: UIImage?
+    let size: CGSize?
+    let playsVideo: Bool
+    let foreground: ForegroundPlayback?
+    let select: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.asset == rhs.asset && lhs.entryID == rhs.entryID && lhs.image === rhs.image
+            && lhs.size == rhs.size && lhs.playsVideo == rhs.playsVideo
+    }
+
+    private var aspect: CGFloat {
+        if asset.isVideo { return 16 / 9 }
+        let known = size ?? image?.size
+        guard let known, known.width > 0, known.height > 0 else { return 4 / 3 }
+        return known.width / known.height
+    }
 
     var body: some View {
         Group {
             if asset.isVideo {
-                // During playback the beat's video plays in place through the shared foreground player.
-                if model.playback.map({ $0.current?.asset?.id == asset.id }) ?? (model.cursor.index == index) {
-                    ForegroundVideo(playback: model.foreground).aspectRatio(16 / 9, contentMode: .fit)
+                if playsVideo, let foreground {
+                    ForegroundVideo(playback: foreground)
                 } else {
-                    Button { model.select(index) } label: {
+                    Button(action: select) {
                         ZStack {
                             StoryTheme.surface
                             Image(systemName: "play.circle").font(.largeTitle).foregroundStyle(StoryTheme.ink.opacity(0.8))
-                        }.aspectRatio(16 / 9, contentMode: .fit)
+                        }
                     }.accessibilityLabel("播放视频：\(asset.fileName)")
                 }
-            } else if let image = model.image(for: asset.id) {
-                Image(uiImage: image).resizable().aspectRatio(contentMode: .fit)
+            } else if let image {
+                Image(uiImage: image).resizable().scaledToFill()
                     .accessibilityLabel(asset.fileName).accessibilityAddTraits(.isImage)
             } else {
-                ZStack { StoryTheme.surface; ProgressView() }.aspectRatio(4 / 3, contentMode: .fit)
+                ZStack { StoryTheme.surface; ProgressView() }
             }
         }
         .frame(maxWidth: .infinity)
+        .aspectRatio(aspect, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .accessibilityIdentifier("story.stream.\(entryID)")
-        .task(id: model.image(for: asset.id) == nil) {
-            if !asset.isVideo, model.image(for: asset.id) == nil { model.requestLibraryImage(asset) }
-        }
-        .onDisappear { model.cancelLibraryImage(asset.id) }
     }
 }

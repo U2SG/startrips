@@ -67,6 +67,13 @@ import UIKit
         images.removeAll(); clearLibrary(); journalTask?.cancel(); journalTask = nil
     }
     /// Loads one picture for a book page or stream row. Bounded; the caller cancels when its row leaves.
+    /// Pixel size of a picture as soon as its display read answers, before its bytes arrive.
+    @Published public private(set) var displaySizes: [String: CGSize] = [:]
+    static let libraryLimit = 16
+
+    /// Prefetches and pre-decodes upcoming pictures (stream lookahead). Bounded by the library cache.
+    public func prefetchLibrary(_ assets: [MediaAsset]) { assets.forEach(requestLibraryImage) }
+
     public func requestLibraryImage(_ asset: MediaAsset) {
         guard !closed, !asset.isVideo, library[asset.id] == nil, images[asset.id] == nil, libraryTasks[asset.id] == nil,
               journey.media.contains(where: { $0.id == asset.id }) else { return }
@@ -74,12 +81,12 @@ import UIKit
         libraryTasks[asset.id] = Task { [weak self] in
             guard let self else { return }
             defer { if ticket == self.libraryEpoch && !Task.isCancelled { self.libraryTasks[asset.id] = nil } }
-            guard let image = try? await self.loadImage(asset, maxPixel: 1600),
+            guard let image = try? await self.loadImage(asset, maxPixel: 1600, display: true),
                   !Task.isCancelled, ticket == self.libraryEpoch, !self.closed,
                   self.journey.media.contains(where: { $0.id == asset.id }) else { return }
             self.library[asset.id] = image
             self.libraryOrder.removeAll { $0 == asset.id }; self.libraryOrder.append(asset.id)
-            while self.libraryOrder.count > 12 { self.library[self.libraryOrder.removeFirst()] = nil }
+            while self.libraryOrder.count > Self.libraryLimit { self.library[self.libraryOrder.removeFirst()] = nil }
         }
     }
     public func cancelLibraryImage(_ assetID: String) { libraryTasks.removeValue(forKey: assetID)?.cancel() }
@@ -164,7 +171,7 @@ import UIKit
                 let delta = (now - last) * 1000; last = now
                 let previous = self.playback?.index
                 let asset = self.activeAsset
-                let ready = asset == nil || (asset?.isVideo == true ? self.foreground.ready : self.images[asset!.id] != nil)
+                let ready = asset == nil || (asset?.isVideo == true ? self.foreground.ready : self.image(for: asset!.id) != nil)
                 self.playback?.tick(milliseconds: delta, mediaReady: ready, videoOwnsCompletion: asset?.isVideo == true)
                 if self.playback?.completed == true { self.finish(.completed); return }
                 if previous != self.playback?.index { self.activateBeat() }
@@ -232,6 +239,9 @@ import UIKit
                         guard ticket == self.epoch, !Task.isCancelled else { return }
                         self.foreground.activate(url: url, trim: self.playback?.current?.trim)
                         self.foreground.setPaused(self.paused)
+                    } else if self.images[asset.id] == nil, let decoded = self.library[asset.id], self.playback != nil {
+                        // A prefetched stream picture is already decoded: never download it twice.
+                        self.images[asset.id] = decoded
                     } else if self.images[asset.id] == nil {
                         let image = try await self.loadImage(asset)
                         guard ticket == self.epoch, !Task.isCancelled else { return }
@@ -254,16 +264,28 @@ import UIKit
             }
         }
     }
-    private func loadImage(_ asset: MediaAsset, maxPixel: Int = 2560) async throws -> UIImage {
-        let url = try await session.mediaURL(asset.id)
-        let (file, response) = try await session.imageTransport.download(from: url)
+    private func loadImage(_ asset: MediaAsset, maxPixel: Int = 2560, display: Bool = false) async throws -> UIImage {
+        let read = display ? try await session.mediaDisplay(asset.id) : MediaDisplayRead(url: try await session.mediaURL(asset.id))
+        if let width = read.width, let height = read.height, width > 0, height > 0 {
+            displaySizes[asset.id] = CGSize(width: width, height: height)
+        }
+        let (file, response) = try await session.imageTransport.download(from: read.url)
         defer { try? FileManager.default.removeItem(at: file) }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw MediaFailure.unavailable }
         try Task.checkCancellation(); try await session.revalidate()
-        guard let source = CGImageSourceCreateWithURL(file as CFURL, nil),
+        // Decode off the main actor: a camera original decoded here stalls every frame of the stream.
+        let image = try await Task.detached(priority: .userInitiated) { try Self.decode(file, maxPixel: maxPixel) }.value
+        if displaySizes[asset.id] == nil { displaySizes[asset.id] = image.size }
+        return image
+    }
+
+    /// Downsampled and fully decoded (`ShouldCacheImmediately`), so drawing it costs nothing later.
+    nonisolated static func decode(_ file: URL, maxPixel: Int) throws -> UIImage {
+        guard let source = CGImageSourceCreateWithURL(file as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
                 kCGImageSourceThumbnailMaxPixelSize: maxPixel
               ] as CFDictionary) else { throw MediaFailure.unavailable }
         return UIImage(cgImage: image)

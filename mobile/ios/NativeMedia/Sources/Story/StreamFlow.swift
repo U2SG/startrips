@@ -57,4 +57,20 @@ enum StreamFlow {
         guard !reduceMotion else { return target }
         return start + (target - start) * CGFloat(ease(elapsed / seekSeconds))
     }
+
+    /// Pictures to prefetch and pre-decode ahead of the reading point (current row first).
+    static func lookahead(from row: Int?, entries: [StoryEntry], count: Int = 8) -> [MediaAsset] {
+        let start = max(0, row ?? 0)
+        guard start < entries.count else { return [] }
+        return entries[start...].compactMap(\.asset).filter { !$0.isVideo && $0.isVisual }.prefix(count).map { $0 }
+    }
+
+    /// Clock samples arrive every ~50ms; between them the reading point is extrapolated
+    /// per display frame, but never more than `maxLead` ahead, so a clock that waits
+    /// for a picture (mediaReady) holds the flow instead of running past it.
+    static let maxLeadMS: Double = 120
+    static func elapsed(sampled: Double, sinceSampleMS: Double, duration: Double, paused: Bool) -> Double {
+        guard !paused else { return sampled }
+        return min(max(duration, sampled), sampled + min(max(0, sinceSampleMS), maxLeadMS))
+    }
 }

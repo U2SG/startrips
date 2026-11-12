@@ -61,4 +61,36 @@ final class StreamFlowTests: XCTestCase {
         XCTAssertTrue(mid > 0 && mid < 800)
         XCTAssertEqual(StreamFlow.glide(from: 0, to: 800, elapsed: 0, reduceMotion: true), 800, "Reduce Motion steps")
     }
+
+    func testLookaheadPrefetchesUpcomingStillsOnly() throws {
+        let entries = try MediaFixtures.journey().storySequence(includeCover: false)
+        let all = StreamFlow.lookahead(from: nil, entries: entries, count: 99)
+        XCTAssertTrue(all.allSatisfy { !$0.isVideo && $0.isVisual })
+        XCTAssertEqual(all.map(\.id), entries.compactMap(\.asset).filter { !$0.isVideo }.map(\.id))
+        XCTAssertEqual(StreamFlow.lookahead(from: nil, entries: entries, count: 1).count, min(1, all.count))
+        let last = entries.count - 1
+        XCTAssertEqual(StreamFlow.lookahead(from: last, entries: entries).map(\.id),
+                       [entries[last].asset].compactMap { $0 }.filter { !$0.isVideo }.map(\.id))
+        XCTAssertTrue(StreamFlow.lookahead(from: entries.count, entries: entries).isEmpty)
+    }
+
+    func testPerFrameExtrapolationIsBoundedAndHoldsForAWaitingClock() {
+        // Between 50ms clock samples the flow advances with the display...
+        XCTAssertEqual(StreamFlow.elapsed(sampled: 1000, sinceSampleMS: 16, duration: 4000, paused: false), 1016)
+        // ...but never more than maxLead ahead of a clock that is waiting for a picture.
+        XCTAssertEqual(StreamFlow.elapsed(sampled: 1000, sinceSampleMS: 900, duration: 4000, paused: false),
+                       1000 + StreamFlow.maxLeadMS)
+        XCTAssertEqual(StreamFlow.elapsed(sampled: 3990, sinceSampleMS: 100, duration: 4000, paused: false), 4000)
+        XCTAssertEqual(StreamFlow.elapsed(sampled: 1000, sinceSampleMS: 500, duration: 4000, paused: true), 1000)
+        XCTAssertEqual(StreamFlow.elapsed(sampled: 1000, sinceSampleMS: -5, duration: 4000, paused: false), 1000)
+        // Successive display frames never move the reading point backwards within a beat.
+        var last: CGFloat = 0
+        for frame in 0...120 {
+            let elapsed = StreamFlow.elapsed(sampled: Double(frame / 3) * 50, sinceSampleMS: Double(frame % 3) * 16.7,
+                                             duration: 2000, paused: false)
+            let reading = StreamFlow.reading(from: 0, to: 600, fraction: elapsed / 2000)
+            XCTAssertGreaterThanOrEqual(reading, last - 0.001)
+            last = reading
+        }
+    }
 }

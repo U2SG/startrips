@@ -89,6 +89,11 @@ struct StoryDestination: View {
     }
 
     @MainActor private func build() {
+        #if DEBUG
+        if StressPhotos.enabled, let journey = session.mediaJourneys[target.journeyId] {
+            session.replaceMedia(StressPhotos.augment(journey))
+        }
+        #endif
         guard let scope = session.activeIdentity,
               let journey = session.mediaJourneys[target.journeyId],
               let current = Self.authorizeInitialStory(journey, target: target, router: router) else {
@@ -145,6 +150,19 @@ extension AtlasSession {
         #if DEBUG
         if origin == nil && scope == "synthetic-ci" { config.protocolClasses = [FixturePhotoProtocol.self] }
         #endif
+        struct Signed: Decodable {
+            struct Preview: Decodable { let url: URL; let width: Int; let height: Int }
+            let url: URL
+            let preview: Preview?
+        }
+        let signedRead: (String) async throws -> Signed = { assetID in
+            guard self.generation == generation, self.activeIdentity == scope else { throw MediaFailure.accessChanged }
+            let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+            guard let id = assetID.addingPercentEncoding(withAllowedCharacters: allowed), !id.isEmpty else { throw MediaFailure.unavailable }
+            let prefix = shared ? "/api/shared/assets/" : "/api/uploads/assets/"
+            let bytes = try await self.api(prefix + id + "/read-url", method: "GET", body: nil, scope: scope)
+            return try JSONDecoder().decode(Signed.self, from: bytes)
+        }
         return ScopedMediaSession(scopeID: scope, access: access, imageTransport: URLSession(configuration: config),
             read: { assetID in
                 guard self.generation == generation, self.activeIdentity == scope else { throw MediaFailure.accessChanged }
@@ -160,6 +178,19 @@ extension AtlasSession {
                 struct Signed: Decodable { let url: URL }
                 let bytes = try await self.api(prefix + id + "/read-url", method: "GET", body: nil, scope: scope)
                 return try JSONDecoder().decode(Signed.self, from: bytes).url
+            }, readDisplay: { assetID in
+                #if DEBUG
+                if self.origin == nil && scope == "synthetic-ci" {
+                    let base = URL(string: "https://fixture.invalid")!
+                    guard StressPhotos.isStress(assetID) else { return MediaDisplayRead(url: base.appendingPathComponent(assetID)) }
+                    return MediaDisplayRead(url: base.appendingPathComponent("preview").appendingPathComponent(assetID),
+                                            width: StressPhotos.previewSize.width, height: StressPhotos.previewSize.height)
+                }
+                #endif
+                // The server's preview (#260) when ready: same frame as the original, a fraction of the bytes.
+                let signed = try await signedRead(assetID)
+                if let preview = signed.preview { return MediaDisplayRead(url: preview.url, width: preview.width, height: preview.height) }
+                return MediaDisplayRead(url: signed.url)
             }, request: { path, method, body in
                 guard self.generation == generation else { throw MediaFailure.accessChanged }
                 guard !shared else { throw MediaFailure.readOnly }
@@ -176,6 +207,19 @@ private final class FixturePhotoProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "fixture.invalid" }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        if let id = request.url?.lastPathComponent, StressPhotos.isStress(id) {
+            // A camera-sized original over a ~300ms "network", like a real signed read.
+            let preview = request.url?.pathComponents.contains("preview") == true
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.3) { [self] in
+                guard let url = request.url, let data = StressPhotos.jpeg(id, preview: preview),
+                      let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                                                     headerFields: ["Content-Type": "image/jpeg"]) else { return }
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: data)
+                client?.urlProtocolDidFinishLoading(self)
+            }
+            return
+        }
         let encoded = request.url?.lastPathComponent == "asset-second"
             ? "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR4nGPYHKYFRwzEcQD7sxMxr8Y+1QAAAABJRU5ErkJggg=="
             : "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR4nGOQjt8PRwzEcQDyoxOR7RnTPQAAAABJRU5ErkJggg=="
