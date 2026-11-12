@@ -14,7 +14,7 @@ import { JourneyStory } from "../journey/JourneyStory";
 import { AtlasViewProvider, createOwnerAtlasView, type AtlasView } from "../journey/atlasView";
 import type { RoutePointBatchOperation } from "../journey/journeyApi";
 import { MobileClassicViewMenuEntry } from "../journey/MobileClassicViewMenuEntry";
-import { JourneyBook3d } from "../journey/JourneyBook3d";
+import { JourneyBook3d } from "../journey/WebJourneyBook3d";
 import { JourneyPlaybackOverlay } from "../journey/JourneyPlaybackOverlay";
 import { resolveSuggestedRouteDecision, toJourneyRoutes } from "../journey/journeyModel";
 import {

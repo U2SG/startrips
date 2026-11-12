@@ -1,9 +1,8 @@
 import SwiftUI
 
-/// The native subset of the web `MediaPresentationStyle`, in the web order and
-/// with the web labels. `book-3d` reuses the web renderer later and is not listed.
+/// The Story presentation styles, in the web order and with the web labels.
 public enum StoryPresentationStyle: String, CaseIterable, Identifiable, Sendable {
-    case classic, noteOverlay = "note-overlay", book, stream
+    case classic, noteOverlay = "note-overlay", book, book3D = "book-3d", stream
     /// Remembered per device; the raw values match the web style ids.
     public static let defaultsKey = "startrips.story.presentationStyle"
     public var id: String { rawValue }
@@ -12,6 +11,7 @@ public enum StoryPresentationStyle: String, CaseIterable, Identifiable, Sendable
         case .classic: return "默认"
         case .noteOverlay: return "图上感想"
         case .book: return "旅程之书"
+        case .book3D: return "立体之书"
         case .stream: return "旅程之流"
         }
     }
@@ -20,10 +20,11 @@ public enum StoryPresentationStyle: String, CaseIterable, Identifiable, Sendable
         case .classic: return "rectangle.on.rectangle"
         case .noteOverlay: return "text.below.photo"
         case .book: return "book"
+        case .book3D: return "book.pages"
         case .stream: return "text.justify.left"
         }
     }
-    /// Unknown stored values (including the web-only `book-3d`) open the default Story.
+    /// Unknown stored values open the default Story.
     public init(stored: String) { self = StoryPresentationStyle(rawValue: stored) ?? .classic }
 }
 

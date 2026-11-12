@@ -36,9 +36,10 @@ final class StoryPresentationTests: XCTestCase {
     }
 
     func testUnknownStoredStyleOpensDefaultStory() {
-        XCTAssertEqual(StoryPresentationStyle.allCases.map(\.label), ["默认", "图上感想", "旅程之书", "旅程之流"])
+        XCTAssertEqual(StoryPresentationStyle.allCases.map(\.label), ["默认", "图上感想", "旅程之书", "立体之书", "旅程之流"])
         XCTAssertEqual(StoryPresentationStyle(stored: "note-overlay"), .noteOverlay)
-        XCTAssertEqual(StoryPresentationStyle(stored: "book-3d"), .classic)
+        XCTAssertEqual(StoryPresentationStyle(stored: "book-3d"), .book3D)
+        XCTAssertEqual(StoryPresentationStyle(stored: "unknown"), .classic)
     }
 
     func testJournalEnvelopeDecodes() throws {

@@ -25,7 +25,7 @@ import {
   videoPosterUrl,
   type ReaderRead,
 } from "./journeyReaderMedia";
-import type { JourneyBookOpenTarget } from "./JourneyBook";
+import type { JourneyBookOpenTarget } from "./journeyBookPages";
 import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import { canStartStreamPointer, streamPointerHasLostCapture, streamSwipeDirection, STREAM_NATIVE_INPUT } from "./journeyStreamInput";
 import { withStillFragment, type VideoStill } from "./videoStillFrame";

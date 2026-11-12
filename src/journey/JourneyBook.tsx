@@ -30,6 +30,7 @@ import {
   journeyBookPageRoutePointId,
   journeyBookPages,
   journeyBookStartPage,
+  type JourneyBookOpenTarget,
   type JourneyBookPage,
 } from "./journeyBookPages";
 import {
@@ -76,8 +77,6 @@ const FLICK_PX = 40;
 const VIDEO_CONTROLS_BAND_PX = 52;
 
 type VideoBox = { left: number; top: number; width: number; height: number };
-
-export type JourneyBookOpenTarget = { routePointId: string | null; assetId: string | null };
 
 function journeyRange(journey: Journey) {
   return journey.endedOn && journey.endedOn !== journey.startedOn
