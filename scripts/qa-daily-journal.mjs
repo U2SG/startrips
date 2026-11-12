@@ -118,7 +118,7 @@ try {
     const errors=[]; page.on("pageerror", e => errors.push(e.message));
     await page.goto(`${origin}/${output}/index.html`);
     await page.getByRole("button",{name:"导入手记",exact:true}).click();
-    const source="2027-04-03\n23:30 她出发\n18:20 她抵达\n计划公园取消\n待确认：她记下海面反光。\n起床：未记录\\\n航班号未记录，但我们顺利抵达。\n计划：查看虚构公园\n" + "她记下沿途所见。".repeat(120);
+    const source="2027-04-03\n23:30 她出发\n18:20 她抵达\n计划公园取消\n待确认：她记下海面反光。\n起床：未记录\\\n航班号未记录，但我们顺利抵达。\n计划：查看虚构公园\n- 19:06（当地）实际：从旅馆出发。\n" + "她记下沿途所见。".repeat(120);
     assert.equal(await page.getByRole("button",{name:"生成导入预览"}).count(),0);
     assert.equal(await page.getByRole("button",{name:"用 AI 整理原文"}).count(),0);
     // Hold a fictional job to prove double clicks do not submit twice and Stop does not save.
@@ -178,7 +178,7 @@ try {
     assert.equal(await summary.evaluate(el=>el===document.activeElement),true);
     await page.keyboard.press("Space");
     await prose.waitFor();
-    for (const text of ["她记下海面反光。", "航班号未记录，但我们顺利抵达。", "计划公园取消"]) {
+    for (const text of ["她记下海面反光。", "航班号未记录，但我们顺利抵达。", "计划公园取消", "19:06（当地） 从旅馆出发。"]) {
       await journal.getByText(text,{exact:true}).waitFor();
     }
     assert.doesNotMatch(await journal.innerText(),/待确认|起床|查看虚构公园|已取消|实际：/);
