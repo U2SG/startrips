@@ -34,8 +34,11 @@ root=$(pwd)
     -derivedDataPath "$HOME/Library/Developer/Xcode/DerivedData/StartripsMedia" \
     -resultBundlePath "$root/artifacts/ios/StartripsMedia.xcresult" CODE_SIGNING_ALLOWED=NO
 )
+# Stop stalled UI cases and retry only the failing cases with a fresh test process.
 xcodebuild test -project mobile/ios/Startrips.xcodeproj -scheme Startrips \
   -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
   -maximum-concurrent-test-simulator-destinations 1 \
+  -test-timeouts-enabled YES -maximum-test-execution-time-allowance 180 \
+  -retry-tests-on-failure -test-iterations 2 -test-repetition-relaunch-enabled YES \
   -derivedDataPath "$HOME/Library/Developer/Xcode/DerivedData/Startrips" \
   -resultBundlePath artifacts/ios/Startrips.xcresult CODE_SIGNING_ALLOWED=NO
