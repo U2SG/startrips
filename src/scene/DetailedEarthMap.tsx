@@ -13,10 +13,10 @@ import { RouteCandidateEditor } from "./RouteCandidateEditor";
 import { recordedTrackLodConstructionCount } from "../journey/journeyModel";
 import {
   createDetailedEarthLabelExpression,
-  DEFAULT_DETAILED_EARTH_STYLE_URL,
   DETAILED_EARTH_DRAG_PAN_OPTIONS,
   getDetailedEarthRouteFrame,
   getDetailedEarthFocusDuration,
+  isFiordDetailedEarthStyle,
   pickDetailedEarthJourneyRoutePointHit,
   resolveDetailedEarthRenderedRoutePointHit,
   selectDetailedEarthJourneyOverlayLod,
@@ -1464,7 +1464,8 @@ export default function DetailedEarthMap({
   }, [diveOwner]);
 
   useEffect(() => {
-    if (!mapInstance || diveOwner !== "detail" || getDetailedEarthStyle() !== DEFAULT_DETAILED_EARTH_STYLE_URL) return;
+    if (!mapInstance || diveOwner !== "detail"
+      || !isFiordDetailedEarthStyle(getDetailedEarthStyle(), window.location.href)) return;
     // DEM requests start after the visual handoff, independently of its readiness.
     const installTerrain = () => installFiordTerrain(mapInstance);
     if (mapInstance.getLayer("water")) {
