@@ -224,14 +224,20 @@ final class AtlasSession: ObservableObject {
     private func credentials(for url: URL) async -> [String: String] {
         if let guestToken { return ["Authorization": "Bearer \(guestToken)"] }
         let cookies = await cookieStore.httpCookieStore.allCookies()
-        let matching = cookies.filter { cookie in
-            let domain = cookie.domain.hasPrefix(".") ? String(cookie.domain.dropFirst()) : cookie.domain
-            let host = url.host ?? ""
-            let matchesPath = url.path == cookie.path || url.path.hasPrefix(cookie.path.hasSuffix("/") ? cookie.path : cookie.path + "/")
-            return (host == domain || (cookie.domain.hasPrefix(".") && host.hasSuffix("." + domain)))
-                && matchesPath && (cookie.expiresDate.map { $0 > Date() } ?? true)
-        }
-        return HTTPCookie.requestHeaderFields(with: matching)
+        let now = Date()
+        return HTTPCookie.requestHeaderFields(with: cookies.filter { Self.cookie($0, matches: url, at: now) })
+    }
+
+    /// RFC 6265 domain/path/expiry match. A bare origin's empty path is "/": without
+    /// that, the launch-time restore check (`hasOwnerCredentials`, which asks with the
+    /// bare origin) never matched a `Path=/` session and every launch showed the welcome screen.
+    static func cookie(_ cookie: HTTPCookie, matches url: URL, at now: Date) -> Bool {
+        let domain = cookie.domain.hasPrefix(".") ? String(cookie.domain.dropFirst()) : cookie.domain
+        let host = (url.host ?? "").lowercased()
+        let path = url.path.isEmpty ? "/" : url.path
+        let matchesPath = path == cookie.path || path.hasPrefix(cookie.path.hasSuffix("/") ? cookie.path : cookie.path + "/")
+        return (host == domain.lowercased() || (cookie.domain.hasPrefix(".") && host.hasSuffix("." + domain.lowercased())))
+            && matchesPath && (cookie.expiresDate.map { $0 > now } ?? true)
     }
 
     private func perform(_ url: URL, method: String, body: Data?, headers: [String: String]) async throws -> Data {
