@@ -220,13 +220,33 @@ final class StreamFlowTests: XCTestCase {
 
     // MARK: Videos, tempo and relayout
 
-    /// A video beat's clock holds (the clip owns completion); the stream follows the clip instead.
-    func testVideoBeatsFlowWithTheClipNotTheHeldClock() {
-        XCTAssertEqual(StreamFlow.videoSchedule(beatStartMS: 10_000, durationMS: 6000, progress: 0.5, sampledMS: 10_000), 13_000)
-        XCTAssertEqual(StreamFlow.videoSchedule(beatStartMS: 10_000, durationMS: 6000, progress: 1.4, sampledMS: 10_000), 16_000)
-        XCTAssertEqual(StreamFlow.videoSchedule(beatStartMS: 10_000, durationMS: 6000, progress: nil, sampledMS: 10_000), 10_000,
-                       "not started yet: hold at the row")
-        XCTAssertEqual(StreamFlow.videoSchedule(beatStartMS: 10_000, durationMS: 6000, progress: .nan, sampledMS: 10_000), 10_000)
+    /// While a video plays the flow pauses in place: one glide to show the row, then zero drift.
+    func testVideoRowsHoldTheFlowInPlace() {
+        let viewport: CGFloat = 700
+        // A 400pt row is centred: offset = 1000 + 200 - 350 = 850, reading = offset + 0.3 * viewport.
+        XCTAssertEqual(StreamFlow.videoHold(row: 1000...1400, viewport: viewport, current: 0), 850 + 210)
+        // A row taller than the viewport is top-aligned with a margin.
+        XCTAssertEqual(StreamFlow.videoHold(row: 1000...2000, viewport: viewport, current: 0), 984 + 210)
+        // Never back up the thread while playing.
+        XCTAssertEqual(StreamFlow.videoHold(row: 1000...1400, viewport: viewport, current: 5000), 5000)
+
+        var follower = StreamFollower(position: 700, velocity: 150)
+        let hold = StreamFlow.videoHold(row: 1000...1400, viewport: viewport, current: follower.position)
+        var positions: [CGFloat] = []
+        for _ in 0..<(60 * 30) {                       // a 30s clip
+            follower.step(ahead: hold, dt: 1.0 / 60)
+            follower.settle(at: hold)
+            positions.append(follower.position)
+        }
+        XCTAssertEqual(positions.last, hold)
+        let settled = positions.firstIndex(of: hold)!
+        XCTAssertLessThan(settled, 60 * 5, "the glide into place takes a few seconds at most")
+        XCTAssertTrue(positions[settled...].allSatisfy { $0 == hold }, "zero drift for the rest of the clip")
+        XCTAssertTrue(zip(positions, positions.dropFirst()).allSatisfy { $0 <= $1 }, "the glide only moves forward")
+        XCTAssertEqual(follower.velocity, 0)
+        // When the clip ends the even flow resumes toward the next row.
+        follower.step(ahead: hold + 600 * StreamFollower.lead, dt: 1.0 / 60)
+        XCTAssertGreaterThan(follower.velocity, 0)
     }
 
     /// 沉浸 < 标准 < 轻快 in speed: the same rows are crossed over proportionally longer/shorter

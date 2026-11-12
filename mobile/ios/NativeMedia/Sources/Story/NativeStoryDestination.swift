@@ -36,6 +36,17 @@ public struct NativeStoryDestination: View {
             if let flag = arguments.firstIndex(of: "-story-tempo"), arguments.indices.contains(flag + 1),
                let tempo = NarrativeTempo(rawValue: arguments[flag + 1]) { model.changeTempo(tempo) }
             if arguments.contains("-story-autoplay") { model.playJourney() }
+            // "15:fast,30:immersive": the tempo menu's own action at those seconds.
+            if let flag = arguments.firstIndex(of: "-story-tempo-at"), arguments.indices.contains(flag + 1) {
+                for step in arguments[flag + 1].split(separator: ",") {
+                    let parts = step.split(separator: ":")
+                    guard parts.count == 2, let seconds = Double(parts[0]), let tempo = NarrativeTempo(rawValue: String(parts[1])) else { continue }
+                    Task { @MainActor [model] in
+                        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                        model.changeTempo(tempo)
+                    }
+                }
+            }
             #endif
         }
         .onDisappear { model.disappear() }

@@ -17,15 +17,14 @@ final class StreamFlowDriver: NSObject, ObservableObject {
         /// The row the first knot belongs to: if its y moves while it stays the anchor, the
         /// content above it was re-laid out.
         var anchor: String? = nil
-        /// A video beat flows with the clip's own progress.
-        var videoBeat: (startMS: Double, durationMS: Double)? = nil
+        /// A video beat: the flow glides once to show this row, then holds while the clip plays.
+        var videoRow: ClosedRange<CGFloat>? = nil
         static func == (lhs: Sample, rhs: Sample) -> Bool {
             lhs.beat == rhs.beat && lhs.scheduleMS == rhs.scheduleMS && lhs.paused == rhs.paused
                 && lhs.knots == rhs.knots && lhs.anchor == rhs.anchor
         }
     }
-    /// Read per frame during a video beat.
-    var videoProgress: (() -> Double?)?
+
 
     weak var scrollView: UIScrollView?
     var onTakeover: (() -> Void)?
@@ -40,12 +39,6 @@ final class StreamFlowDriver: NSObject, ObservableObject {
     private var lastOffset: CGFloat?
     #if DEBUG
     private var frameCount = 0
-    private lazy var timing: FileHandle? = {
-        guard ProcessInfo.processInfo.arguments.contains("-stream-timing") else { return nil }
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent("stream-timing.log")
-        if !FileManager.default.fileExists(atPath: file.path) { FileManager.default.createFile(atPath: file.path, contents: nil) }
-        let handle = try? FileHandle(forWritingTo: file); handle?.seekToEndOfFile(); return handle
-    }()
     #endif
 
     var attached: Bool { scrollView != nil }
@@ -82,7 +75,7 @@ final class StreamFlowDriver: NSObject, ObservableObject {
 
     private func log(_ line: String) {
         #if DEBUG
-        timing?.write(Data(String(format: "%@ t=%.3f\n", line, CACurrentMediaTime()).utf8))
+        StreamTimingLog.write(String(format: "%@ t=%.3f", line, CACurrentMediaTime()))
         #endif
     }
 
@@ -119,15 +112,18 @@ final class StreamFlowDriver: NSObject, ObservableObject {
         } else {
             // Between 50ms clock samples the timeline advances with the display, never more
             // than maxLead ahead of a clock that is waiting for a picture.
-            var time = sample.scheduleMS + min(max(0, (now - sampledAt) * 1000), StreamFlow.maxLeadMS)
-            if let video = sample.videoBeat {
-                time = StreamFlow.videoSchedule(beatStartMS: video.startMS, durationMS: video.durationMS,
-                                                progress: videoProgress?(), sampledMS: video.startMS)
-            }
-            guard let ahead = StreamFlow.scheduled(sample.knots, at: time + StreamFollower.lead * 1000) else { return }
+            let time = sample.scheduleMS + min(max(0, (now - sampledAt) * 1000), StreamFlow.maxLeadMS)
             var follower = self.follower ?? StreamFollower(position: start)
+            let ahead: CGFloat
+            if let row = sample.videoRow {
+                ahead = StreamFlow.videoHold(row: row, viewport: viewport, current: seeking ? -.infinity : follower.position)
+            } else {
+                guard let scheduled = StreamFlow.scheduled(sample.knots, at: time + StreamFollower.lead * 1000) else { return }
+                ahead = scheduled
+            }
             let dt = min(0.05, max(0, now - (lastFrame ?? now)))
             follower.step(ahead: ahead, dt: dt, catchUp: seeking)
+            if sample.videoRow != nil { follower.settle(at: ahead) }
             if seeking && abs(ahead - follower.position) < 4 { seeking = false }
             self.follower = follower
             reading = follower.position
@@ -145,15 +141,35 @@ final class StreamFlowDriver: NSObject, ObservableObject {
         if abs(scrollView.contentOffset.y - y) > 0.01 { scrollView.contentOffset.y = y }
         #if DEBUG
         frameCount += 1
-        if let timing, frameCount % 6 == 0 {
+        if StreamTimingLog.enabled, frameCount % 6 == 0 {
             let knots = sample.knots.map { String(format: "%.0f@%.0f", $0.y, $0.time) }.joined(separator: ",")
-            timing.write(Data(String(format: "FRAME t=%.3f beat=%d schedule=%.0f reading=%.1f offset=%.1f content=%.0f seek=%d video=%d knots=%@\n",
-                                     now, sample.beat, sample.scheduleMS, reading, y, scrollView.contentSize.height,
-                                     seeking ? 1 : 0, sample.videoBeat == nil ? 0 : 1, knots).utf8))
+            StreamTimingLog.write(String(format: "FRAME t=%.3f beat=%d schedule=%.0f reading=%.1f offset=%.1f content=%.0f seek=%d video=%d knots=%@",
+                                         now, sample.beat, sample.scheduleMS, reading, y, scrollView.contentSize.height,
+                                         seeking ? 1 : 0, sample.videoRow == nil ? 0 : 1, knots))
         }
         #endif
     }
 }
+
+#if DEBUG
+/// One shared `-stream-timing` log (one handle, always appended), so model and driver events
+/// interleave instead of overwriting each other. Every line carries the same media-time clock.
+@MainActor
+enum StreamTimingLog {
+    static let enabled = ProcessInfo.processInfo.arguments.contains("-stream-timing")
+    private static let handle: FileHandle? = {
+        guard enabled else { return nil }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("stream-timing.log")
+        if !FileManager.default.fileExists(atPath: file.path) { FileManager.default.createFile(atPath: file.path, contents: nil) }
+        return try? FileHandle(forWritingTo: file)
+    }()
+    static func write(_ line: String) {
+        guard let handle else { return }
+        handle.seekToEndOfFile()
+        handle.write(Data((line + "\n").utf8))
+    }
+}
+#endif
 
 private extension CGFloat {
     func rounded(toPixelsOf view: UIView) -> CGFloat {

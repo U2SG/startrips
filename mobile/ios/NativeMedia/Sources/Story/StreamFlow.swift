@@ -182,13 +182,20 @@ struct StreamFollower: Equatable {
     /// content under the reader moved by `delta`, so the reading position moves with it.
     /// This keeps the view still instead of letting the relayout read as a jump.
     mutating func shift(by delta: CGFloat) { position += delta }
+
+    /// Holding: once within half a point of the target, stop exactly (zero drift).
+    mutating func settle(at target: CGFloat) {
+        if abs(target - position) < 0.5 && abs(velocity) < 8 { position = max(position, target); velocity = 0 }
+    }
 }
 
 extension StreamFlow {
-    /// Timeline position during a video beat: the clip's own progress, not the clock (which
-    /// holds while the video owns its completion), so the flow keeps moving as the video plays.
-    static func videoSchedule(beatStartMS: Double, durationMS: Double, progress: Double?, sampledMS: Double) -> Double {
-        guard let progress, progress.isFinite else { return sampledMS }
-        return beatStartMS + max(0, durationMS) * min(1, max(0, progress))
+    /// While a video plays the flow pauses in place: the reading position that shows the video
+    /// row fully, centred in the viewport (top-aligned with a margin when it is taller), never
+    /// above `current` (playing never runs back up the thread).
+    static func videoHold(row: ClosedRange<CGFloat>, viewport: CGFloat, current: CGFloat, margin: CGFloat = 16) -> CGFloat {
+        let height = row.upperBound - row.lowerBound
+        let offset = height + 2 * margin > viewport ? row.lowerBound - margin : row.lowerBound + height / 2 - viewport / 2
+        return max(current, offset + viewport * readingLine)
     }
 }

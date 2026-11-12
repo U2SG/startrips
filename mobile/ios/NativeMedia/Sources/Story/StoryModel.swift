@@ -1,5 +1,6 @@
 import AVFoundation
 import Combine
+import QuartzCore
 import Foundation
 import ImageIO
 import UIKit
@@ -127,9 +128,7 @@ import UIKit
             if ProcessInfo.processInfo.arguments.contains("-stream-timing") {
                 let line = String(format: "STREAMLOAD %@ rank=%d total=%.0fms at=%.3f playbackIndex=%d\n", asset.id, rank,
                                   Date().timeIntervalSince(requested) * 1000, Date().timeIntervalSince1970, self.playback?.index ?? -1)
-                let file = FileManager.default.temporaryDirectory.appendingPathComponent("stream-timing.log")
-                if let handle = try? FileHandle(forWritingTo: file) { handle.seekToEndOfFile(); handle.write(Data(line.utf8)); try? handle.close() }
-                else { try? Data(line.utf8).write(to: file) }
+                StreamTimingLog.write(line.trimmingCharacters(in: .newlines))
             }
             #endif
             self.library[asset.id] = image
@@ -211,12 +210,24 @@ import UIKit
         }
     }
     public func changeTempo(_ value: NarrativeTempo) {
+        #if DEBUG
+        if let clock = playback, let beat = clock.current {
+            Self.timingLog(String(format: "TEMPO %@->%@ beat=%d id=%@ fraction=%.3f", tempo.rawValue, value.rawValue, clock.index,
+                                  beat.id, beat.durationMS > 0 ? clock.elapsedMS / beat.durationMS : 0))
+        }
+        #endif
         tempo = value
         playback?.changeTempo(to: JourneyPlaybackPlan.build(journey, tempo: value))
     }
     public func skip(_ direction: Int) {
         guard playback != nil else { select(cursor.index + direction); return }
+        #if DEBUG
+        let from = playback?.index ?? -1
+        #endif
         playback?.nextMeaningful(direction); activateBeat()
+        #if DEBUG
+        Self.timingLog("SEEKSOURCE button direction=\(direction) beat=\(from)->\(playback?.index ?? -1)")
+        #endif
     }
     private func startClock() {
         clockTask?.cancel()
@@ -272,8 +283,7 @@ import UIKit
                     if ProcessInfo.processInfo.arguments.contains("-stream-timing"), let beat = self.playback?.current {
                         let waited = String(format: "BEAT %d asset=%@ ready=%@ at=%.3f\n", self.playback?.index ?? -1, beat.asset?.id ?? "-",
                                             beat.asset.map { self.image(for: $0.id) != nil ? "yes" : "NO" } ?? "n/a", Date().timeIntervalSince1970)
-                        let file = FileManager.default.temporaryDirectory.appendingPathComponent("stream-timing.log")
-                        if let handle = try? FileHandle(forWritingTo: file) { handle.seekToEndOfFile(); handle.write(Data(waited.utf8)); try? handle.close() }
+                        StreamTimingLog.write(waited.trimmingCharacters(in: .newlines))
                     }
                     #endif
                     self.activateBeat()
@@ -405,11 +415,7 @@ import UIKit
 
     #if DEBUG
     static func timingLog(_ line: String) {
-        guard ProcessInfo.processInfo.arguments.contains("-stream-timing") else { return }
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent("stream-timing.log")
-        let data = Data(String(format: "%@ at=%.3f\n", line, Date().timeIntervalSince1970).utf8)
-        if let handle = try? FileHandle(forWritingTo: file) { handle.seekToEndOfFile(); handle.write(data); try? handle.close() }
-        else { try? data.write(to: file) }
+        StreamTimingLog.write(String(format: "%@ t=%.3f", line, CACurrentMediaTime()))
     }
     #endif
 

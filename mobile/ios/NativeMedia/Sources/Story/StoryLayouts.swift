@@ -315,9 +315,10 @@ struct StoryStream: View {
         // Only a measured row can tell a relayout apart from a refined estimate.
         let here = StreamFlow.row(for: beat, in: entries)
         let anchor = here.flatMap { frames[$0] != nil ? entries[$0].id : nil }
-        driver.videoProgress = { [weak model] in model?.videoProgress }
+        // A playing video row holds the flow in place (its frame must be laid out to do so).
+        let videoRow = beat.asset?.isVideo == true ? here.flatMap { frames[$0] } : nil
         driver.update(.init(beat: clock.index, scheduleMS: start + clock.elapsedMS, paused: model.paused, knots: knots,
-                            anchor: anchor, videoBeat: beat.asset?.isVideo == true ? (start, beat.durationMS) : nil))
+                            anchor: anchor, videoRow: videoRow))
     }
 
     private func point(_ id: String?) -> MediaRoutePoint? { id.flatMap { id in model.journey.routePoints.first { $0.id == id } } }
