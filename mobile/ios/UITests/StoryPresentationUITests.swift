@@ -79,11 +79,12 @@ final class StoryPresentationUITests: XCTestCase {
         XCTAssertFalse(app.buttons["story.tools"].exists)
         let book = app.webViews.containing(.button, identifier: "目录").firstMatch
         let next = book.buttons["下一页"]
-        let first = book.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "synthetic.jpg")).firstMatch
+        XCTAssertTrue(next.waitForExistence(timeout: 20), "The bundled book must open before loading pictures")
+        let first = book.images["synthetic.jpg"].firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 15))
         capture(app, "story-style-3d-book")
         next.tap()
-        let second = book.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "second.png")).firstMatch
+        let second = book.images["second.png"].firstMatch
         XCTAssertTrue(second.waitForExistence(timeout: 10))
 
         XCUIDevice.shared.orientation = .landscapeLeft

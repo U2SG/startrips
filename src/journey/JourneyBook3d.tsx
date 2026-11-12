@@ -733,6 +733,21 @@ export function JourneyBook3dReader({
     });
   }, [currentPage, journey, onObservationChange]);
   const returnPage = embedded ? journeyBookPageForReturn(pages, face, visibleFaces) : undefined;
+  const currentPicture = returnPage?.kind === "media" && pictures[returnPage.asset.id]?.status === "ready"
+    ? returnPage.asset.fileName : null;
+  useEffect(() => {
+    const canvas = sceneRef.current?.renderer.domElement;
+    if (!embedded || !canvas) return;
+    if (settled && currentPicture) {
+      canvas.removeAttribute("aria-hidden");
+      canvas.setAttribute("role", "img");
+      canvas.setAttribute("aria-label", currentPicture);
+    } else {
+      canvas.setAttribute("aria-hidden", "true");
+      canvas.removeAttribute("role");
+      canvas.removeAttribute("aria-label");
+    }
+  }, [embedded, currentPicture, settled, reduced]);
   useEffect(() => {
     if (embedded && returnPage && settled) embedded.position(returnPage);
   }, [returnPage, embedded, settled]);
@@ -935,8 +950,6 @@ export function JourneyBook3dReader({
       onClick={() => setTocOpen((value) => !value)}
     ><IconLayoutList size={19} stroke={1.35} aria-hidden="true" /></button>
   );
-  const currentPicture = returnPage?.kind === "media" && pictures[returnPage.asset.id]?.status === "ready"
-    ? returnPage.asset.fileName : null;
   const embeddedScene = embedded && settled && !failure ? sceneRef.current : null;
 
   return (
@@ -1078,7 +1091,7 @@ export function JourneyBook3dReader({
         ><IconArrowRight size={18} stroke={1.35} aria-hidden="true" /></button>
         {embedded ? <div className="journey-book-3d__embedded-toc">{tocButton}</div> : null}
       </footer>
-      <p className="journey-book-3d__readable" aria-live="polite">{settled ? [readable, embedded ? currentPicture : null].filter(Boolean).join("。") : ""}</p>
+      <p className="journey-book-3d__readable" aria-live="polite">{settled ? readable : ""}</p>
       {fullNote !== null ? (
         <div className="journey-book-3d__note-sheet" role="dialog" aria-label="感想全文" onClick={() => setFullNote(null)}>
           <div onClick={(event) => event.stopPropagation()}>
