@@ -41,6 +41,12 @@ final class AtlasSession: ObservableObject {
     @Published private(set) var mediaJourneys: [String: MediaJourney] = [:]
     private(set) var generation = UUID()
     private var refreshID = UUID()
+    /// One get-session per short window instead of one per media request (auth rate limit).
+    let verification = VerificationCache()
+    #if DEBUG
+    /// Unit tests count requests through a stub URLProtocol; never set in the app.
+    static var testProtocolClasses: [AnyClass] = []
+    #endif
     @Published private(set) var cookieStore = WKWebsiteDataStore.nonPersistent()
 
     #if DEBUG
@@ -154,6 +160,7 @@ final class AtlasSession: ObservableObject {
     }
 
     func disconnect() {
+        verification.invalidate()
         activeIdentity = nil; mediaJourneys = [:]
         generation = UUID(); refreshID = UUID(); origin = nil; guestToken = nil; busy = false
         cookieStore = .nonPersistent()
@@ -252,10 +259,14 @@ final class AtlasSession: ObservableObject {
         }
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false; config.httpCookieStorage = nil; config.urlCredentialStorage = nil
+        #if DEBUG
+        if !Self.testProtocolClasses.isEmpty { config.protocolClasses = Self.testProtocolClasses + (config.protocolClasses ?? []) }
+        #endif
         let transport = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
         defer { transport.finishTasksAndInvalidate() }
         let (data, response) = try await transport.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if status == 429 { throw RateLimited(retryAfter: RateLimited.retryAfter(response as? HTTPURLResponse)) }
         guard (200..<300).contains(status) else { throw MediaFailure.http(status) }
         return data
     }
@@ -276,14 +287,30 @@ final class AtlasSession: ObservableObject {
         let headers = await credentials(for: url)
         guard ticket == generation else { throw MediaFailure.accessChanged }
         // Reuse exactly the credentials verified here for this operation, including writes.
+        // The identity behind these credentials is verified once per short window and shared.
         if let scope, !guest {
-            let loginData = try await perform(origin.appendingPathComponent("api/auth/get-session"), method: "GET", body: nil, headers: headers)
-            let login = try JSONDecoder().decode(Login.self, from: loginData)
-            guard try login.identity(at: origin) == scope, ticket == generation, activeIdentity == scope else { throw MediaFailure.accessChanged }
+            let verified = try await verifiedIdentity(origin: origin, headers: headers, ticket: ticket)
+            guard verified == scope, ticket == generation, activeIdentity == scope else { throw MediaFailure.accessChanged }
         }
-        let data = try await perform(url, method: method, body: body, headers: headers)
+        let data = method == "GET"
+            ? try await retryOnRateLimit { try await self.perform(url, method: method, body: body, headers: headers) }
+            : try await perform(url, method: method, body: body, headers: headers)
         guard ticket == generation, scope == nil || scope == activeIdentity else { throw MediaFailure.accessChanged }
         return data
+    }
+
+    /// Coalesced, short-lived get-session verification for these exact credentials.
+    private func verifiedIdentity(origin: URL, headers: [String: String], ticket: UUID) async throws -> String {
+        let url = origin.appendingPathComponent("api/auth/get-session")
+        do {
+            return try await verification.identity(for: .init(generation: ticket, credential: VerificationCache.credential(headers))) {
+                let data = try await retryOnRateLimit { try await self.perform(url, method: "GET", body: nil, headers: headers) }
+                guard let login = try JSONDecoder().decode(Login?.self, from: data) else { throw SessionFailure.unavailable(401) }
+                return try login.identity(at: origin)
+            }
+        } catch MediaFailure.http(let status) where status == 401 {
+            verification.invalidate(); throw SessionFailure.unavailable(401)
+        }
     }
 
     func revalidate(_ scope: String) async throws {
@@ -293,12 +320,18 @@ final class AtlasSession: ObservableObject {
         #endif
         let ticket = generation
         if guestToken != nil {
-            _ = try await api("/api/shared/journeys", method: "GET", body: nil, scope: scope)
+            // A share is re-checked at most once per window, not before and after every picture.
+            _ = try await verification.identity(for: .init(generation: ticket, credential: "guest")) {
+                _ = try await self.api("/api/shared/journeys", method: "GET", body: nil, scope: scope)
+                return scope
+            }
         } else {
             guard let origin else { throw MediaFailure.accessChanged }
-            let data = try await read("/api/auth/get-session")
-            let login = try JSONDecoder().decode(Login.self, from: data)
-            guard try login.identity(at: origin) == scope else { throw MediaFailure.accessChanged }
+            let headers = await credentials(for: origin.appendingPathComponent("api/auth/get-session"))
+            guard ticket == generation else { throw MediaFailure.accessChanged }
+            guard try await verifiedIdentity(origin: origin, headers: headers, ticket: ticket) == scope else {
+                throw MediaFailure.accessChanged
+            }
         }
         guard ticket == generation, activeIdentity == scope else { throw MediaFailure.accessChanged }
     }
@@ -412,6 +445,8 @@ final class AtlasSession: ObservableObject {
                            earthExperience: preference, mediaJourneys: projected)
         } catch {
             guard generation == request && refreshID == observation else { return }
+            // Rate limiting is a pause, not a broken Atlas: keep what is installed and try later.
+            if error is RateLimited && router.installed { return }
             activeIdentity = nil; mediaJourneys = [:]
             router.clear()
             if !isGuest, case SessionFailure.unavailable(401) = error { signInRequired = true }

@@ -70,17 +70,25 @@ import UIKit
     /// Pixel size of a picture as soon as its display read answers, before its bytes arrive.
     @Published public private(set) var displaySizes: [String: CGSize] = [:]
     static let libraryLimit = 16
+    /// At most this many picture reads at once; the rest wait their turn (server rate limits).
+    static let libraryConcurrency = 3
+    private var libraryQueue: [MediaAsset] = []
 
     /// Prefetches and pre-decodes upcoming pictures (stream lookahead). Bounded by the library cache.
     public func prefetchLibrary(_ assets: [MediaAsset]) { assets.forEach(requestLibraryImage) }
 
     public func requestLibraryImage(_ asset: MediaAsset) {
         guard !closed, !asset.isVideo, library[asset.id] == nil, images[asset.id] == nil, libraryTasks[asset.id] == nil,
+              !libraryQueue.contains(where: { $0.id == asset.id }),
               journey.media.contains(where: { $0.id == asset.id }) else { return }
+        guard libraryTasks.count < Self.libraryConcurrency else { libraryQueue.append(asset); return }
         let ticket = libraryEpoch
         libraryTasks[asset.id] = Task { [weak self] in
             guard let self else { return }
-            defer { if ticket == self.libraryEpoch && !Task.isCancelled { self.libraryTasks[asset.id] = nil } }
+            defer {
+                if ticket == self.libraryEpoch && !Task.isCancelled { self.libraryTasks[asset.id] = nil }
+                if ticket == self.libraryEpoch { self.pumpLibraryQueue() }
+            }
             guard let image = try? await self.loadImage(asset, maxPixel: 1600, display: true),
                   !Task.isCancelled, ticket == self.libraryEpoch, !self.closed,
                   self.journey.media.contains(where: { $0.id == asset.id }) else { return }
@@ -89,10 +97,19 @@ import UIKit
             while self.libraryOrder.count > Self.libraryLimit { self.library[self.libraryOrder.removeFirst()] = nil }
         }
     }
-    public func cancelLibraryImage(_ assetID: String) { libraryTasks.removeValue(forKey: assetID)?.cancel() }
+    public func cancelLibraryImage(_ assetID: String) {
+        libraryQueue.removeAll { $0.id == assetID }
+        libraryTasks.removeValue(forKey: assetID)?.cancel()
+        pumpLibraryQueue()
+    }
+    private func pumpLibraryQueue() {
+        while libraryTasks.count < Self.libraryConcurrency, !libraryQueue.isEmpty {
+            requestLibraryImage(libraryQueue.removeFirst())
+        }
+    }
     public func image(for assetID: String) -> UIImage? { images[assetID] ?? library[assetID] }
     private func clearLibrary() {
-        libraryEpoch += 1; libraryTasks.values.forEach { $0.cancel() }; libraryTasks.removeAll()
+        libraryEpoch += 1; libraryTasks.values.forEach { $0.cancel() }; libraryTasks.removeAll(); libraryQueue.removeAll()
         library.removeAll(); libraryOrder.removeAll()
     }
     /// Owner-only, read-only, and silent on failure: the stream simply omits the journal.
