@@ -78,6 +78,13 @@ export type JourneyStreamJournalDay = { date: string; chapters: JournalReadingCh
 
 const journalStatusPrefix = /^(?:[【\[（(]\s*(实际(?:发生)?|计划|(?:已)?取消|(?:状态)?待确认|(?:状态)?未确认|未核实|待核实|未记录)\s*[】\]）)]\s*[：:]?|(实际(?:发生)?|计划|(?:已)?取消|(?:状态)?待确认|(?:状态)?未确认|未核实|待核实|未记录)\s*[：:])\s*/u;
 const journalStatusSuffix = /\s*[（(]\s*(?:(?:状态)?(?:待确认|未确认)|未核实|待核实|未记录)\s*[）)]$/u;
+const journalClock = String.raw`(?:[01]?\d|2[0-3]):[0-5]\d`;
+const journalPartOfDay = "凌晨|清晨|早上|上午|中午|午后|下午|傍晚|晚间|晚上|夜间|日落";
+// Older imports can put the status after the time or a short context label.
+const journalStatusContext = new RegExp(
+  String.raw`^(?:${journalClock}(?:\s*[-–—~～至]\s*${journalClock})?|(?:${journalPartOfDay})(?:至(?:${journalPartOfDay}))?|途中|随后|原定|早餐|午餐|晚餐|购物|停车|[\p{Script=Han}]{1,6}[里内外])(?:左右|前后|前|后)?(?:\s*[（(][^）)\r\n]{1,20}[）)])?\s*`,
+  "u",
+);
 const journalMissingLine = /^(?:[\p{L}\p{N}、/]{1,8}\s*[：:]\s*|(?:状态|日期|时间|时区|地点|位置|住宿|酒店|交通|餐饮|天气|行程|活动|备注)\s*)?[【\[（(]?\s*(?:暂无记录|无记录|未提及|未注明|不详|(?:尚)?未(?:确认|核实|记录|填写|提供|标注|关联)|待(?:确认|核实|补充)|无)\s*[】\]）)]?[。.!！…]*$/u;
 const journalCancellationNarrative = /取消|改签|改期|改去|改走|改道|(?:没|未)(?:去成|能去|赶上)|不去了/u;
 
@@ -91,14 +98,16 @@ function journalReadingText(value: string, status?: JournalEvent["status"]): str
     const clean = cleanJournalLine(line);
     if (!clean) return [""];
     const content = clean.replace(/^(?:[-*•]|\d+[.)])\s+/, "");
-    const marker = content.match(journalStatusPrefix);
+    const context = content.match(journalStatusContext)?.[0] ?? "";
+    const afterContext = content.slice(context.length);
+    const marker = afterContext.match(journalStatusPrefix);
     const label = marker?.[1] ?? marker?.[2];
-    const prose = (marker ? content.slice(marker[0].length) : clean).replace(journalStatusSuffix, "");
+    const prose = (marker ? afterContext.slice(marker[0].length) : clean).replace(journalStatusSuffix, "");
     if (!prose || label === "计划" || /^(?:实际(?:发生)?|计划|(?:已)?取消)$/.test(prose)) return [];
     if ((label === "取消" || label === "已取消") && !journalCancellationNarrative.test(prose)) return [];
-    return journalMissingLine.test(prose.replace(/^(?:[-*•]|\d+[.)])\s+/, "").replace(/\*\*/g, ""))
-      ? []
-      : [prose];
+    if (journalMissingLine.test(prose.replace(/^(?:[-*•]|\d+[.)])\s+/, "").replace(/\*\*/g, ""))) return [];
+    const prefix = marker ? context.trim().replace(journalStatusSuffix, "") : "";
+    return [prefix ? `${prefix} ${prose}` : prose];
   }).join("\n").trim();
   return status === "cancelled" && !journalCancellationNarrative.test(text) ? "" : text;
 }
@@ -116,7 +125,8 @@ export function journeyStreamJournalDays(
         && linkedPoint?.placeRole === "accommodation" && isLodgingLabelLine(event.source);
       const point = event.status === "actual" || confirmedLodging ? linkedPoint : undefined;
       const text = journalReadingText(event.text.trim() || event.source, confirmedLodging ? undefined : event.status);
-      return text || point ? [{ id: event.id, text, localDate: event.localDate, localTime: event.localTime, point }] : [];
+      const localTime = event.localTime && !text.startsWith(event.localTime) ? event.localTime : null;
+      return text || point ? [{ id: event.id, text, localDate: event.localDate, localTime, point }] : [];
     });
     const source = chapter.events.length ? "" : journalReadingText(chapter.source.trim().replace(/^([^\r\n]*)(?:\r\n?|\n|$)/, (line, first: string) => (
       JOURNAL_DATE_HEADING.test(first) ? "" : line

@@ -120,6 +120,32 @@ it("groups readable chapters by date without regrouping Route media", () => {
   expect(chapters).toEqual(original);
 });
 
+it("removes legacy status tags after a clock or short context without rewriting narrative", () => {
+  const chapters = previewJournalImport([
+    "2026-08-11",
+    "- 19:06（香港）实际：从住处出发。",
+    "- 22:10左右实际：沿海散步。",
+    "- 下午至傍晚实际：在码头看日落。",
+    "- 校园里实际：看见了橡树。",
+    "- 07:30（当地）未核实：看见白鹭。",
+    "- 14:30–15:00计划：去虚构公园。",
+    "- 停车实际：未记录",
+    "朋友说她有个计划：明年再来。",
+  ].join("\n"), base.startedOn);
+  chapters[0].events[0].localTime = "19:06";
+  const [day] = journeyStreamJournalDays(chapters, new Map());
+  const { events } = day.chapters[0];
+  expect(events.map(event => event.text)).toEqual([
+    "19:06（香港） 从住处出发。",
+    "22:10左右 沿海散步。",
+    "下午至傍晚 在码头看日落。",
+    "校园里 看见了橡树。",
+    "07:30（当地） 看见白鹭。",
+    "朋友说她有个计划：明年再来。",
+  ]);
+  expect(events[0].localTime).toBeNull();
+});
+
 it("keeps an explicitly linked accommodation from older planned and uncertain imports", () => {
   const [chapter] = previewJournalImport(
     "2026-08-11\n住宿：虚构酒店\n住宿：另一间虚构酒店\n计划：看海\n住宿：未记录",
