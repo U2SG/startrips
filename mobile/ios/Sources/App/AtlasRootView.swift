@@ -157,7 +157,8 @@ struct AtlasRootView: View {
                                 label: "山谷", isStop: true, occurredAt: nil)],
                             media: []))
                     }
-                    router.install(fixtureJourneys, identity: "synthetic-ci", access: .owner, earthExperience: "default")
+                    let access: AtlasAccess = ProcessInfo.processInfo.arguments.contains("-atlas-guest-fixture") ? .guest : .owner
+                    router.install(fixtureJourneys, identity: "synthetic-ci", access: access, earthExperience: "default")
                     connected = true
                     if ProcessInfo.processInfo.arguments.contains("-atlas-stalled-probe") {
                         // Test-only: connected without an installed Atlas, the former dead end.

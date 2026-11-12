@@ -99,8 +99,12 @@ import UIKit
 
 public struct NativeMediaFeature: View {
     @StateObject private var model: NativeMediaFeatureModel
-    public init(model: NativeMediaFeatureModel) { _model = StateObject(wrappedValue: model) }
+    private let book3D: Story3DBookBuilder?
+    public init(model: NativeMediaFeatureModel, book3D: Story3DBookBuilder? = nil) {
+        _model = StateObject(wrappedValue: model)
+        self.book3D = book3D
+    }
     public var body: some View {
-        NativeStoryDestination(model: model.story, importer: model.importer, exporter: model.exporter, moveModel: model.mover)
+        NativeStoryDestination(model: model.story, importer: model.importer, exporter: model.exporter, moveModel: model.mover, book3D: book3D)
     }
 }

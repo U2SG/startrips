@@ -97,7 +97,7 @@ import { deferredSurface, whenIdle } from "./deferredSurface";
 // Loaded only when the chosen presentation uses the Journey Book or Stream.
 const JourneyBook = lazy(() => import("./JourneyBook").then((module) => ({ default: module.JourneyBook })));
 const JourneyStream = lazy(() => import("./JourneyStream").then((module) => ({ default: module.JourneyStream })));
-const JourneyBook3d = lazy(() => import("./JourneyBook3d").then((module) => ({ default: module.JourneyBook3d })));
+const JourneyBook3d = lazy(() => import("./WebJourneyBook3d").then((module) => ({ default: module.JourneyBook3d })));
 // Owner-only editing surfaces stay out of the entry chunk: they are fetched on
 // idle once the Atlas can create or edit, and render synchronously from then on.
 const { Surface: JourneyComposer, preload: preloadJourneyComposer } = deferredSurface(

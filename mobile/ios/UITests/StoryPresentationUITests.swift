@@ -125,6 +125,49 @@ final class StoryPresentationUITests: XCTestCase {
                        window.maxX - app.buttons["story.next"].frame.maxX, accuracy: 1, "controls mirror", file: file, line: line)
     }
 
+    @MainActor
+    func test3DBookLoadsGuestPicturesAndReturnsToTurnedPage() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture", "-atlas-guest-fixture"]
+        app.launch()
+        openStory(app)
+        choose(app, "立体之书")
+        XCTAssertFalse(app.buttons["story.tools"].exists)
+        let book = app.webViews.containing(.button, identifier: "目录").firstMatch
+        let next = book.buttons["下一页"]
+        let first = book.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "synthetic.jpg")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 15))
+        capture(app, "story-style-3d-book")
+        next.tap()
+        let second = book.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "second.png")).firstMatch
+        XCTAssertTrue(second.waitForExistence(timeout: 10))
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let deadline = Date().addingTimeInterval(10)
+        while app.frame.width <= app.frame.height && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTAssertGreaterThan(app.frame.width, app.frame.height)
+        XCTAssertTrue(second.exists)
+        capture(app, "story-style-3d-book-landscape", screen: true)
+
+        XCUIDevice.shared.orientation = .portrait
+        app.buttons["story.close"].tap()
+        let selection = app.staticTexts["atlas.selection.asset"]
+        XCTAssertTrue(selection.waitForExistence(timeout: 10))
+        XCTAssertEqual(selection.label, "asset-second")
+    }
+
+    @MainActor private func openStory(_ app: XCUIApplication) {
+        XCTAssertTrue(card(app).waitForExistence(timeout: 30))
+        choosePoint(app, "point-a")
+        openCard(app).tap()
+        XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10))
+    }
+
     @MainActor private func element(_ app: XCUIApplication, _ id: String) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
