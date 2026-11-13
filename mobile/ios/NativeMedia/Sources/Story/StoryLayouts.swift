@@ -455,7 +455,8 @@ private struct StoryStreamMedia: View, Equatable {
                 // The poster (preview or first frame) is always underneath, so a video row is a
                 // picture before and while its clip loads, never a dark block.
                 ZStack {
-                    if let image { Image(uiImage: image).resizable().scaledToFill() } else { StoryTheme.surface }
+                    if let image { Image(uiImage: image).resizable().scaledToFill()
+                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity).clipped() } else { StoryTheme.surface }
                     if playsVideo, let foreground {
                         ForegroundVideo(playback: foreground, fill: true)
                     } else {
@@ -467,6 +468,7 @@ private struct StoryStreamMedia: View, Equatable {
                 }
             } else if let image {
                 Image(uiImage: image).resizable().scaledToFill()
+                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity).clipped()
                     .accessibilityLabel(asset.fileName).accessibilityAddTraits(.isImage)
             } else {
                 ZStack { StoryTheme.surface; ProgressView() }

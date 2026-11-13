@@ -74,7 +74,11 @@ struct JourneyCoverView: View {
             Rectangle().fill(LinearGradient(colors: [Color(cssHex: lightColor).opacity(0.35), NightFlight.background],
                                             startPoint: .top, endPoint: .bottom))
             if let image {
+                // Fill without growing the frame: an unclipped fill image overflows its row for
+                // hit testing and accessibility, covering the buttons below the cover.
                 Image(uiImage: image).resizable().scaledToFill()
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                    .clipped()
                     .transition(.opacity)
             } else {
                 Image(systemName: "photo").font(.title2).foregroundStyle(NightFlight.muted.opacity(0.6))

@@ -205,6 +205,7 @@ struct JourneyCard: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: detent == .large ? 220 : 168)
                 .clipShape(RoundedRectangle(cornerRadius: NightFlight.radiusSmall, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: NightFlight.radiusSmall, style: .continuous))
                 .storyTransitionSource(id: journey.id, in: storyNamespace)
         }
         .buttonStyle(.plain)
