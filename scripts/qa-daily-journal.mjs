@@ -166,17 +166,17 @@ try {
     await page.getByRole("button",{name:"取消预览"}).click();
     assert.equal(await page.locator(".daily-journal__reader").count(),0);
     await page.getByRole("button",{name:"返回旅程",exact:true}).click();
-    const journal = page.getByRole("region",{name:"手记",exact:true});
+    const appendix = page.getByRole("region",{name:"全部手记",exact:true});
+    const journal = page.locator(".journey-stream__journal-inline");
     const summary = journal.locator("summary");
     await summary.waitFor();
-    assert.equal((await summary.textContent()).trim(),"2027-04-03");
+    assert.equal((await summary.textContent()).trim(),"2027-04-03 手记");
     const prose = journal.getByText("她手工修订了出发记录。",{exact:true});
     assert.equal(await prose.isVisible(),false,"the date is visible before its prose");
-    await page.getByRole("button",{name:"手记",exact:true}).press("Enter");
-    assert.equal(await journal.evaluate(el=>el===document.activeElement),true,"the in-page shortcut moves focus to the journal");
-    await page.keyboard.press("Tab");
-    assert.equal(await summary.evaluate(el=>el===document.activeElement),true);
-    await page.keyboard.press("Space");
+    const datePicker = page.getByRole("combobox",{name:"按日期查看手记",exact:true});
+    await datePicker.selectOption("2027-04-03");
+    assert.equal(await summary.evaluate(el=>el===document.activeElement),true,"the date picker focuses the stop's journal");
+    assert.equal(await appendix.locator("details[open]").count(),0,"the appendix remains folded");
     await prose.waitFor();
     for (const text of ["她记下海面反光。", "航班号未记录，但我们顺利抵达。", "计划公园取消", "19:06（当地） 从旅馆出发。"]) {
       await journal.getByText(text,{exact:true}).waitFor();
@@ -184,7 +184,10 @@ try {
     assert.doesNotMatch(await journal.innerText(),/待确认|起床|查看虚构公园|已取消|实际：/);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),true);
     await page.screenshot({path:`${output}/journal-${width}.png`});
-    await page.getByRole("button",{name:"在地图上查看：虚构海湾",exact:true}).click();
+    await appendix.getByRole("button",{name:"回到开头",exact:true}).click();
+    assert.equal(await page.locator(".journey-stream__flow").evaluate(el=>el.scrollTop),0);
+    await datePicker.selectOption("2027-04-03");
+    await journal.getByRole("button",{name:"在地图上查看：虚构海湾",exact:true}).click();
     await page.waitForFunction(id=>window.__mapPoint===id,fixture.routePoints[0].id);
     await page.getByRole("button",{name:"导入手记",exact:true}).click();
     // An old account's late completed response must not populate the new account.
@@ -232,7 +235,8 @@ try {
   await page.getByRole("button",{name:"确认保存"}).click();
   await page.getByText("手记已保存。",{exact:true}).waitFor();
   await page.getByRole("button",{name:"返回旅程",exact:true}).click();
-  const day = page.locator(".journey-stream__journal-day");
+  const appendix = page.getByRole("region",{name:"全部手记",exact:true});
+  const day = appendix.locator(".journey-stream__journal-day");
   await day.last().waitFor();
   assert.equal(await day.count(),14);
   assert.equal(await page.locator(".journey-stream__journal-day[open]").count(),0);
@@ -244,6 +248,19 @@ try {
     const journal=document.querySelector(".journey-stream__journal");
     return Boolean(journal && (el.compareDocumentPosition(journal) & Node.DOCUMENT_POSITION_FOLLOWING));
   }),"all media precedes the journal appendix");
+  const photoDay = page.locator(".journey-stream__journal-inline details");
+  assert.equal(await photoDay.getAttribute("data-journal-date"),"2027-04-01");
+  const datePicker = page.getByRole("combobox",{name:"按日期查看手记",exact:true});
+  await datePicker.selectOption("2027-04-01");
+  assert.equal(await photoDay.getAttribute("open"),"");
+  assert.ok(await photo.evaluate(el=>el.closest(".journey-stream__item").querySelector("[data-journal-date]")));
+  await page.getByRole("button",{name:"回到旅程开头",exact:true}).click();
+  await datePicker.selectOption("2027-04-14");
+  const lastDay = day.last();
+  assert.equal(await lastDay.getAttribute("open"),"");
+  assert.equal(await lastDay.locator("summary").evaluate(el=>el===document.activeElement),true);
+  await page.getByRole("button",{name:"回到旅程开头",exact:true}).click();
+  assert.equal(await page.locator(".journey-stream__flow").evaluate(el=>el.scrollTop),0);
   assert.deepEqual(stored.chapters[0].events[0].mediaIds,["photo-one"]);
   assert.equal(stored.chapters.length,14);
   assert.deepEqual(stored.chapters.map(chapter=>chapter.date),Array.from({length:14},(_,i)=>`2027-04-${String(i+1).padStart(2,"0")}`));
