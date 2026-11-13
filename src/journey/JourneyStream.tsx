@@ -499,18 +499,18 @@ function JourneyStreamContent({
     if (nearest !== activeRef.current && entries[nearest]) setActiveKey(entries[nearest].key);
   }
 
-  function jumpToDay(date: string) {
+  function jumpToDay(date: string, opener: HTMLSelectElement) {
     const flow = flowRef.current;
     const entryKey = journalPlacement.byDate.get(date);
     const entryIndex = entries.findIndex(entry => entry.key === entryKey);
     const item = itemRefs.current[entryIndex];
     if (!flow || !date) return;
     if (item) flow.scrollTop += item.getBoundingClientRect().top - flow.getBoundingClientRect().top;
-    openJournalDay(date);
+    openJournalDay(date, opener);
   }
 
-  function openJournalDay(date: string) {
-    journalOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  function openJournalDay(date: string, opener: HTMLElement) {
+    journalOpenerRef.current = opener;
     setPaused(true);
     setJournalDate(date);
   }
@@ -756,7 +756,7 @@ function JourneyStreamContent({
               onOpenJournalDay={openJournalDay}
               journalIndex={entry.kind === "intro" && readingJournal ? (
                 <select className="journey-stream__journal-index" aria-label="按日期查看手记"
-                  value="" onChange={event => jumpToDay(event.currentTarget.value)}>
+                  value="" onChange={event => jumpToDay(event.currentTarget.value, event.currentTarget)}>
                   <option value="">按日期查看手记</option>
                   {journalDays.map(day => (
                     <option key={day.date} value={day.date}>{day.date}</option>
@@ -955,7 +955,7 @@ type StreamItemProps = {
   journalIndex?: ReactNode;
   journalDate?: string;
   journalDays?: readonly JourneyStreamJournalDay[];
-  onOpenJournalDay: (date: string) => void;
+  onOpenJournalDay: (date: string, opener: HTMLButtonElement) => void;
   onExpired: (assetId: string) => void;
   onLoaded: (assetId: string) => void;
   ref?: Ref<HTMLElement>;
@@ -992,7 +992,7 @@ function StreamItem({
   const firstDay = journalDays?.[0];
   const journalEntry = firstDay ? (
     <button type="button" className="journey-stream__journal-entry" aria-label={`查看 ${firstDay.date} 手记`} title="查看手记"
-      aria-haspopup="dialog" data-journal-date={firstDay.date} onClick={() => onOpenJournalDay(firstDay.date)}>
+      aria-haspopup="dialog" data-journal-date={firstDay.date} onClick={event => onOpenJournalDay(firstDay.date, event.currentTarget)}>
       <IconNotebook size={16} stroke={1.35} aria-hidden="true" />
     </button>
   ) : undefined;
