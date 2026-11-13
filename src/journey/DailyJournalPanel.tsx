@@ -91,10 +91,17 @@ export function DailyJournalPanel({ journey, client, onClose, onJourneyChanged, 
       const generated = await client.suggest(journey.id, journal.chapters, signal);
       if (signal.aborted) return;
       const chapters = mergeJournalSuggestions(journal.chapters, generated);
-      const rewritten = adoptJournalSuggestions(chapters).map((chapter, index) => ({
-        ...chapter,
-        suggestions: journal.chapters[index].suggestions,
-      }));
+      const rewritten = adoptJournalSuggestions(chapters).map((chapter, index) => {
+        const existing = new Map(journal.chapters[index].suggestions.map(suggestion => [suggestion.eventId, suggestion]));
+        return { ...chapter, suggestions: chapter.suggestions.map(suggestion => {
+          const prior = existing.get(suggestion.eventId);
+          return {
+            ...suggestion,
+            background: prior?.background || suggestion.background,
+            questions: [...new Set([...(prior?.questions ?? []), ...suggestion.questions])].slice(0, 20),
+          };
+        }) };
+      });
       setDraft({ ...journal, chapters: rewritten });
       setEditing(false);
       setNotice("新版正文已生成，可预览并保存。");
