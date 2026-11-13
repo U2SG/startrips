@@ -272,7 +272,7 @@ private struct StoryPage: View {
                 Image(systemName: "play.rectangle").font(.largeTitle).foregroundStyle(StoryTheme.muted)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        } else if let image = model.images[asset.id] {
+        } else if let image = model.image(for: asset.id) {
             ZoomPhoto(image: image, entryID: entry?.id ?? "media:\(asset.id)",
                       label: asset.fileName, current: current, onPullDown: { model.leave() }, fill: overlay)
         } else {

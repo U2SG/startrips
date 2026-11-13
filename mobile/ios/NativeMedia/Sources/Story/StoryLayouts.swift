@@ -343,7 +343,7 @@ struct StoryStream: View {
                 let playsVideo = asset.isVideo && (model.playback.map { $0.current?.asset?.id == asset.id } ?? (model.cursor.index == index))
                 StoryStreamMedia(asset: asset, entryID: entry.id, image: model.image(for: asset.id),
                                  size: model.displaySizes[asset.id], playsVideo: playsVideo,
-                                 foreground: playsVideo ? model.foreground : nil) { model.select(index) }
+                                 foreground: playsVideo ? model.foreground : nil) { model.play(entry: index) }
                     .equatable()
                     .onAppear { model.requestLibraryImage(asset) }
                     .onDisappear { if !playing { model.cancelLibraryImage(asset.id) } }

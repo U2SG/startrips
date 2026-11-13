@@ -133,6 +133,8 @@ public struct PlaybackClock {
         index = newBeats.firstIndex { $0.id == identity } ?? min(index, newBeats.count)
         elapsedMS = (current?.durationMS ?? 0) * fraction
     }
+    /// The beat that shows this asset, if the plan has one.
+    public func beatIndex(for assetID: String) -> Int? { beats.firstIndex { $0.asset?.id == assetID } }
     public mutating func nextMeaningful(_ direction: Int) {
         let candidates = beats.indices.filter { beats[$0].meaningful && (direction > 0 ? $0 > index : $0 < index) }
         if let target = direction > 0 ? candidates.first : candidates.last { seek(target) }

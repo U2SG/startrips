@@ -80,7 +80,15 @@ import UIKit
     static let visibleRank = 1_000
     /// Set by 旅程之流: playback reads its pictures through the stream's library (preview,
     /// prefetched) and never waits more than `mediaWaitLimitMS` for one slow picture.
-    public var streamPlayback = false
+    public var streamPlayback = false {
+        didSet {
+            // Leaving the stream mid-playback: its picture request may have been for the stream's
+            // library only (or cancelled with its rows), so load the current picture for the new style.
+            guard oldValue, !streamPlayback, playback != nil, let asset = activeAsset, !asset.isVideo,
+                  image(for: asset.id) == nil else { return }
+            loadCurrent()
+        }
+    }
     static let mediaWaitLimitMS: Double = 2_500
     static let videoWaitLimitMS: Double = 5_000
     private var mediaWaitMS: Double = 0
@@ -218,6 +226,15 @@ import UIKit
         #endif
         tempo = value
         playback?.changeTempo(to: JourneyPlaybackPlan.build(journey, tempo: value))
+    }
+    /// An explicit tap on a clip's play button. During playback it seeks to that clip's beat and
+    /// plays it, even when paused; otherwise it selects the entry as before.
+    public func play(entry index: Int) {
+        guard let clock = playback, cursor.entries.indices.contains(index), let asset = cursor.entries[index].asset,
+              let beat = clock.beatIndex(for: asset.id) else { select(index); return }
+        if beat != clock.index { playback?.seek(beat) }
+        if paused { setPaused(false) }
+        activateBeat()
     }
     public func skip(_ direction: Int) {
         guard playback != nil else { select(cursor.index + direction); return }
