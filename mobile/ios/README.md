@@ -13,8 +13,12 @@ The installed app connects directly to the first-party HTTPS deployment at
 `https://106.53.130.142`; ordinary users never configure a server.
 Only an explicit DEBUG launch with `-allow-server-override` shows a developer
 test-origin field. The dark welcome screen offers only 登录 and 粘贴分享链接:
-sign in and select the Atlas in the private WebView, then return to the native
-Atlas. A later launch reopens the Atlas directly while the persistent owner
+sign-in is native (email/password against `/api/auth/sign-in/email`, or Google
+through `ASWebAuthenticationSession` and `/api/native-auth`). The returned
+host-only Secure session cookies go into a fresh owner profile; with no active
+Organization the app lists them, activates the only one, or shows a native
+picker. Registration and password reset open the web page in Safari View
+Controller. There is no in-app web sign-in page. A later launch reopens the Atlas directly while the persistent owner
 profile still holds a session; a missing or expired session returns to the
 welcome screen instead of showing an error.
 Guest entry reads a copied `/share#<token>` link from the pasteboard. Tokens
@@ -53,7 +57,7 @@ needed for presentation; no Home Base or Everyday Fragment is included.
 The read-only loopback server binds **127.0.0.1**, serves bundled resources, and
 proxies only the existing public `/api/mapstyle` and sprite endpoints. It has no
 session cookies or owner API. The local WKWebView uses a nonpersistent data store;
-the private HTTPS WebView has no message handler. Origin and main-frame checks
+owner requests use ephemeral URLSessions with explicit cookies. Origin and main-frame checks
 guard native messages. External navigation and redirects are refused.
 
 Contract version 2 (snapshots, events, native commands) uses `scopeId`, `revision`, `requestId`, `journeyId`,
