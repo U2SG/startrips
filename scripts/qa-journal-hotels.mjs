@@ -33,7 +33,7 @@ try {
       } else await route.fulfill({ json: { journal: url.includes(journeyId) ? stored : { revision: 0, chapters: [] } } });
     });
     await page.goto(`${origin}/artifacts/daily-journal/index.html`);
-    const reading = page.getByRole("region", { name: "手记", exact: true });
+    const reading = page.getByRole("region", { name: "全部手记", exact: true });
     const openLodgingDay = async () => {
       await reading.locator("summary").filter({ hasText: "2027-04-03" }).click();
       await reading.getByText("她保留的手工正文。", { exact: true }).waitFor();

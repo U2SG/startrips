@@ -8,8 +8,8 @@ import type { Journey, JourneyMediaAsset, MediaPreviewRead, RoutePoint } from ".
  * own light colour. The thread runs through its pictures and videos in Route
  * order; each Route Point's note is written in the margin beside the first
  * picture of that point, as a journal is. A point with a note and no media is
- * a bead on the thread with its note beside it — space carrying the story when
- * there are no pictures. Points with neither carry no story and are skipped.
+ * a bead on the thread with its note beside it. A point linked from the
+ * journal or opened directly can also anchor the story without a picture.
  */
 export type JourneyStreamEntry =
   | { kind: "intro"; key: string; note: string | null }
@@ -43,7 +43,9 @@ function ownerMedia(journey: Journey, routePointId: string | null): JourneyMedia
 }
 
 /** Entries oldest first, in canonical Route order. */
-export function journeyStreamEntries(journey: Journey, focusPointId: string | null = null): JourneyStreamEntry[] {
+export function journeyStreamEntries(
+  journey: Journey, focusPointId: string | null = null, journalPoints?: ReadonlySet<string>,
+): JourneyStreamEntry[] {
   const entries: JourneyStreamEntry[] = [{ kind: "intro", key: "intro", note: trimmed(journey.note) }];
   for (const asset of ownerMedia(journey, null)) {
     entries.push({ kind: "media", key: `media:${asset.id}`, asset, routePoint: null, place: null, date: null, note: null });
@@ -54,7 +56,9 @@ export function journeyStreamEntries(journey: Journey, focusPointId: string | nu
     const place = trimmed(point.label);
     const date = streamDate(point.occurredAt);
     if (media.length === 0) {
-      if (note || point.id === focusPointId) entries.push({ kind: "note", key: `note:${point.id}`, routePoint: point, place, date, note: note ?? "" });
+      if (note || point.id === focusPointId || journalPoints?.has(point.id)) {
+        entries.push({ kind: "note", key: `note:${point.id}`, routePoint: point, place, date, note: note ?? "" });
+      }
       continue;
     }
     media.forEach((asset, index) => {
@@ -72,7 +76,10 @@ export function journeyStreamEntries(journey: Journey, focusPointId: string | nu
   return entries;
 }
 
-type JournalReadingEvent = Pick<JournalEvent, "id" | "text" | "localDate" | "localTime"> & { point?: RoutePoint };
+type JournalReadingEvent = Pick<JournalEvent, "id" | "text" | "localDate" | "localTime" | "mediaIds"> & {
+  point?: RoutePoint;
+  writtenTime: string | null;
+};
 type JournalReadingChapter = { id: string; title: string; source: string; events: JournalReadingEvent[] };
 export type JourneyStreamJournalDay = { date: string; chapters: JournalReadingChapter[] };
 
@@ -125,8 +132,15 @@ export function journeyStreamJournalDays(
         && linkedPoint?.placeRole === "accommodation" && isLodgingLabelLine(event.source);
       const point = event.status === "actual" || confirmedLodging ? linkedPoint : undefined;
       const text = journalReadingText(event.text.trim() || event.source, confirmedLodging ? undefined : event.status);
-      const localTime = event.localTime && !text.startsWith(event.localTime) ? event.localTime : null;
-      return text || point ? [{ id: event.id, text, localDate: event.localDate, localTime, point }] : [];
+      return text || point ? [{
+        id: event.id,
+        text,
+        localDate: event.localDate,
+        localTime: event.localTime && !text.startsWith(event.localTime) ? event.localTime : null,
+        writtenTime: event.localTime,
+        mediaIds: event.mediaIds,
+        point,
+      }] : [];
     });
     const source = chapter.events.length ? "" : journalReadingText(chapter.source.trim().replace(/^([^\r\n]*)(?:\r\n?|\n|$)/, (line, first: string) => (
       JOURNAL_DATE_HEADING.test(first) ? "" : line
@@ -137,6 +151,67 @@ export function journeyStreamJournalDays(
     days.set(chapter.date, group);
   }
   return [...days].sort(([left], [right]) => left.localeCompare(right)).map(([date, chapters]) => ({ date, chapters }));
+}
+
+/** Explicit links locate a reading day even when older Route Points have no timestamp. */
+export function journeyStreamJournalPlacement(
+  entries: readonly JourneyStreamEntry[], days: readonly JourneyStreamJournalDay[],
+) {
+  const mediaEntries = new Map<string, JourneyStreamEntry>();
+  const pointEntries = new Map<string, JourneyStreamEntry>();
+  const datedEntries = new Map<string, JourneyStreamEntry>();
+  for (const entry of entries) {
+    if (entry.kind === "intro") continue;
+    if (entry.kind === "media") mediaEntries.set(entry.asset.id, entry);
+    if (entry.routePoint && !pointEntries.has(entry.routePoint.id)) pointEntries.set(entry.routePoint.id, entry);
+    if (entry.date && !datedEntries.has(entry.date)) datedEntries.set(entry.date, entry);
+  }
+  const order = new Map(entries.map((entry, index) => [entry, index]));
+  const byEntry = new Map<string, JourneyStreamJournalDay[]>();
+  const byDate = new Map<string, string>();
+  const visitsByPoint = new Map<string, Map<string, Set<string>>>();
+  const firstEntry = (candidates: readonly JourneyStreamEntry[]) => candidates.reduce<JourneyStreamEntry | undefined>(
+    (first, candidate) => !first || order.get(candidate)! < order.get(first)! ? candidate : first,
+    undefined,
+  );
+
+  for (const day of days) {
+    const linkedMedia: JourneyStreamEntry[] = [];
+    const linkedPoints: JourneyStreamEntry[] = [];
+    for (const { events } of day.chapters) {
+      for (const event of events) {
+        const linkedPoint = event.point && pointEntries.get(event.point.id);
+        if (linkedPoint) linkedPoints.push(linkedPoint);
+        const matchedMedia = event.mediaIds.flatMap(id => mediaEntries.get(id) ?? []);
+        linkedMedia.push(...matchedMedia);
+        // A manually associated photo may belong to a different stop. Only
+        // a direct place link supplies a local visit date for that stop.
+        if (!event.point || event.point.occurredAt) continue;
+        const visits = visitsByPoint.get(event.point.id) ?? new Map<string, Set<string>>();
+        const date = event.localDate ?? day.date;
+        const times = visits.get(date) ?? new Set<string>();
+        if (event.writtenTime) times.add(event.writtenTime);
+        visits.set(date, times);
+        visitsByPoint.set(event.point.id, visits);
+      }
+    }
+    const anchor = firstEntry(linkedPoints) ?? firstEntry(linkedMedia) ?? datedEntries.get(day.date);
+    if (!anchor) continue;
+    const groupedDays = byEntry.get(anchor.key) ?? [];
+    groupedDays.push(day);
+    byEntry.set(anchor.key, groupedDays);
+    byDate.set(day.date, anchor.key);
+  }
+  const visitByEntry = new Map<string, string>();
+  for (const [id, visits] of visitsByPoint) {
+    const entry = pointEntries.get(id);
+    if (!entry) continue;
+    const dates = [...visits.keys()].sort();
+    const times = visits.get(dates[0]);
+    const time = dates.length === 1 && times?.size === 1 ? [...times][0] : null;
+    visitByEntry.set(entry.key, time ? `${dates[0]} ${time}` : dates.join(" / "));
+  }
+  return { byEntry, byDate, visitByEntry };
 }
 
 /** Width / height of a picture, from the best size known so far. */

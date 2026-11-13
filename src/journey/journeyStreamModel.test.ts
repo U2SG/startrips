@@ -3,6 +3,7 @@ import { previewJournalImport } from "./dailyJournal";
 import {
   journeyStreamEntries,
   journeyStreamJournalDays,
+  journeyStreamJournalPlacement,
   journeyStreamLayout,
   streamAspect,
   streamDate,
@@ -55,6 +56,7 @@ describe("journeyStreamEntries", () => {
     expect(shape(journeyStreamEntries(journey))).toEqual(["intro"]);
     expect(journeyStreamEntries(journey, "b")[1]).toMatchObject({ kind: "note", place: "b", note: "", routePoint: { id: "b" } });
     expect(shape(journeyStreamEntries(journey, "foreign"))).toEqual(["intro"]);
+    expect(shape(journeyStreamEntries(journey, null, new Set(["a"])))).toEqual(["intro", "note:a"]);
   });
   it("keeps a note-only Route Point as a bead between its neighbours", () => {
     const journey: Journey = {
@@ -118,6 +120,44 @@ it("groups readable chapters by date without regrouping Route media", () => {
     "intro", "media:manual", "media:extra", "media:coast-photo", "media:city-photo",
   ]);
   expect(chapters).toEqual(original);
+});
+
+it("places days by existing links or date and fills local visit labels without moving media", () => {
+  const city = point("city");
+  const museum = point("museum");
+  const bay = point("bay", null, "2026-08-14T10:00:00Z");
+  const journey = {
+    ...base,
+    routePoints: [city, museum, bay],
+    media: [asset("loose", null, 0), asset("city-photo", city.id, 0), asset("city-second", city.id, 1), asset("bay-photo", bay.id, 0)],
+  };
+  const chapters = previewJournalImport([
+    "2026-08-11", "实际：09:30 看展。", "实际：14:00 到市区。",
+    "2026-08-12", "实际：回到市区。", "2026-08-13", "实际：留下一张照片。",
+    "2026-08-14", "在湾边散步。", "2026-08-15", "补写沿途见闻。",
+  ].join("\n"), base.startedOn);
+  chapters[0].events[0].routePointId = museum.id;
+  chapters[0].events[0].mediaIds = ["loose"];
+  chapters[0].events[1].routePointId = city.id;
+  chapters[1].events[0].routePointId = city.id;
+  chapters[2].events[0].mediaIds = ["loose"];
+  const days = journeyStreamJournalDays(chapters, new Map(journey.routePoints.map(routePoint => [routePoint.id, routePoint])));
+  const entries = journeyStreamEntries(journey, null, new Set([museum.id]));
+  const placement = journeyStreamJournalPlacement(entries, days);
+  expect([...placement.byDate]).toEqual([
+    ["2026-08-11", "media:city-photo"],
+    ["2026-08-12", "media:city-photo"],
+    ["2026-08-13", "media:loose"],
+    ["2026-08-14", "media:bay-photo"],
+  ]);
+  expect(placement.byEntry.get("media:city-photo")?.map(day => day.date)).toEqual(["2026-08-11", "2026-08-12"]);
+  expect(placement.visitByEntry.get("note:museum")).toBe("2026-08-11 09:30");
+  expect(placement.visitByEntry.get("media:city-photo")).toBe("2026-08-11 / 2026-08-12");
+  expect(placement.visitByEntry.has("media:bay-photo")).toBe(false);
+  expect(entries.filter(entry => entry.kind === "media").map(entry => entry.asset.id)).toEqual(
+    ["loose", "city-photo", "city-second", "bay-photo"],
+  );
+  expect(city.occurredAt).toBeNull();
 });
 
 it("removes legacy status tags after a clock or short context without rewriting narrative", () => {
