@@ -128,28 +128,32 @@ public struct NativeStoryDestination: View {
         let tools = model.session.access == .owner && (importer != nil || exporter != nil || moveModel != nil)
         return HStack(spacing: 0) {
             slot {
-                if pages { StoryIconButton(symbol: "chevron.left", label: "上一页", id: "story.previous") { turn(-1) } }
+                if pages { StoryIconButton(symbol: "chevron.left", label: "上一页", id: "story.previous", acting: { turn(-1) }) }
             }
             slot {
-                if model.playback != nil {
-                    Menu {
-                        ForEach(NarrativeTempo.allCases, id: \.self) { tempo in
-                            Button(tempo == .fast ? "轻快" : tempo == .standard ? "标准" : "沉浸") { model.changeTempo(tempo) }
+                // Tempo can be chosen before playback too; a checkmarked single choice, slow to fast.
+                Menu {
+                    Picker(selection: Binding(get: { model.tempo }, set: { model.changeTempo($0) })) {
+                        ForEach(NarrativeTempo.slowToFast, id: \.self) { tempo in
+                            Label(tempo.label, systemImage: tempo.symbol).tag(tempo)
                         }
-                    } label: {
-                        Image(systemName: "metronome").dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                            .frame(width: StoryTheme.hitTarget, height: StoryTheme.hitTarget)
-                            .contentShape(Rectangle())
-                    }
-                    .accessibilityLabel("节奏").accessibilityIdentifier("story.tempo")
+                    } label: { EmptyView() }.pickerStyle(.inline).labelsHidden()
+                } label: {
+                    Label("节奏", systemImage: "metronome").labelStyle(.iconOnly)
+                        .font(.body.weight(.medium)).dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                        .frame(width: StoryTheme.hitTarget, height: StoryTheme.hitTarget)
+                        .contentShape(Rectangle())
                 }
+                .foregroundStyle(StoryTheme.ink.opacity(0.86))
+                .accessibilityLabel("节奏").accessibilityValue(model.tempo.label).accessibilityIdentifier("story.tempo")
             }
             slot {
-                if model.playback == nil {
-                    StoryIconButton(symbol: "play.fill", label: "播放旅程", id: "story.play") { model.playJourney() }
-                } else {
-                    StoryIconButton(symbol: model.paused ? "play.fill" : "pause.fill", label: model.paused ? "继续" : "暂停",
-                                    id: "story.pause") { model.setPaused(!model.paused) }
+                // One view for play and pause, so the tap haptic survives the swap from play to pause.
+                let idle = model.playback == nil
+                StoryIconButton(symbol: idle || model.paused ? "play.fill" : "pause.fill",
+                                label: idle ? "播放旅程" : model.paused ? "继续" : "暂停",
+                                id: idle ? "story.play" : "story.pause") {
+                    if idle { model.playJourney() } else { model.setPaused(!model.paused) }
                 }
             }
             slot {
@@ -160,7 +164,7 @@ public struct NativeStoryDestination: View {
                 }
             }
             slot {
-                if pages { StoryIconButton(symbol: "chevron.right", label: "下一页", id: "story.next") { turn(1) } }
+                if pages { StoryIconButton(symbol: "chevron.right", label: "下一页", id: "story.next", acting: { turn(1) }) }
             }
         }
         .frame(minHeight: StoryTheme.hitTarget)
@@ -173,9 +177,16 @@ public struct NativeStoryDestination: View {
             .overlay { content() }
     }
 
-    private func turn(_ direction: Int) {
-        guard pagesBook else { model.skip(direction); return }
+    /// Turns one page; false when there is nowhere to go, so the tap stays silent.
+    private func turn(_ direction: Int) -> Bool {
+        guard pagesBook else {
+            let before = (model.cursor.index, model.playback?.index)
+            model.skip(direction)
+            return before != (model.cursor.index, model.playback?.index)
+        }
+        let before = book.index
         withAnimation(reduceMotion ? .easeInOut(duration: 0.25) : nil) { book.turn(direction, animated: !reduceMotion) }
+        return book.index != before
     }
 }
 
@@ -184,10 +195,21 @@ struct StoryIconButton: View {
     let symbol: String
     let label: String
     let id: String
-    let action: () -> Void
+    /// Runs the tap; returns whether anything happened (a no-op gets no haptic).
+    let acting: () -> Bool
+    @State private var taps = 0
+    @_disfavoredOverload init(symbol: String, label: String, id: String, acting: @escaping () -> Bool) {
+        self.symbol = symbol; self.label = label; self.id = id; self.acting = acting
+    }
+    init(symbol: String, label: String, id: String, action: @escaping () -> Void) {
+        self.init(symbol: symbol, label: label, id: id, acting: { action(); return true })
+    }
     var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol).font(.body.weight(.medium))
+        Button {
+            if acting() { taps += 1 }
+        } label: {
+            // An icon-only Label: VoiceOver and Dynamic Type treat it like a system control.
+            Label(label, systemImage: symbol).labelStyle(.iconOnly).font(.body.weight(.medium))
                 // Glyphs stop growing at the largest standard size so they stay inside their slot.
                 .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                 .frame(width: StoryTheme.hitTarget, height: StoryTheme.hitTarget)
@@ -195,6 +217,14 @@ struct StoryIconButton: View {
         }
         .foregroundStyle(StoryTheme.ink.opacity(0.86))
         .accessibilityLabel(label).accessibilityIdentifier(id)
+        .tapHaptic(taps)
+    }
+}
+
+private extension View {
+    /// A light system haptic for a user tap only (never for auto-advance or per frame).
+    @ViewBuilder func tapHaptic(_ trigger: Int) -> some View {
+        if #available(iOS 17.0, *) { sensoryFeedback(.impact(weight: .light), trigger: trigger) } else { self }
     }
 }
 
@@ -433,6 +463,25 @@ private struct ZoomPhoto: UIViewRepresentable {
         @objc func doubleTap(_ gesture: UITapGestureRecognizer) {
             guard let scroll = gesture.view as? UIScrollView else { return }
             scroll.setZoomScale(scroll.zoomScale > 1 ? 1 : 2.5, animated: true)
+        }
+    }
+}
+
+extension NarrativeTempo {
+    /// Menu order, slowest first.
+    static let slowToFast: [NarrativeTempo] = [.immersive, .standard, .fast]
+    var label: String {
+        switch self {
+        case .immersive: return "沉浸"
+        case .standard: return "标准"
+        case .fast: return "轻快"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .immersive: return "tortoise"
+        case .standard: return "figure.walk"
+        case .fast: return "hare"
         }
     }
 }

@@ -16,6 +16,7 @@ final class StoryPresentationUITests: XCTestCase {
         story.tap()
         XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10))
         assertStoryChromeIsCentred(app)
+        assertTempoBeforePlay(app)
         let style = app.buttons["story.style"]
         XCTAssertEqual(style.label, "展示方式")
         XCTAssertEqual(style.value as? String, "默认")
@@ -32,6 +33,7 @@ final class StoryPresentationUITests: XCTestCase {
         XCTAssertTrue(photo.waitForExistence(timeout: 10))
         XCTAssertTrue(note.waitForExistence(timeout: 10))
         XCTAssertTrue(photo.frame.intersects(note.frame), "图上感想 lays the note on the picture")
+        assertTempoBeforePlay(app)
         capture(app, "story-style-note-overlay")
 
         choose(app, "旅程之书")
@@ -39,6 +41,7 @@ final class StoryPresentationUITests: XCTestCase {
         XCTAssertTrue(opened.waitForExistence(timeout: 10))
         XCTAssertTrue(app.images["synthetic.jpg"].waitForExistence(timeout: 10))
         capture(app, "story-style-book")
+        assertTempoBeforePlay(app)
         app.buttons["story.next"].tap()
         XCTAssertTrue(element(app, "story.book.media:asset-second").waitForExistence(timeout: 10))
         app.buttons["story.previous"].tap()
@@ -58,17 +61,20 @@ final class StoryPresentationUITests: XCTestCase {
         XCTAssertEqual(thread.frame.midX, app.windows.firstMatch.frame.midX, accuracy: 1)
         // The thread is fixed to the viewport behind the rows, so it spans the whole stream view.
         XCTAssertGreaterThanOrEqual(thread.frame.height, element(app, "story.stream").frame.height - 1)
+        assertTempoBeforePlay(app)
 
         // Play flows down the stream itself: no pager, the content keeps moving, pause freezes it.
         app.buttons["story.play"].tap()
         XCTAssertTrue(app.buttons["story.pause"].waitForExistence(timeout: 5))
+        // Few snapshots while the flow moves every frame: each query walks the whole tree,
+        // and a slow CI simulator times out when they are fired back to back.
         var samples: [CGFloat] = []
-        for _ in 0..<16 {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-            XCTAssertTrue(element(app, "story.stream").exists, "the stream stays on screen while playing")
-            XCTAssertFalse(element(app, "story.photo.media:asset-fixture").exists, "no page-by-page player")
+        for _ in 0..<4 {
+            RunLoop.current.run(until: Date().addingTimeInterval(2))
             samples.append(streamed.frame.minY)
         }
+        XCTAssertTrue(element(app, "story.stream").exists, "the stream stays on screen while playing")
+        XCTAssertFalse(element(app, "story.photo.media:asset-fixture").exists, "no page-by-page player")
         XCTAssertGreaterThan((samples.max() ?? 0) - (samples.min() ?? 0), 40, "the stream flows while playing")
         capture(app, "story-style-stream-playing")
         app.buttons["story.pause"].tap()
@@ -91,6 +97,15 @@ final class StoryPresentationUITests: XCTestCase {
         choose(app, "默认")
         XCTAssertTrue(photo.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["story.next"].exists)
+    }
+
+    /// The tempo slot sits left of play before playback starts, in every style.
+    @MainActor private func assertTempoBeforePlay(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let tempo = element(app, "story.tempo"), play = app.buttons["story.play"]
+        XCTAssertTrue(tempo.waitForExistence(timeout: 5), "tempo is offered before playback", file: file, line: line)
+        XCTAssertTrue(play.exists, file: file, line: line)
+        XCTAssertEqual(tempo.value as? String, "标准", file: file, line: line)
+        XCTAssertLessThan(tempo.frame.maxX, play.frame.minX, "tempo sits left of play", file: file, line: line)
     }
 
     /// Title and play sit on the screen axis; the header's outer icons mirror each other.

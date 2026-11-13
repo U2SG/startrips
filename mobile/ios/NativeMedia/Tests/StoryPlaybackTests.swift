@@ -144,6 +144,21 @@ final class StoryPlaybackTests: XCTestCase {
         XCTAssertEqual(first.playback?.paused, true)
         first.disappear(); second.disappear()
     }
+    @MainActor func testTempoChosenBeforePlaybackShapesTheFirstPlanAndCanStillChange() throws {
+        let journey = try MediaFixtures.journey(), intent = MediaFixtures.intent()
+        let session = ScopedMediaSession(scopeID: "owner", access: .owner,
+            read: { _ in throw MediaFailure.unavailable }, request: { _, _, _ in Data() }, revalidate: {})
+        let model = try StoryModel(journey: journey, intent: intent, session: session, ownership: PlaybackOwnership(),
+            currentIntent: { intent }, latestJourney: { journey }, onReturn: { _ in })
+        model.changeTempo(.immersive)
+        XCTAssertNil(model.playback)
+        model.playJourney()
+        XCTAssertEqual(model.playback?.beats, JourneyPlaybackPlan.build(journey, tempo: .immersive))
+        model.changeTempo(.fast)
+        XCTAssertEqual(model.tempo, .fast)
+        XCTAssertEqual(model.playback?.beats, JourneyPlaybackPlan.build(journey, tempo: .fast))
+        model.disappear()
+    }
     func testFullPlanKeepsTransitNoteAndLiteralTempoValues() throws {
         let journey = try MediaFixtures.journey()
         let beats = JourneyPlaybackPlan.build(journey)
