@@ -215,7 +215,7 @@ it("reads recognizable imported summaries in the diarist's voice without changin
   chapter.events[4].text = "起床：有约 08:20 醒来的描述";
   const [day] = journeyStreamJournalDays([chapter], new Map());
   expect(day.chapters[0].events.map(event => event.text)).toEqual([
-    "我大约在 06:20 醒来。",
+    "大约 06:20 醒来。",
     "19:05 街上的灯很亮。",
     "我醒来时，朋友说她早就起床了。",
     "起床：有约 07:10 醒来的描述",

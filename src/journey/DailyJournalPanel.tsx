@@ -3,7 +3,7 @@ import { journalMediaGroups, firstJournalPlaceMediaEvents } from "./journalMedia
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useAtlasView } from "./atlasView";
 import { useModalFocus } from "./useModalFocus";
-import { latestJournalImport, type DailyJournal, type JournalChapter, type JournalEvent, type JournalStatus } from "./dailyJournal";
+import { adoptJournalSuggestions, latestJournalImport, mergeJournalSuggestions, type DailyJournal, type JournalChapter, type JournalEvent, type JournalStatus } from "./dailyJournal";
 import type { DailyJournalClient } from "./dailyJournalApi";
 import type { Journey, JourneyMediaAsset } from "./types";
 import { useReaderReads } from "./journeyReaderMedia";
@@ -86,6 +86,20 @@ export function DailyJournalPanel({ journey, client, onClose, onJourneyChanged, 
       if (!signal.aborted) setHotels(preview);
     });
   }
+  function regenerateReading(journal: DailyJournal) {
+    return run("重新生成正文", async signal => {
+      const generated = await client.suggest(journey.id, journal.chapters, signal);
+      if (signal.aborted) return;
+      const chapters = mergeJournalSuggestions(journal.chapters, generated);
+      const rewritten = adoptJournalSuggestions(chapters).map((chapter, index) => ({
+        ...chapter,
+        suggestions: journal.chapters[index].suggestions,
+      }));
+      setDraft({ ...journal, chapters: rewritten });
+      setEditing(false);
+      setNotice("新版正文已生成，可预览并保存。");
+    });
+  }
   function stopOperation() {
     requests.current.cancel(); setBusy(null); setError(""); setNotice("已停止，原文和草稿已保留。");
   }
@@ -131,6 +145,9 @@ export function DailyJournalPanel({ journey, client, onClose, onJourneyChanged, 
       </section>
       <div className="daily-journal__saved-actions">
         {!draft && saved.chapters.length > 0 ? <button disabled={!!busy || !!hotels} onClick={() => { setDraft(structuredClone(saved)); setEditing(true); }}>编辑已有手记</button> : null}
+        {!draft && !source && saved.chapters.some(chapter => chapter.events.length > 0) ? (
+          <button disabled={!!busy || !!hotels} onClick={() => void regenerateReading(saved)}>用 AI 重写正文</button>
+        ) : null}
         {!draft && !source && latestImport && client.undoImport ? <button disabled={!!busy || confirmUndo !== null} onClick={() => setConfirmUndo(0)}>撤销这次导入</button> : null}
         {!draft && latestImport && confirmUndo !== null ? <div role="alert" className="daily-journal__confirm">
           <p>{confirmUndo ? `其中 ${confirmUndo} 章导入后有修改，撤销会一并丢失。` : `撤销这次导入会移除 ${latestImport.chapters} 章。`}</p>
@@ -155,6 +172,9 @@ export function DailyJournalPanel({ journey, client, onClose, onJourneyChanged, 
       {draft ? <div className="daily-journal__toolbar">
         <strong>未保存预览</strong>
         <button disabled={!!busy} aria-pressed={editing} onClick={() => setEditing(value => !value)}>{editing ? "返回阅读" : "编辑预览"}</button>
+        {fromImport && draft.chapters.some(chapter => chapter.events.length > 0) ? (
+          <button disabled={!!busy} onClick={() => void regenerateReading(draft)}>用 AI 重写正文</button>
+        ) : null}
         <button disabled={!!busy} onClick={() => run("保存", async (signal) => {
           const imported = fromImport ? draft.chapters.filter(c => !saved.chapters.some(old => old.id === c.id)).map(c => c.id) : undefined;
           const result = await client.save(journey.id, draft, signal, imported);

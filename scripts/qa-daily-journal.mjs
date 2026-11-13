@@ -164,6 +164,27 @@ try {
     assert.equal(saved.chapters.length,1);
     assert.equal(saved.chapters[0].source,source);
     assert.equal(hotelPreviews,0);
+    await page.route(/\/journal\/suggest$/, route => {
+      const chapters = route.request().postDataJSON().chapters;
+      return route.fulfill({json:{suggestions:chapters.flatMap(chapter=>chapter.events.map((event,index)=>({
+        eventId:event.id,text:index === 1 ? "18:20 抵达。":event.source,questions:[],background:"",
+      }))) }});
+    });
+    await page.getByRole("button",{name:"用 AI 重写正文",exact:true}).click();
+    await page.getByText("新版正文已生成，可预览并保存。",{exact:true}).waitFor();
+    await page.getByText("18:20 抵达。",{exact:true}).waitFor();
+    assert.equal(writes,1,"regenerating only opens a preview");
+    await page.getByRole("button",{name:"编辑预览",exact:true}).click();
+    assert.equal(await page.getByLabel("阅读正文",{exact:true}).nth(0).inputValue(),"她手工修订了出发记录。");
+    const regenerateSave=page.waitForRequest(r=>r.method()==="PUT" && r.url().endsWith("/journal"));
+    await page.getByRole("button",{name:"确认保存",exact:true}).click();
+    await regenerateSave;
+    releaseSave();
+    await page.getByText("手记已保存。",{exact:true}).waitFor();
+    assert.equal(writes,2);
+    assert.equal(saved.chapters[0].events[0].routePointId,fixture.routePoints[0].id);
+    assert.equal(saved.chapters[0].source,source);
+    assert.equal(saved.chapters[0].events[1].text,"18:20 抵达。");
     await importPreview(page,source);
     await page.getByRole("button",{name:"编辑预览",exact:true}).click();
     assert.equal(await page.getByLabel("阅读正文",{exact:true}).nth(0).inputValue(),"她手工修订了出发记录。");
@@ -324,7 +345,7 @@ try {
     assert.equal(await scrollTop(),0);
     await page.getByRole("combobox",{name:"按日期查看手记",exact:true}).selectOption("2027-04-03");
     const journal = page.getByRole("dialog",{name:"2027-04-03 手记",exact:true});
-    await journal.getByText("我大约在 06:20 醒来。",{exact:true}).waitFor();
+    await journal.getByText("大约 06:20 醒来。",{exact:true}).waitFor();
     await journal.getByRole("button",{name:"关闭手记",exact:true}).click();
     assert.equal(await play.isVisible(),true);
   } finally { await autoplayContext.close(); }
