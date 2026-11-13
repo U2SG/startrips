@@ -63,6 +63,13 @@ html .particle-earth-route__label text {
 }
 html .particle-earth-route__label[data-attention-role="selected"] text,
 html .particle-earth-route__label[data-attention-role="narrative-current"] text { fill: #e8b65c; }
+/* System text size and Bold Text reach the globe as label legibility: the renderer
+   places labels with this same size and weight, so draw them with it too. */
+html .particle-earth-scene[data-legible-labels] :is(.particle-earth-route__label text, .particle-earth-city) {
+  font: var(--earth-label-weight) var(--earth-label-size)/1 system-ui, sans-serif;
+}
+html .particle-earth-scene[data-label-contrast] .particle-earth-route__label text { stroke-width: 7px; }
+html .particle-earth-scene[data-label-contrast] .particle-earth-route__leader { opacity: .9; stroke-width: 1.2px; }
 @media (prefers-contrast: more) {
   html .particle-earth-route__label text { stroke-width: 7px; font-weight: 700; }
   html .particle-earth-route__leader { opacity: 1; stroke-width: 1.2; stroke-dasharray: none; }
