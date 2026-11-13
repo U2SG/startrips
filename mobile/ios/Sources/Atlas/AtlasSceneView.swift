@@ -4,6 +4,26 @@ import WebKit
 struct AtlasSceneView: UIViewRepresentable {
     @ObservedObject var router: AppRouter
     let mapOrigin: URL?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.legibilityWeight) private var legibilityWeight
+    @Environment(\.colorSchemeContrast) private var contrast
+    @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 17
+
+    struct AccessibilitySettings: Encodable, Equatable {
+        let textScale: Double
+        let accessibilitySize: Bool
+        let boldText: Bool
+        let increasedContrast: Bool
+    }
+
+    private var accessibility: AccessibilitySettings {
+        AccessibilitySettings(
+            textScale: Double(bodySize / 17),
+            accessibilitySize: dynamicTypeSize.isAccessibilitySize,
+            boldText: legibilityWeight == .bold,
+            increasedContrast: contrast == .increased
+        )
+    }
 
     static func receiveScript(_ json: String) throws -> String {
         // JSONEncoder produces one quoted data literal, including escaping untrusted text.
@@ -16,11 +36,13 @@ struct AtlasSceneView: UIViewRepresentable {
     static let earlyReceiverScript = """
     window.atlasNative = {
       pending: null,
-      receive(json) { this.pending = json; }
+      accessibility: null,
+      receive(json) { this.pending = json; },
+      setAccessibility(settings) { this.accessibility = settings; }
     };
     """
 
-    func makeCoordinator() -> Coordinator { Coordinator(router: router) }
+    func makeCoordinator() -> Coordinator { Coordinator(router: router, accessibility: accessibility) }
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -45,7 +67,10 @@ struct AtlasSceneView: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) { context.coordinator.publish() }
+    func updateUIView(_ uiView: WKWebView, context: Context) {
+        context.coordinator.accessibility = accessibility
+        context.coordinator.publish()
+    }
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
         uiView.stopLoading(); uiView.configuration.userContentController.removeScriptMessageHandler(forName: "atlas")
         coordinator.server?.stop()
@@ -60,7 +85,12 @@ struct AtlasSceneView: UIViewRepresentable {
         var loaded = false
         var restarts = 0
         var lastJSON: String?
-        init(router: AppRouter) { self.router = router }
+        var accessibility: AccessibilitySettings
+        var lastAccessibility: AccessibilitySettings?
+        init(router: AppRouter, accessibility: AccessibilitySettings) {
+            self.router = router
+            self.accessibility = accessibility
+        }
 
         func start(mapOrigin: URL?) {
             guard let root = Bundle.main.url(forResource: "Scene", withExtension: nil) else {
@@ -82,11 +112,23 @@ struct AtlasSceneView: UIViewRepresentable {
         }
 
         func publish() {
+            guard loaded else { return }
             let encoder = JSONEncoder()
+            // Presentation changes can arrive independently of the Atlas
+            // snapshot and must not advance its identity or focus revision.
+            if accessibility != lastAccessibility,
+               let data = try? encoder.encode(accessibility) {
+                lastAccessibility = accessibility
+                evaluate("window.atlasNative.setAccessibility(" + String(decoding: data, as: UTF8.self) + ")")
+            }
             encoder.outputFormatting = .sortedKeys
-            guard loaded, let data = try? encoder.encode(router.snapshot), let json = String(data: data, encoding: .utf8) else { return }
+            guard let data = try? encoder.encode(router.snapshot), let json = String(data: data, encoding: .utf8) else { return }
             guard json != lastJSON, let script = try? AtlasSceneView.receiveScript(json) else { return }
             lastJSON = json
+            evaluate(script)
+        }
+
+        private func evaluate(_ script: String) {
             // This page-world API does not link the missing iOS 18.5 simulator Swift overlay.
             view?.evaluateJavaScript(script) { [weak self] _, error in
                 if error != nil { Task { @MainActor in self?.router.error = "地球通信中断，请刷新。" } }
@@ -105,9 +147,9 @@ struct AtlasSceneView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-            loaded = false; lastJSON = nil
+            loaded = false; lastJSON = nil; lastAccessibility = nil
         }
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded = true; lastJSON = nil; publish() }
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded = true; publish() }
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             let url = navigationAction.request.url
@@ -115,7 +157,7 @@ struct AtlasSceneView: UIViewRepresentable {
                             && url?.path == "/index.html" ? .allow : .cancel)
         }
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-            loaded = false; lastJSON = nil; router.sceneRestarted(); restarts += 1
+            loaded = false; lastJSON = nil; lastAccessibility = nil; router.sceneRestarted(); restarts += 1
             guard restarts <= 2, let localURL else { router.error = "地球已暂停，请刷新重试。"; return }
             webView.load(URLRequest(url: localURL))
         }

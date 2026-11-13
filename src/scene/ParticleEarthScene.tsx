@@ -87,6 +87,7 @@ import {
   normalizeLabelIdentity,
   routeLabelPositionRole,
   selectEvictableRouteLabel,
+  type EarthLabelLegibility,
   type PlacedRouteLabel,
   type RouteLabelCandidate,
   type RouteLabelPositionRole,
@@ -1492,6 +1493,7 @@ interface ParticleEarthSceneProps {
   /** First-Journey arrival: bloom the final Route Point once its flight settles. */
   routeArrivalBloom?: RouteArrivalBloomRequest | null;
   activeJourneyRouteId?: string | null;
+  labelLegibility?: EarthLabelLegibility;
   selectedJourneyRoutePoint?: RoutePointSelection;
   narrativeJourneyRoutePoint?: RoutePointSelection;
   onJourneyRouteActivate?: (id: string) => void;
@@ -1930,6 +1932,7 @@ export function ParticleEarthScene({
   cameraHold = false,
   reduceMotion = false,
   compactMobileLayout = false,
+  labelLegibility,
   visibilityHint = { opaqueMediaCover: false, coverTransitionActive: false },
   rotationYOverride,
 }: ParticleEarthSceneProps) {
@@ -2018,6 +2021,8 @@ export function ParticleEarthScene({
     let currentMode = latestMode.current;
     let currentQuality = latestQuality.current;
     let currentCompactMobileLayout = latestCompactMobileLayout.current;
+    let currentLabelLegibility: EarthLabelLegibility | undefined;
+    let labelMeasure: CanvasRenderingContext2D | null = null;
     let currentVisibilityHint = latestVisibilityHint.current;
     let currentRenderState: GlobeRenderState = "rendering";
     let resolvedRenderBudget: ResolvedRenderBudget = { effectiveDpr: 1, drawingBufferPixels: 1, drawingBufferWidth: 1, drawingBufferHeight: 1 };
@@ -2795,6 +2800,8 @@ export function ParticleEarthScene({
       leader: SVGPathElement;
       text: SVGTextElement;
       width: number;
+      sourceText: string;
+      defaultText: string;
       positionRole: RouteLabelPositionRole;
       /** Normalized Route Point label identity, for Place Label arbitration. */
       identity: string;
@@ -2887,6 +2894,8 @@ export function ParticleEarthScene({
         leader,
         text,
         width: estimateRouteLabelWidth(displayLabel),
+        sourceText: labelText.trim(),
+        defaultText: displayLabel,
         positionRole,
         // The Route Point's own text, not the truncated display form: an
         // ellipsis must not change which place a label claims.
@@ -3046,9 +3055,8 @@ export function ParticleEarthScene({
       const hostBounds = host.getBoundingClientRect();
       const atlas = host.closest(".living-atlas")
         ?? document.querySelector(".living-atlas");
-      const headerBounds = atlas
-        ?.querySelector(".living-atlas__header")
-        ?.getBoundingClientRect();
+      const header = atlas?.querySelector(".living-atlas__header, .native-atlas__header");
+      const headerBounds = header?.getBoundingClientRect();
       const cardBounds = atlas
         ?.querySelector(".living-atlas__active")
         ?.getBoundingClientRect();
@@ -3070,6 +3078,12 @@ export function ParticleEarthScene({
           : null,
         compactMobileLayout: currentCompactMobileLayout,
       }));
+      if (header?.classList.contains("native-atlas__header")) {
+        // The header's padding includes the landscape safe-area insets.
+        const padding = getComputedStyle(header);
+        routeLabelSafeArea.left = Math.max(routeLabelSafeArea.left, parseFloat(padding.paddingLeft));
+        routeLabelSafeArea.right = Math.min(routeLabelSafeArea.right, hostBounds.width - parseFloat(padding.paddingRight));
+      }
     };
 
     const applyTemporalProgress = (
@@ -3679,6 +3693,18 @@ export function ParticleEarthScene({
       host.dataset.placeLabelLayout = state;
       host.dataset.placeLabelLayoutFrame = String(sceneFrameRevision);
     };
+    const measureLegibleLabel = (value: string, fontSize: number) => Math.ceil(
+      labelMeasure?.measureText(value).width ?? [...value].length * fontSize,
+    );
+    const fitLegibleLabel = (value: string, width: number, fontSize: number) => {
+      if (measureLegibleLabel(value, fontSize) <= width) return value;
+      let prefix = "";
+      for (const character of value) {
+        if (measureLegibleLabel(prefix + character + "…", fontSize) > width) break;
+        prefix += character;
+      }
+      return prefix + "…";
+    };
     const updateRouteVectorLayer = () => {
       if (routeVectorOpacity <= 0.01) {
         // The layer is not drawn, so no Place Label layout runs this frame and
@@ -3733,7 +3759,13 @@ export function ParticleEarthScene({
       // frame, with the projected anchor each one claims. Place Label
       // arbitration below reads this instead of guessing from glyph boxes.
       const placedRouteLabels: PlacedRouteLabel[] = [];
-      const labelLimit = resolveRouteLabelLimit(currentCompactMobileLayout);
+      const legibility = currentLabelLegibility;
+      const fontSize = legibility?.fontSize ?? 11;
+      const halo = legibility ? (legibility.increasedContrast ? 3 : 2) : 0;
+      const ascent = legibility ? Math.ceil(fontSize * 1.1) : 13;
+      const descent = legibility ? Math.ceil(fontSize * 0.3) : 4;
+      const layoutLabelLimit = resolveRouteLabelLimit(currentCompactMobileLayout);
+      const labelLimit = legibility ? Math.min(layoutLabelLimit, MAX_RENDERED_MOBILE_ROUTE_LABELS) : layoutLabelLimit;
       let visibleLabelCount = 0;
 
       const arcWorld = {
@@ -3891,10 +3923,14 @@ export function ParticleEarthScene({
             if (placedRouteLabels.some((placed) => isCoincidentLabelAnchor(placed.anchor, { x, y }))) {
               return;
             }
-            const preferredHorizontal = x + label.width + 38 <= routeLabelSafeArea.right
+            const availableWidth = Math.max(x - routeLabelSafeArea.left, routeLabelSafeArea.right - x) - 24 - halo;
+            const displayText = legibility ? fitLegibleLabel(label.sourceText, availableWidth, fontSize) : label.defaultText;
+            const width = legibility ? Math.max(28, measureLegibleLabel(displayText, fontSize)) : label.width;
+            const preferredHorizontal = x + width + 38 <= routeLabelSafeArea.right
               ? 1
               : -1;
-            const preferredVertical = y - 34 >= routeLabelSafeArea.top ? -1 : 1;
+            const upwardClearance = legibility ? 22 + ascent + halo : 34;
+            const preferredVertical = y - upwardClearance >= routeLabelSafeArea.top ? -1 : 1;
             const directions = [
               [preferredHorizontal, preferredVertical],
               [preferredHorizontal, -preferredVertical],
@@ -3912,23 +3948,23 @@ export function ParticleEarthScene({
             for (const [horizontal, vertical] of directions) {
               const textX = x + horizontal * 24;
               const textY = y + vertical * 22 + (vertical > 0 ? 5 : 0);
-              const textLeft = horizontal > 0 ? textX : textX - label.width;
-              const textRight = horizontal > 0 ? textX + label.width : textX;
+              const textLeft = horizontal > 0 ? textX : textX - width;
+              const textRight = horizontal > 0 ? textX + width : textX;
               // Keep visual label arbitration on the authored text footprint so
               // making labels touch-safe cannot make distant, otherwise valid
               // labels disappear. Pointer overlap is resolved by nearest Route
               // Point identity below instead of by SVG DOM order.
               const box = {
-                left: textLeft,
-                top: textY - 13,
-                right: textRight,
-                bottom: textY + 4,
+                left: textLeft - halo,
+                top: textY - ascent - halo,
+                right: textRight + halo,
+                bottom: textY + descent + halo,
               };
               const hitBox = {
                 left: textLeft - 8,
-                top: textY - 26,
+                top: Math.min(textY - 26, box.top),
                 right: textRight + 8,
-                bottom: textY + 18,
+                bottom: Math.max(textY + 18, box.bottom),
               };
               if (
                 box.left < routeLabelSafeArea.left
@@ -3943,6 +3979,10 @@ export function ParticleEarthScene({
               break;
             }
             if (!placement) return;
+            if (label.text.textContent !== displayText) {
+              label.text.textContent = displayText;
+              label.element.dataset.routeLabel = displayText;
+            }
 
             // Keep the annotation tether visually separate from the geographic
             // route. The five-pixel gap is edge-to-edge: account for the
@@ -4070,7 +4110,8 @@ export function ParticleEarthScene({
         // modest persistence bonus so tiny wheel/rotation deltas do not churn
         // dense metro labels, while route labels still win every collision.
         const facingThreshold = cityLabelFacingThreshold(scale);
-        const maxRank = tier === "capitals" ? 1 : tier === "prefectures" ? 2 : 3;
+        const maxRank = tier === "capitals" ? 1 : (tier === "prefectures" || legibility ? 2 : 3);
+        const cityLimit = legibility ? 6 : CITY_LABEL_BUDGET;
         // The regional all-tier scan can contain ~15k cities, so a scalar
         // clip/frustum check against the shared frame's matrix keeps that scan
         // cheap while full projection stays bounded to the <=72 retained labels
@@ -4081,7 +4122,7 @@ export function ParticleEarthScene({
           cityTierData.cities,
           [routeCameraPosition.x, routeCameraPosition.y, routeCameraPosition.z],
           facingThreshold,
-          CITY_LABEL_BUDGET,
+          legibility ? cityLimit * 3 : cityLimit,
           maxRank,
           persistentCities,
           isCityCandidateInsideViewport,
@@ -4094,11 +4135,11 @@ export function ParticleEarthScene({
         const cityBoxes: ProjectedRouteLabelBox[] = [];
         let visibleCityCount = 0;
         let redundantCityLabelCount = 0;
-        for (let index = 0; index < cities.length; index += 1) {
-          if (visibleCityCount >= CITY_LABEL_BUDGET) break;
-          const city = cities[index];
+        let cityIndex = 0;
+        for (; cityIndex < cities.length && visibleCityCount < cityLimit; cityIndex += 1) {
+          const city = cities[cityIndex];
           const displayName = resolveCityDisplayName(city, cityLabelLocale);
-          const entry = ensureCityLabel(index);
+          const entry = ensureCityLabel(cityIndex);
           if (!entry) break;
           if (!projectCityPoint(city, routeProjectedPoint) || !isProjectedPointInsideViewport(
             routeProjectedPoint.x,
@@ -4113,10 +4154,10 @@ export function ParticleEarthScene({
           const textX = routeProjectedPoint.x + 6;
           const textY = routeProjectedPoint.y - 5;
           const box = {
-            left: textX,
-            top: textY - 9,
-            right: textX + estimateCityLabelWidth(displayName),
-            bottom: textY + 2,
+            left: textX - halo,
+            top: textY - (legibility ? ascent : 9) - halo,
+            right: textX + (legibility ? measureLegibleLabel(displayName, fontSize) : estimateCityLabelWidth(displayName)) + halo,
+            bottom: textY + (legibility ? descent : 2) + halo,
           };
           // #374: a Place Label can miss every box and still repeat the Route
           // Point label a few pixels away. Suppress only that repetition -
@@ -4130,6 +4171,8 @@ export function ParticleEarthScene({
           if (redundantWithRouteLabel) redundantCityLabelCount += 1;
           if (
             redundantWithRouteLabel
+            || (legibility && (box.left < routeLabelSafeArea.left || box.right > routeLabelSafeArea.right
+              || box.top < routeLabelSafeArea.top || box.bottom > routeLabelSafeArea.bottom))
             || cityBoxes.some((candidate) => routeLabelBoxesOverlap(candidate, box, 4))
             || labelBoxes.some((candidate) => routeLabelBoxesOverlap(candidate, box, 4))
           ) {
@@ -4154,7 +4197,7 @@ export function ParticleEarthScene({
           entry.city = city;
           visibleCityCount += 1;
         }
-        for (let index = cities.length; index < cityLabelPool.length; index += 1) {
+        for (let index = cityIndex; index < cityLabelPool.length; index += 1) {
           cityLabelPool[index].element.style.display = "none";
           cityLabelPool[index].city = null;
         }
@@ -6784,6 +6827,21 @@ export function ParticleEarthScene({
         // the labels keep the previous mode's layout until the next real move.
         routeProjectionRevision += 1;
       },
+      setLabelLegibility(settings: EarthLabelLegibility | undefined) {
+        if (settings === currentLabelLegibility) return;
+        currentLabelLegibility = settings;
+        host.toggleAttribute("data-legible-labels", Boolean(settings));
+        host.toggleAttribute("data-label-contrast", Boolean(settings?.increasedContrast));
+        if (settings) {
+          const weight = settings.boldText ? 700 : 600;
+          labelMeasure ??= document.createElement("canvas").getContext("2d");
+          if (labelMeasure) labelMeasure.font = `${weight} ${settings.fontSize}px system-ui, sans-serif`;
+          host.style.setProperty("--earth-label-size", `${settings.fontSize}px`);
+          host.style.setProperty("--earth-label-weight", String(weight));
+        }
+        routeProjectionRevision += 1;
+        wakeRenderLoop();
+      },
       setFocusColor(color: string | undefined) {
         personalMaterial.uniforms.uColor.value.set(color ?? 0xffdc72);
         host.dataset.focusColor = `#${personalMaterial.uniforms.uColor.value.getHexString()}`;
@@ -6905,6 +6963,10 @@ export function ParticleEarthScene({
     if (!controllerRevision) return;
     controllerRef.current?.setCompactMobileLayout(compactMobileLayout);
   }, [compactMobileLayout, controllerRevision, controllerRef]);
+
+  useEffect(() => {
+    controllerRef.current?.setLabelLegibility(labelLegibility);
+  }, [labelLegibility, controllerRevision, controllerRef]);
 
   useEffect(() => {
     if (!controllerRevision) return;

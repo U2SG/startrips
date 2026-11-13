@@ -8,6 +8,12 @@ export type SceneJourney = Pick<Journey, "id" | "title" | "startedOn" | "endedOn
 };
 export type Snapshot = { version: 1; scopeId: string; revision: number; access: "owner" | "guest";
   earthExperience: "default" | "particle-only"; journeys: SceneJourney[]; selection?: Selection | null; active: boolean };
+export type SceneAccessibility = {
+  textScale: number;
+  accessibilitySize: boolean;
+  boldText: boolean;
+  increasedContrast: boolean;
+};
 export type SceneEvent = { version: 1; kind: "ready" | "select" | "story" | "invalidate" | "cameraInterrupted" | "rendered" | "switchAccess";
   scopeId: string; revision: number; requestId: string; journeyId?: string; routePointId?: string; assetId?: string; focusRequestId?: string };
 
@@ -94,7 +100,12 @@ export function acceptsSnapshot(current: Snapshot | null, next: Snapshot) {
 
 declare global {
   interface Window {
-    atlasNative: { receive: (json: string) => void };
+    atlasNative: {
+      pending?: string | null;
+      accessibility?: SceneAccessibility | null;
+      receive: (json: string) => void;
+      setAccessibility: (settings: SceneAccessibility) => void;
+    };
     webkit?: { messageHandlers?: { atlas?: { postMessage: (body: string) => void } } };
   }
 }

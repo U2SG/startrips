@@ -55,6 +55,7 @@ import {
   type RouteArrivalBloomRequest,
 } from "./ParticleEarthScene";
 import { GLOBE_MODE_CONFIG } from "./globeMode";
+import type { EarthLabelLegibility } from "./labelArbitration";
 import {
   GLOBE_SEMANTIC_ZOOM_CEILING,
   SEMANTIC_ZOOM_RELEASE_ZOOM,
@@ -192,6 +193,7 @@ export function LivingAtlasGlobeControls({
 }
 
 export type LivingAtlasGlobeProps = {
+  labelLegibility?: EarthLabelLegibility;
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
   /** One-shot camera orientation seed; never a semantic focus object. */
@@ -298,6 +300,7 @@ type AtlasEarthPresentation = Pick<
   | "onGlobePointPick"
   | "reduceMotion"
   | "mediaCoverHint"
+  | "labelLegibility"
 > & {
   /**
    * #252: the Dive controller lives with the Atlas globe, but the camera lives
@@ -425,6 +428,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   reduceMotion={atlas?.reduceMotion ?? loginPresentation.reduceMotion}
                   rotationYOverride={atlas ? undefined : GLOBE_MODE_CONFIG.particleSphere.rotationY}
                   compactMobileLayout={compactMobileLayout}
+                  labelLegibility={atlas?.labelLegibility}
                   visibilityHint={{
                     opaqueMediaCover: atlas?.mediaCoverHint?.opaqueMediaCover ?? false,
                     coverTransitionActive: atlas?.mediaCoverHint?.coverTransitionActive ?? false,
@@ -498,6 +502,7 @@ export function LivingAtlasGlobe({
   earthExperiencePolicy = "default",
   globeFocusMode = false,
   reduceMotion,
+  labelLegibility,
   cinematicActive = false,
   mediaCoverHint,
 }: LivingAtlasGlobeProps) {
@@ -1177,6 +1182,7 @@ export function LivingAtlasGlobe({
         coverTransitionActive: Boolean(mediaCoverHint?.coverTransitionActive),
       },
       reduceMotion,
+      labelLegibility,
     });
   }, [
     activeJourneyRouteId,
@@ -1216,6 +1222,7 @@ export function LivingAtlasGlobe({
     onHomeBaseActivate,
     persistentEarth,
     reduceMotion,
+    labelLegibility,
     mediaCoverHint?.opaqueMediaCover,
     mediaCoverHint?.coverTransitionActive,
     temporalReveal,
@@ -1278,6 +1285,7 @@ export function LivingAtlasGlobe({
               focusFlightPending={focusFlightPending}
               focusFlightProfile={focusFlightProfile}
               reduceMotion={reduceMotion}
+              labelLegibility={labelLegibility}
               language={detailLanguage}
               onJourneyRoutePointActivate={onJourneyRoutePointActivate}
               onGlobeBlankActivate={onGlobeBlankActivate}
