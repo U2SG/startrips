@@ -366,8 +366,16 @@ try {
     if(delayJournal) {
       const photo=page.getByRole("button",{name:"查看 虚构照片.svg",exact:true});
       await photo.waitFor();
-      await page.waitForFunction(()=>window.__observation?.assetId==="photo-one" && document.querySelector("[data-stream-shot] img")?.naturalWidth===600);
-      await photo.focus();
+      await photo.evaluate(el=>el.focus({preventScroll:true}));
+      // The image can finish decoding before the transform is written by the
+      // opening frame. Release the delayed journal after the initial placement.
+      await page.waitForFunction(()=>{
+        const flow=document.querySelector(".journey-stream__flow");
+        const shot=flow?.querySelector("[data-stream-shot]");
+        if(window.__observation?.assetId!=="photo-one" || shot?.querySelector("img")?.naturalWidth!==600) return false;
+        const viewport=flow.getBoundingClientRect(), picture=shot.getBoundingClientRect();
+        return Math.abs(picture.top+picture.height/2-viewport.top-viewport.height/2)<=2;
+      });
       const before=await photo.evaluate(el=>{
         window.__journalQaFirstMedia=el;
         return el.getBoundingClientRect().top;
@@ -375,7 +383,8 @@ try {
       releaseJournal();
       await page.locator(".journey-stream[data-journal]").waitFor();
       assert.equal(await photo.evaluate(el=>el===window.__journalQaFirstMedia && el===document.activeElement),true);
-      assert.ok(Math.abs((await photo.boundingBox()).y-before)<=2,"the late journal leaves the initial media anchored");
+      const after=(await photo.boundingBox()).y;
+      assert.ok(Math.abs(after-before)<=2,`the late journal leaves the initial media anchored (before: ${before}, after: ${after})`);
       assert.equal(await page.evaluate(()=>window.__observation.assetId),"photo-one");
     }
     await page.locator(".journey-stream[data-journal]").waitFor();
