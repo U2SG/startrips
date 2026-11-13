@@ -607,7 +607,11 @@ async function verifyAccountDockYieldsToShare(browser) {
       const entry = document.querySelector('[data-media-presentation-entry="dock"]');
       return entry instanceof HTMLButtonElement && !entry.disabled;
     }, undefined, { timeout: 10_000 });
-    await page.evaluate(() => document.querySelector('[data-media-presentation-entry="dock"]')?.click());
+    await page.locator(".account-dock__tab").click();
+    await page.locator('[data-media-presentation-entry="dock"]').click();
+    const activeStyle = page.locator('[data-media-presentation-option="classic"]');
+    check("desktop-gateway/media-presentation-chooser", presentationSaves === 0 && await activeStyle.getAttribute("aria-pressed") === "true");
+    await page.locator('[data-media-presentation-option="note-overlay"]').click();
     await page.waitForFunction(() => document.querySelector('[data-media-presentation-entry="dock"]')?.dataset.mediaPresentationValue === "note-overlay", undefined, { timeout: 10_000 });
     check("desktop-gateway/media-presentation-saved-to-account", presentation === "note-overlay" && presentationSaves === 1, { presentation, presentationSaves });
 

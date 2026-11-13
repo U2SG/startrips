@@ -103,7 +103,7 @@ function JourneyStreamContent({
   onNavigate?: (journeyId: string) => void;
   onObservationChange?: (observation: StoryLogicalObservation | null) => void;
 }) {
-  const { readMedia } = useAtlasView();
+  const { capabilities, readMedia } = useAtlasView();
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeyIndex >= 0 ? journeys[journeyIndex] : null;
   const previousJourney = journeyIndex > 0 ? journeys[journeyIndex - 1] : null;
@@ -744,7 +744,7 @@ function JourneyStreamContent({
                 : <IconMusicOff size={19} stroke={1.35} aria-hidden="true" />}
             </button>
           ) : null}
-          <StoryPresentationPicker onOpenClassic={() => onOpenClassic(classicTarget)} />
+          <StoryPresentationPicker canEdit={capabilities.canEditJourney} onOpenClassic={() => onOpenClassic(classicTarget)} />
         </div>
       </header>
       {previousJourney && onNavigate ? (

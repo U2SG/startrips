@@ -1270,6 +1270,54 @@ body:has(.living-atlas) .account-dock > .account-dock__tab {
 .account-dock__actions button small,
 .mobile-v2__more-actions button small { color: rgba(153, 184, 174, 0.56); font-size: 10px; }
 
+:is(.account-sheet__actions, .account-dock__actions) button[data-media-presentation-entry] {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+[data-media-presentation-entry] small { grid-row: 2; }
+.account-media-presentation__chevron {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  color: var(--control-muted);
+}
+[data-media-presentation-entry][aria-expanded="true"] .account-media-presentation__chevron {
+  transform: rotate(180deg);
+}
+
+.account-media-presentation__choices {
+  display: grid;
+  padding-inline-start: 12px;
+  border-inline-start: 1px solid var(--control-line);
+}
+
+:is(.account-sheet__actions, .account-dock__actions) .account-media-presentation__choices button {
+  grid-template-columns: 12px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+
+.account-media-presentation__choices button[aria-pressed]::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--control-muted);
+  border-radius: 50%;
+}
+
+.account-media-presentation__choices button[aria-pressed="true"]::before {
+  border-color: var(--control-select);
+  background: var(--control-select);
+}
+
+.account-media-presentation__choices button[aria-pressed="true"] { color: var(--control-select); }
+.account-media-presentation__choices button:not([aria-pressed]) span { grid-column: 2; }
+:is(.account-sheet, .account-dock__panel) .account-media-presentation__choices p {
+  margin: 8px 0;
+  color: var(--control-muted);
+}
+
 /* An account row is large, so like the 更多 sheet's rows it answers a press
    with a tint rather than a scale. */
 .account-sheet__actions button:active:not(:disabled),

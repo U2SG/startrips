@@ -1,19 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mediaPresentationFromSearch, mediaPresentationLabel, nextMediaPresentationStyle, parseMediaPresentationStyle } from "./mediaPresentation";
+import { mediaPresentationFromSearch, mediaPresentationLabel, parseMediaPresentationStyle } from "./mediaPresentation";
 
 describe("media presentation style", () => {
   it("falls back to classic for anything it does not know", () => {
     expect(parseMediaPresentationStyle(null)).toBe("classic");
     expect(parseMediaPresentationStyle("flip")).toBe("classic");
     expect(parseMediaPresentationStyle("book")).toBe("book");
-  });
-
-  it("cycles through every style and back", () => {
-    expect(nextMediaPresentationStyle("classic")).toBe("note-overlay");
-    expect(nextMediaPresentationStyle("note-overlay")).toBe("book");
-    expect(nextMediaPresentationStyle("book")).toBe("book-3d");
-    expect(nextMediaPresentationStyle("book-3d")).toBe("stream");
-    expect(nextMediaPresentationStyle("stream")).toBe("classic");
   });
 
   it("names each style for the account menu", () => {

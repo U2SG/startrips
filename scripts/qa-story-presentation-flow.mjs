@@ -62,7 +62,7 @@ async function swipeUp(element, distance=180){
 }
 const story = page.locator('.journey-story');
 const account = page.locator('.account-sheet');
-const exit = () => page.getByRole('button', {name:'退出媒体呈现',exact:true});
+const editorNavigation = () => page.locator('.story-presentation-picker__navigation[data-opens-editor]');
 const enter = () => page.getByRole('button', {name:'进入媒体呈现',exact:true});
 // Desktop classic Story gives a member who can edit one labelled 编辑 entry;
 // 退出媒体呈现 there is reserved for read-only viewers.
@@ -83,7 +83,7 @@ async function openCurrentStory() {
  }
 }
 async function openAccount() {
- // Immersive readers own the screen. Use the user's icon exit before opening
+ // Immersive readers own the screen. Use the editor entry before opening
  // Account from the editable in-context Story, never click behind a modal.
  if (await enter().count() === 0) await leavePresentation();
  await page.locator('.mobile-v2__account-trigger').click();
@@ -98,33 +98,44 @@ async function waitStyle(next) {
   const selector = expected === 'book' ? '.journey-book' : expected === 'book-3d' ? '.journey-book-3d' : expected === 'stream' ? '.journey-stream' : '.journey-story';
   const reader = document.querySelector(selector);
   return reader && !reader.hasAttribute('data-story-editing')
-   && (document.querySelector('button[aria-label="退出媒体呈现"]')
+   && (document.querySelector('button[data-opens-editor]')
     // Desktop classic: an editing member's entry is the labelled 编辑 toggle.
     || (selector === '.journey-story' && reader.dataset.storyLayout === 'desktop'
      && reader.querySelector('button.journey-story__edit-toggle[aria-label="编辑故事"]')))
    && (!['classic','note-overlay'].includes(expected) || reader.dataset.storyPresentation === expected);
  }, next);
 }
-async function cycleAccountStyle() {
- const previous = style;
- await openAccount();
- const entry = account.locator('[data-media-presentation-entry="sheet"]');
- assert.equal(await entry.getAttribute('data-media-presentation-value'),previous);
- await entry.click();
- await account.waitFor({state:'detached'});
- assert.notEqual(style,previous);
- await waitStyle(style);
+const styleEntry = () => account.locator('[data-media-presentation-entry="sheet"]');
+const styleOption = option => account.locator(`[data-media-presentation-option="${option}"]`);
+const retryAccountStyle = () => account.getByRole('group',{name:'选择媒体呈现样式'}).getByRole('button',{name:'重试',exact:true});
+async function selectAccountStyle(next) {
+ const previous=style, writes=saves.length;
+ await styleEntry().click();
+ assert.equal(await styleEntry().getAttribute('aria-expanded'),'true');
+ assert.equal(await styleEntry().getAttribute('data-media-presentation-value'),previous);
+ assert.equal(await styleOption(previous).getAttribute('aria-pressed'),'true');
+ assert.equal(saves.length,writes,'opening the chooser wrote a preference');
+ if (!result.accountChooserVerified) {
+  assert.equal(await account.locator('[data-media-presentation-option]').count(),5);
+  await page.screenshot({path:`${out}/account-media-presentation.png`});
+  result.accountChooserVerified=true;
+ }
+ await styleOption(next).click();
 }
 async function choose(next) {
- for (let i=0; style!==next && i<5; i++) await cycleAccountStyle();
+ if (style!==next) {
+  await openAccount();
+  await selectAccountStyle(next);
+  await account.waitFor({state:'detached'});
+ }
  assert.equal(style,next);
  await waitStyle(next);
 }
-async function assertIcon(button, label) {
+async function assertNavigation(button, label, visibleText = false) {
  await button.waitFor({state:'visible'});
- assert.equal((await button.textContent()).trim(),'','presentation navigation must remain icon-only');
+ assert.equal((await button.textContent()).trim(),visibleText ? label : '');
  assert.equal(await button.getAttribute('data-tooltip'),label);
- assert.equal(await button.locator('svg').count(),1);
+ assert.equal(await button.locator('svg').count(),visibleText ? 0 : 1);
  const box=await button.boundingBox();
  assert.ok(box && box.width>=43.5 && box.height>=43.5,`${label} must have a 44px touch target`);
  assert.ok(box.x>=-1 && box.x+box.width<=page.viewportSize().width+1,`${label} is horizontally clipped: ${JSON.stringify({box,viewport:page.viewportSize(),handoff:await page.evaluate(()=>window.__qaEditorNavigationGeometry)})}`);
@@ -203,7 +214,7 @@ async function assertEditor() {
  assert.equal(await story.getAttribute('data-story-presentation'),'classic');
  assert.equal(await story.getByRole('textbox',{name:'旅程感想',exact:true}).isVisible(),true);
  assert.equal(await story.getByRole('combobox',{name:'切换媒体呈现',exact:true}).count(),0);
- await assertIcon(enter(),'进入媒体呈现');
+ await assertNavigation(enter(),'进入媒体呈现');
  const button=exportButton();
  await button.waitFor({state:'visible'});
  assert.equal(await button.evaluate(el=>Boolean(el.closest('.journey-story__editor-actions'))),true);
@@ -223,13 +234,13 @@ async function leavePresentation() {
   await edit.waitFor({state:'visible'});
   assert.equal((await edit.textContent()).trim(),'编辑','desktop editing members enter the editor through a labelled 编辑 entry');
   assert.equal(await edit.getAttribute('aria-pressed'),'false');
-  assert.equal(await exit().count(),0,'desktop editing members must not get 退出媒体呈现 as a second edit entry');
+  assert.equal(await editorNavigation().count(),0,'desktop editing members must have one edit entry');
   const box=await edit.boundingBox();
   assert.ok(box && box.x>=-1 && box.x+box.width<=page.viewportSize().width+1,`编辑 is horizontally clipped: ${JSON.stringify(box)}`);
   await edit.click();
  } else {
-  await assertIcon(exit(),'退出媒体呈现');
-  await exit().click();
+  await assertNavigation(editorNavigation(),'编辑故事',true);
+  await editorNavigation().click();
  }
  // Mobile Manage intentionally commits focus across two animation frames. The
  // classic reader can reuse the clicked button, so focus equality alone is not
@@ -452,7 +463,7 @@ try {
  const accountRetryStart=saves.length;
  rejectNextSave=true;
  await openAccount();
- await account.locator('[data-media-presentation-entry="sheet"]').click();
+ await selectAccountStyle('note-overlay');
  await account.getByRole('status').filter({hasText:'无法确认'}).waitFor({state:'visible'});
  assert.deepEqual(saves.slice(accountRetryStart),['note-overlay']);
  assert.equal(style,'classic');
@@ -465,15 +476,16 @@ try {
  await waitStyle('note-overlay');
  assert.deepEqual(saves.slice(accountRetryStart),['note-overlay','note-overlay']);
  result.accountFailureRetriedFromEditor=true;
- // The account entry retries the same failed intent instead of advancing the cycle.
+ // Retrying in Account preserves the failed intent.
  rejectNextSave=true;
  const accountOwnRetryStart=saves.length;
  await openAccount();
- await account.locator('[data-media-presentation-entry="sheet"]').click();
+ await selectAccountStyle('book');
  await account.getByRole('status').filter({hasText:'无法确认'}).waitFor({state:'visible'});
  await closeAccount();
  await openAccount();
- await account.locator('[data-media-presentation-entry="sheet"]').click();
+ await styleEntry().click();
+ await retryAccountStyle().click();
  await account.waitFor({state:'detached'});
  await waitStyle('book');
  assert.deepEqual(saves.slice(accountOwnRetryStart),['book','book']);
@@ -483,7 +495,7 @@ try {
  holdNextSave=true;
  const heldRequest=page.waitForRequest(request=>request.url().endsWith('/api/account-preferences/media-presentation')&&request.method()==='PUT');
  await openAccount();
- await account.locator('[data-media-presentation-entry="sheet"]').click();
+ await selectAccountStyle('book-3d');
  await heldRequest;
  assert.equal(await story.locator('.journey-story__layout').evaluate(el=>el.inert),true);
  assert.equal(await story.locator('[data-story-film-export-trigger="true"]').evaluate(el=>el.disabled || Boolean(el.closest('[inert]'))),true);
@@ -500,7 +512,7 @@ try {
  assert.equal(await enter().isDisabled(),true);
  const writesBefore=saves.length;
  await openAccount();
- await account.locator('[data-media-presentation-entry="sheet"]').click();
+ await selectAccountStyle('note-overlay');
  await account.getByRole('status').filter({hasText:'请先保存'}).waitFor({state:'visible'});
  assert.equal(saves.length,writesBefore);
  assert.equal(await page.getByRole('textbox',{name:'旅程感想',exact:true}).inputValue(),draft);
@@ -530,7 +542,8 @@ try {
  await leavePresentation();
  await page.getByRole('textbox',{name:'旅程感想',exact:true}).fill(draft);
  await openAccount();
- await account.locator('[data-media-presentation-entry="sheet"]').click();
+ await styleEntry().click();
+ await retryAccountStyle().click();
  await account.getByRole('status').filter({hasText:'请先保存'}).waitFor({state:'visible'});
  assert.equal(preferenceReads,readsBeforeRetry,'Account read-error retry bypassed the draft guard');
  assert.equal(await page.getByRole('textbox',{name:'旅程感想',exact:true}).inputValue(),draft);

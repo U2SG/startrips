@@ -7,6 +7,12 @@
   touch-action: manipulation; cursor: pointer;
 }
 .story-presentation-picker__navigation:focus-visible { outline: 2px solid var(--control-focus); outline-offset: 2px; }
+.story-presentation-picker .story-presentation-picker__navigation[data-opens-editor] {
+  width: auto;
+  padding-inline: 8px;
+  font: 500 12px/1 var(--archive-sans);
+  white-space: nowrap;
+}
 .story-presentation-picker__navigation:disabled { cursor: default; opacity: var(--control-disabled-opacity); }
 .story-presentation-picker__error {
   position: absolute; right: 0; top: 100%; z-index: var(--z-content-10);

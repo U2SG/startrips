@@ -1,4 +1,5 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useId, useState, useSyncExternalStore } from "react";
+import { IconChevronDown } from "@tabler/icons-react";
 import { isSharedAtlasPathname } from "./sharedAtlas";
 import { useMediaPresentationAccess } from "./MediaPresentationProvider";
 import { MEDIA_PRESENTATION_STYLES, parseMediaPresentationStyle, type MediaPresentationStyle } from "./mediaPresentationStyle";
@@ -28,12 +29,6 @@ export function mediaPresentationFromSearch(search: string): MediaPresentationSt
   return value !== null && MEDIA_PRESENTATION_STYLES.includes(value as MediaPresentationStyle)
     ? value as MediaPresentationStyle
     : null;
-}
-
-/** What one activation of the menu entry chooses: the next style, wrapping. */
-export function nextMediaPresentationStyle(style: MediaPresentationStyle): MediaPresentationStyle {
-  const index = MEDIA_PRESENTATION_STYLES.indexOf(style);
-  return MEDIA_PRESENTATION_STYLES[(index + 1) % MEDIA_PRESENTATION_STYLES.length];
 }
 
 export function mediaPresentationLabel(style: MediaPresentationStyle): string {
@@ -116,34 +111,66 @@ export function useMediaPresentationRecovery(): (style: MediaPresentationStyle) 
   return access?.recover ?? writeMediaPresentationStyle;
 }
 
-/**
- * The account-menu entry, in the desktop dock and the mobile sheet. One
- * activation moves to the next style; the label names the style in force.
- */
-export function MediaPresentationMenuEntry({ surface, onConfirmed }: { surface: "dock" | "sheet"; onConfirmed?: () => void }) {
+export function MediaPresentationMenuEntry({ surface, visible = true, onConfirmed }: {
+  surface: "dock" | "sheet";
+  visible?: boolean;
+  onConfirmed?: () => void;
+}) {
   const access = useMediaPresentationAccess();
   const style = useMediaPresentationStyle();
-  const label = mediaPresentationLabel(style);
-  return (
+  const [open, setOpen] = useState(false);
+  const choicesId = useId();
+  const expanded = visible && open;
+  const canChoose = !access || Boolean(access.select);
+  useEffect(() => {
+    if (!visible) setOpen(false);
+  }, [visible]);
+
+  // Release the account modal before a confirmed preference mounts a new reader.
+  function confirm() {
+    setOpen(false);
+    onConfirmed?.();
+  }
+
+  function choose(next: MediaPresentationStyle) {
+    if (next === style) return;
+    if (access) {
+      void access.select?.(next, confirm);
+    } else {
+      confirm();
+      writeMediaPresentationStyle(next);
+    }
+  }
+
+  return <>
     <button
       type="button"
       data-media-presentation-entry={surface}
       data-media-presentation-value={style}
-      disabled={access ? access.busy || (!access.select && !access.error) : false}
-      onClick={() => {
-        if (!access) {
-          onConfirmed?.();
-          writeMediaPresentationStyle(nextMediaPresentationStyle(style));
-        } else if (access.error) {
-          access.retry(onConfirmed);
-        } else if (access.select) {
-          // Release the account modal before a confirmed preference mounts a
-          // different reader. A rejected save retains its previous presentation.
-          void access.select(nextMediaPresentationStyle(style), onConfirmed);
-        } else access.retry();
-      }}
+      aria-expanded={expanded}
+      aria-controls={expanded ? choicesId : undefined}
+      disabled={access ? access.busy || (!canChoose && !access.error) : false}
+      onClick={() => setOpen(value => !value)}
     >
-      <span>媒体呈现</span><small role={access?.error ? "status" : undefined}>{access?.busy ? "请稍候…" : access?.error || label}</small>
+      <span>媒体呈现</span><small>{mediaPresentationLabel(style)}</small>
+      <IconChevronDown className="account-media-presentation__chevron" size={16} aria-hidden="true" />
     </button>
-  );
+    {expanded ? (
+      <div id={choicesId} className="account-media-presentation__choices" role="group" aria-label="选择媒体呈现样式">
+        {canChoose ? MEDIA_PRESENTATION_STYLES.map(option => (
+          <button key={option} type="button" aria-pressed={option === style}
+            data-media-presentation-option={option} disabled={access?.busy}
+            onClick={() => choose(option)}>
+            <span>{mediaPresentationLabel(option)}</span>
+          </button>
+        )) : null}
+        {access?.busy || access?.error ? (
+          <p role="status">{access.busy ? "请稍候…" : access.error}</p>
+        ) : null}
+        {access?.error && !access.busy ? (
+          <button type="button" onClick={() => access.retry(confirm)}><span>重试</span></button>
+        ) : null}
+      </div>
+    ) : null}
+  </>;
 }

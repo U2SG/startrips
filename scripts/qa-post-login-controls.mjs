@@ -3194,7 +3194,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         throw new Error(`Story continuity selected the wrong journey: ${storyTitle}`);
       }
       const storyLayout = await page.locator(".journey-story").getAttribute("data-story-layout");
-      const desktopEditControls = await page.locator(".journey-story").getByRole("button", { name: "编辑故事", exact: true }).count();
+      const desktopEditControls = await page.locator(".journey-story .journey-story__edit-toggle").count();
       if (storyLayout !== "mobile" || desktopEditControls !== 0) {
         throw new Error(`Mobile Story inherited desktop editing chrome: ${JSON.stringify({ storyLayout, desktopEditControls })}`);
       }
