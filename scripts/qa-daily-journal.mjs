@@ -180,7 +180,7 @@ try {
     await datePicker.selectOption("2027-04-03");
     const close = journal.getByRole("button",{name:"关闭手记",exact:true});
     await page.waitForFunction(()=>document.activeElement?.getAttribute("aria-label")==="关闭手记");
-    assert.equal(await appendix.locator("details[open]").count(),0,"the appendix remains folded");
+    assert.equal(await page.locator(".journey-stream__journal details[open]").count(),0,"the appendix remains folded");
     await prose.waitFor();
     for (const text of ["她记下海面反光。", "航班号未记录，但我们顺利抵达。", "计划公园取消", "19:06（当地） 从旅馆出发。"]) {
       await journal.getByText(text,{exact:true}).waitFor();
@@ -259,19 +259,19 @@ try {
   const datePicker = page.getByRole("combobox",{name:"按日期查看手记",exact:true});
   const mediaFlow = page.locator(".journey-stream__flow");
   const beforeOpen = await mediaFlow.evaluate(el=>el.scrollHeight);
+  assert.ok(await photo.evaluate(el=>el.closest(".journey-stream__item").querySelector("[data-journal-date]")));
   await photoDay.click();
   const firstPanel = page.getByRole("dialog",{name:"2027-04-01 手记",exact:true});
   await firstPanel.waitFor();
   assert.equal(await mediaFlow.evaluate(el=>el.scrollHeight),beforeOpen,"the journal panel must not add space between photos");
-  assert.ok(await photo.evaluate(el=>el.closest(".journey-stream__item").querySelector("[data-journal-date]")));
   await firstPanel.getByRole("button",{name:"关闭手记",exact:true}).click();
   await page.getByRole("button",{name:"回到旅程开头",exact:true}).click();
   await datePicker.selectOption("2027-04-14");
   const lastPanel = page.getByRole("dialog",{name:"2027-04-14 手记",exact:true});
   await lastPanel.waitFor();
-  assert.equal(await day.last().getAttribute("open"),null);
   await page.keyboard.press("Escape");
   await lastPanel.waitFor({state:"detached"});
+  assert.equal(await day.last().getAttribute("open"),null);
   await page.getByRole("button",{name:"回到旅程开头",exact:true}).click();
   assert.equal(await page.locator(".journey-stream__flow").evaluate(el=>el.scrollTop),0);
   assert.deepEqual(stored.chapters[0].events[0].mediaIds,["photo-one"]);
