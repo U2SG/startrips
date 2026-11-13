@@ -10,7 +10,12 @@ import UIKit
     @Published public private(set) var cursor: StoryCursor
     @Published public private(set) var images: [String: UIImage] = [:]
     @Published public private(set) var failure: String?
-    @Published public private(set) var playback: PlaybackClock?
+    /// The 50ms clock tick only moves `elapsedMS`; publishing that would re-render and re-lay out
+    /// the whole Story 20 times a second (a slow device never idles). Views are told about beat,
+    /// pause, tempo and start/stop changes; the stream's display link reads the live clock itself.
+    public private(set) var playback: PlaybackClock? {
+        willSet { if !PlaybackClock.sameForViews(playback, newValue) { objectWillChange.send() } }
+    }
     @Published public var expanded = true
     @Published public private(set) var paused = false
     @Published public private(set) var tempo: NarrativeTempo = .standard

@@ -10,7 +10,9 @@ final class StreamFlowDriver: NSObject, ObservableObject {
     struct Sample: Equatable {
         let beat: Int
         /// Position on the playback timeline (ms) when sampled.
-        let scheduleMS: Double
+        var scheduleMS: Double
+        /// Where the sampled beat starts on the timeline, so a live clock read becomes timeline ms.
+        var beatStartMS: Double = 0
         let paused: Bool
         /// Where the reading point must be, and when (see `StreamFlow.knots`).
         let knots: [StreamFlow.Knot]
@@ -28,6 +30,9 @@ final class StreamFlowDriver: NSObject, ObservableObject {
 
     weak var scrollView: UIScrollView?
     var onTakeover: (() -> Void)?
+    /// The live playback position (beat, timeline ms), read once per display frame. SwiftUI is not
+    /// told about every clock tick, so this is how the flow keeps time between beats.
+    var clock: (() -> (beat: Int, elapsedMS: Double)?)?
     var reduceMotion = false
     private var link: CADisplayLink?
     private var sample: Sample?
@@ -88,7 +93,10 @@ final class StreamFlowDriver: NSObject, ObservableObject {
     @objc private func frame(_ link: CADisplayLink) {
         let now = link.targetTimestamp
         defer { lastFrame = now }
-        guard let scrollView, let sample else { return }
+        guard let scrollView, var sample else { return }
+        if let live = clock?(), live.beat == sample.beat, sample.beatStartMS + live.elapsedMS != sample.scheduleMS {
+            sample.scheduleMS = sample.beatStartMS + live.elapsedMS; self.sample = sample; sampledAt = CACurrentMediaTime()
+        }
         // The reader's finger always wins: playback pauses, play resumes the flow.
         // Only a real finger counts. `isDecelerating`/`isDragging` can be left set by UIKit's own
         // content-size adjustments (no touch at all), which used to pause playback by itself.

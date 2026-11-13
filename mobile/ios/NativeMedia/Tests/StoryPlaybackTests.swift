@@ -196,6 +196,22 @@ final class StoryPlaybackTests: XCTestCase {
         XCTAssertFalse(model.paused)
         XCTAssertEqual(model.playback?.paused, false)
     }
+    func testClockTicksAreNotViewChangesButBeatsPausesAndTempoAre() throws {
+        let journey = try MediaFixtures.journey()
+        let clock = PlaybackClock(beats: JourneyPlaybackPlan.build(journey))
+        var ticked = clock
+        ticked.tick(milliseconds: 50, mediaReady: true, videoOwnsCompletion: false)
+        XCTAssertNotEqual(ticked.elapsedMS, clock.elapsedMS)
+        XCTAssertTrue(PlaybackClock.sameForViews(clock, ticked), "a 50ms tick never re-renders the Story")
+        var advanced = clock; advanced.advance()
+        XCTAssertFalse(PlaybackClock.sameForViews(clock, advanced))
+        var paused = clock; paused.paused = true
+        XCTAssertFalse(PlaybackClock.sameForViews(clock, paused))
+        var faster = clock; faster.changeTempo(to: JourneyPlaybackPlan.build(journey, tempo: .fast))
+        XCTAssertFalse(PlaybackClock.sameForViews(clock, faster))
+        XCTAssertFalse(PlaybackClock.sameForViews(nil, clock))
+        XCTAssertTrue(PlaybackClock.sameForViews(nil, nil))
+    }
     func testFullPlanKeepsTransitNoteAndLiteralTempoValues() throws {
         let journey = try MediaFixtures.journey()
         let beats = JourneyPlaybackPlan.build(journey)

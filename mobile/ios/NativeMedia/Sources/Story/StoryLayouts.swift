@@ -276,11 +276,14 @@ struct StoryStream: View {
                 model.streamPlayback = true
                 driver.reduceMotion = reduceMotion
                 driver.onTakeover = { [weak model] in model?.setPaused(true) }
+                driver.clock = { [weak model] in
+                    guard let clock = model?.playback, clock.current != nil else { return nil }
+                    return (clock.index, clock.elapsedMS)
+                }
                 if let current = model.cursor.current, current.role != .journeyCover { proxy.scrollTo(current.id, anchor: .top) }
             }
             .onDisappear { driver.stop(); model.streamPlayback = false }
             .onChange(of: model.playback?.index) { _ in prefetch(); sync(proxy) }
-            .onChange(of: model.playback?.elapsedMS) { _ in sync(proxy) }
             .onChange(of: model.paused) { _ in sync(proxy) }
             // Rows realised or resized during a long beat (a video) refresh the anchors.
             .onChange(of: rowFrames) { _ in if playing { sync(proxy) } }
@@ -317,8 +320,8 @@ struct StoryStream: View {
         let anchor = here.flatMap { frames[$0] != nil ? entries[$0].id : nil }
         // A playing video row holds the flow in place (its frame must be laid out to do so).
         let videoRow = beat.asset?.isVideo == true ? here.flatMap { frames[$0] } : nil
-        driver.update(.init(beat: clock.index, scheduleMS: start + clock.elapsedMS, paused: model.paused, knots: knots,
-                            anchor: anchor, videoRow: videoRow))
+        driver.update(.init(beat: clock.index, scheduleMS: start + clock.elapsedMS, beatStartMS: start, paused: model.paused,
+                            knots: knots, anchor: anchor, videoRow: videoRow))
     }
 
     private func point(_ id: String?) -> MediaRoutePoint? { id.flatMap { id in model.journey.routePoints.first { $0.id == id } } }
