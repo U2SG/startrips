@@ -117,6 +117,25 @@ function journalStatusMarker(line: string): { status: JournalStatus; rest: strin
 /** A dated heading line: optional year, month, day, then optional title. */
 export const JOURNAL_DATE_HEADING = /^\s*(?:#{1,6}\s*)?(?:(\d{4})[-年/.])?(\d{1,2})[-月/.](\d{1,2})(?:日)?(?=\s|$|[（(])\s*(.*)$/;
 
+const journalWakeSummary = /^(?:[-*•]\s+)?(?:起床\s*[：:]\s*)?(?:有\s*(?:从\s*)?|实际\s*)(大约|约)?\s*((?:[01]?\d|2[0-3]):[0-5]\d)\s*(左右)?\s*醒(?:来)?(?:的描述)?[。.]?\\?\s*$/u;
+const journalReportedLead = /^(\s*(?:[-*•]\s+)?(?:(?:[01]?\d|2[0-3]):[0-5]\d|早上|上午|中午|下午|傍晚|晚间|晚上|途中)\s+)提到\s*(?=[^\s：:「“"『])/gmu;
+const journalFirstPerson = /^(?:[-*•]\s+)?(?:(?:实际|待确认)[：:]\s*)?我/u;
+
+/** Render recognizable import summaries in the diarist's voice. */
+export function journalNarrativeText(event: Pick<JournalEvent, "text" | "source" | "edited">): string {
+  if (event.edited) return event.text;
+  const source = event.source.trim();
+  const text = event.text.trim() || source;
+  if (journalFirstPerson.test(source)) return source;
+  const wake = text.match(journalWakeSummary);
+  if (wake) {
+    const [, approximateBefore, time, approximateAfter] = wake;
+    return `我${approximateBefore || approximateAfter ? "大约" : ""}在 ${time} 醒来。`;
+  }
+  // Remove anonymous reporting verbs. Named speakers and direct quotes are prose.
+  return text.replace(journalReportedLead, "$1");
+}
+
 /** Explicit headings only. Undated prose stays intact under the user-selected fallback day. */
 export function previewJournalImport(source: string, fallbackDate: string, existing: readonly JournalChapter[] = [], makeId = () => crypto.randomUUID()): JournalChapter[] {
   if (!source.trim() || source.length > JOURNAL_MAX_TEXT || !isPersistedCalendarDate(fallbackDate)) throw new Error("请输入有效日期及不超过 20 万字的原文。");

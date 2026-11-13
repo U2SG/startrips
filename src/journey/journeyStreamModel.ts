@@ -1,4 +1,4 @@
-import { JOURNAL_DATE_HEADING, type JournalChapter, type JournalEvent } from "./dailyJournal";
+import { JOURNAL_DATE_HEADING, journalNarrativeText, type JournalChapter, type JournalEvent } from "./dailyJournal";
 import { isLodgingLabelLine } from "./journalHotels";
 import { isVisualMediaAsset } from "./journeyModel";
 import type { Journey, JourneyMediaAsset, MediaPreviewRead, RoutePoint } from "./types";
@@ -131,12 +131,13 @@ export function journeyStreamJournalDays(
       const confirmedLodging = (event.status === "planned" || event.status === "uncertain")
         && linkedPoint?.placeRole === "accommodation" && isLodgingLabelLine(event.source);
       const point = event.status === "actual" || confirmedLodging ? linkedPoint : undefined;
-      const text = journalReadingText(event.text.trim() || event.source, confirmedLodging ? undefined : event.status);
+      const text = journalReadingText(journalNarrativeText(event), confirmedLodging ? undefined : event.status);
+      const startsWithClock = event.localTime && text.replace(/^我(?:大约)?在 /u, "").startsWith(event.localTime);
       return text || point ? [{
         id: event.id,
         text,
         localDate: event.localDate,
-        localTime: event.localTime && !text.startsWith(event.localTime) ? event.localTime : null,
+        localTime: startsWithClock ? null : event.localTime,
         writtenTime: event.localTime,
         mediaIds: event.mediaIds,
         point,
