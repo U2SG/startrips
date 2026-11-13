@@ -310,14 +310,14 @@ try {
     const scrollTop = () => flow.evaluate(el=>el.scrollTop);
     await pause.waitFor();
     await page.waitForFunction(()=>document.querySelector(".journey-stream__flow")?.scrollTop > 12);
-    await pause.click();
+    await pause.press("Space");
     await play.waitFor();
     const stopped = await scrollTop();
     assert.equal(await flow.evaluate(async el=>{
       for(let frame=0;frame<8;frame++) await new Promise(requestAnimationFrame);
       return el.scrollTop;
     }),stopped);
-    await play.click();
+    await play.press("Space");
     await page.waitForFunction(top=>document.querySelector(".journey-stream__flow")?.scrollTop > top + 8,stopped);
     await page.getByRole("button",{name:"回到旅程开头",exact:true}).click();
     await play.waitFor();

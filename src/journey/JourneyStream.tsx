@@ -636,7 +636,9 @@ function JourneyStreamContent({
     if (lightbox || openDay || closingRef.current || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
     const target = event.target as HTMLElement;
     if (target.closest("video, input, textarea, select, .journey-stream__journal, .journey-stream__journal-day")) return;
-    if (readingJournal && ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) {
+    const scrollKey = ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(event.key)
+      || (event.key === " " && !target.closest("button"));
+    if (readingJournal && scrollKey) {
       setPaused(true);
       return;
     }
