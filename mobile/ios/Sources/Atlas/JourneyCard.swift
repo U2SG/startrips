@@ -89,6 +89,10 @@ struct JourneyCard: View {
             if detent >= .medium { covers.load(id, session: session, access: router.access) }
         }
         .onAppear { if detent >= .medium { covers.load(journey.id, session: session, access: router.access) } }
+        // A moved or re-chosen cover picture loads its own cover; the old one is never shown.
+        .onChange(of: JourneyCoverStore.key(session.mediaJourneys[journey.id])) { _, _ in
+            if detent >= .medium { covers.load(journey.id, session: session, access: router.access) }
+        }
     }
 
     // MARK: Peek
@@ -201,7 +205,7 @@ struct JourneyCard: View {
 
     private var cover: some View {
         Button { openStory() } label: {
-            JourneyCoverView(image: covers.image(for: journey.id), lightColor: journey.lightColor)
+            JourneyCoverView(image: covers.image(for: JourneyCoverStore.key(session.mediaJourneys[journey.id])), lightColor: journey.lightColor)
                 .frame(maxWidth: .infinity)
                 .frame(height: detent == .large ? 220 : 168)
                 .clipShape(RoundedRectangle(cornerRadius: NightFlight.radiusSmall, style: .continuous))
@@ -301,7 +305,7 @@ struct JourneyList: View {
                     onSelect()
                 } label: {
                     HStack(spacing: NightFlight.grid(3)) {
-                        JourneyCoverView(image: covers.image(for: journey.id), lightColor: journey.lightColor)
+                        JourneyCoverView(image: covers.image(for: JourneyCoverStore.key(session.mediaJourneys[journey.id])), lightColor: journey.lightColor)
                             .frame(width: NightFlight.grid(14), height: NightFlight.grid(14))
                             .clipShape(RoundedRectangle(cornerRadius: NightFlight.radiusSmall, style: .continuous))
                         VStack(alignment: .leading, spacing: NightFlight.grid(0.5)) {
@@ -323,6 +327,9 @@ struct JourneyList: View {
                 .accessibilityAddTraits(current ? .isSelected : [])
                 .accessibilityIdentifier("atlas.journeys." + journey.id)
                 .onAppear { covers.load(journey.id, session: session, access: router.access) }
+                .onChange(of: JourneyCoverStore.key(session.mediaJourneys[journey.id])) { _, _ in
+                    covers.load(journey.id, session: session, access: router.access)
+                }
             }
         }
     }

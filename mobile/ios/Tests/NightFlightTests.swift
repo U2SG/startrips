@@ -91,6 +91,30 @@ final class NightFlightTests: XCTestCase {
         XCTAssertEqual(try cover("v"), "a", "a video is never a still cover")
     }
 
+    @MainActor func testCoverCacheFollowsTheCoverPicture() throws {
+        func journey(_ ids: [String]) throws -> MediaJourney {
+            let media = ids.enumerated().map { order, id in
+                #"{"id":"\#(id)","journeyId":"j","routePointId":null,"fileName":"\#(id)","mimeType":"image/jpeg","bytes":1,"sortOrder":\#(order)}"#
+            }.joined(separator: ",")
+            let json = #"{"id":"j","title":"j","note":"","revision":1,"coverMediaAssetId":null,"routePoints":[],"media":[\#(media)]}"#
+            return try JSONDecoder().decode(MediaJourney.self, from: Data(json.utf8))
+        }
+        let before = try XCTUnwrap(JourneyCoverStore.key(try journey(["a", "b"])))
+        // The cover picture moved to another Journey: the next picture is the cover now.
+        let after = try XCTUnwrap(JourneyCoverStore.key(try journey(["b"])))
+        XCTAssertNotEqual(before, after)
+        XCTAssertNil(JourneyCoverStore.key(try journey([])))
+        let store = JourneyCoverStore()
+        store.store(UIImage(), for: before)
+        XCTAssertNotNil(store.image(for: before))
+        XCTAssertNil(store.image(for: after), "the moved picture is never shown as the new cover")
+        store.store(UIImage(), for: after)
+        XCTAssertNil(store.image(for: before), "one cover per Journey")
+        XCTAssertNotNil(store.image(for: after))
+        store.reset()
+        XCTAssertNil(store.image(for: after), "sign-out and scope change drop every cover")
+    }
+
     func testSystemPopLeavesStoryThroughItsOwnExit() throws {
         let url = try XCTUnwrap(Bundle.main.url(forResource: "bridge", withExtension: "json"))
         let fixture = try JSONDecoder().decode(BridgeFixture.self, from: Data(contentsOf: url))

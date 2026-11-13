@@ -7,11 +7,14 @@ import StartripsMedia
 /// they are never encoded into the scene snapshot or a scene command.
 @MainActor
 final class JourneyCoverStore: ObservableObject {
-    @Published private(set) var images: [String: UIImage] = [:]
+    /// A cover is the picture of one asset for one Journey: moving that picture away or
+    /// choosing another cover changes the key, so an old picture is never shown.
+    struct Key: Hashable { let journeyId: String; let assetId: String }
+    @Published private(set) var images: [Key: UIImage] = [:]
     private var scope: String?
     private var media: ScopedMediaSession?
-    private var tasks: [String: Task<Void, Never>] = [:]
-    private var failed = Set<String>()
+    private var tasks: [Key: Task<Void, Never>] = [:]
+    private var failed = Set<Key>()
 
     /// The cover asset: the Journey's chosen cover, else its first picture.
     static func coverAsset(_ journey: MediaJourney) -> MediaAsset? {
@@ -19,26 +22,39 @@ final class JourneyCoverStore: ObservableObject {
         return pictures.first(where: { $0.id == journey.coverMediaAssetId }) ?? pictures.first
     }
 
-    func image(for journeyId: String) -> UIImage? { images[journeyId] }
+    static func key(_ journey: MediaJourney?) -> Key? {
+        guard let journey, let asset = coverAsset(journey) else { return nil }
+        return Key(journeyId: journey.id, assetId: asset.id)
+    }
+
+    /// The Journey's current cover only; nil while a changed cover is still loading.
+    func image(for key: Key?) -> UIImage? { key.flatMap { images[$0] } }
+
+    /// Keeps one picture per Journey: a new cover replaces the previous one.
+    func store(_ image: UIImage, for key: Key) {
+        for old in images.keys where old.journeyId == key.journeyId && old != key { images[old] = nil }
+        images[key] = image
+    }
 
     /// Loads on demand only (selected Journey, visible list rows); each scope has its own cache.
     func load(_ journeyId: String, session: AtlasSession, access: AtlasAccess) {
         guard let identity = session.activeIdentity else { reset(); return }
         if identity != scope { reset(); scope = identity }
-        guard images[journeyId] == nil, tasks[journeyId] == nil, !failed.contains(journeyId),
-              let journey = session.mediaJourneys[journeyId], let asset = Self.coverAsset(journey) else { return }
+        guard let journey = session.mediaJourneys[journeyId], let key = Self.key(journey),
+              let asset = Self.coverAsset(journey),
+              images[key] == nil, tasks[key] == nil, !failed.contains(key) else { return }
         let scoped = media ?? session.mediaScope(scope: identity, access: access == .guest ? .guest : .owner)
         media = scoped
-        tasks[journeyId] = Task { [weak self] in
-            defer { if self?.scope == identity { self?.tasks[journeyId] = nil } }
+        tasks[key] = Task { [weak self] in
+            defer { if self?.scope == identity { self?.tasks[key] = nil } }
             do {
                 let image = try await Self.read(asset, from: scoped)
                 guard let self, self.scope == identity, session.activeIdentity == identity else { return }
-                self.images[journeyId] = image
+                self.store(image, for: key)
             } catch is CancellationError {
             } catch {
                 guard let self, self.scope == identity else { return }
-                self.failed.insert(journeyId)
+                self.failed.insert(key)
             }
         }
     }
