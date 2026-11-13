@@ -174,4 +174,29 @@ final class NightFlightTests: XCTestCase {
         XCTAssertNil(router.preview)
         XCTAssertEqual(router.selection?.routePointId, "p1")
     }
+
+    func testConnectedWithoutAnAtlasIsNeverABlankGlobe() {
+        func shell(launching: Bool = false, connected: Bool = true, installed: Bool = false,
+                   busy: Bool = false, failed: Bool = false) -> AtlasShell {
+            AtlasShell(launching: launching, connected: connected, installed: installed, busy: busy, failed: failed)
+        }
+        XCTAssertEqual(shell(launching: true, connected: false), .loading)
+        XCTAssertEqual(shell(connected: false), .welcome)
+        XCTAssertEqual(shell(installed: true), .atlas)
+        XCTAssertEqual(shell(installed: true, busy: true), .atlas, "a background refresh keeps the Atlas")
+        XCTAssertEqual(shell(busy: true), .loading)
+        // The former dead end: connected, nothing installed, nothing loading, no alert.
+        XCTAssertEqual(shell(), .stalled)
+        XCTAssertEqual(shell(failed: true), .stalled, "after the alert closes, retry and sign-out remain")
+        XCTAssertEqual(shell(busy: true, failed: true), .stalled)
+    }
+
+    func testClearingTheAtlasDropsStaleCardInsets() {
+        let router = AppRouter(defaults: UserDefaults(suiteName: "insets." + UUID().uuidString)!)
+        router.install([journey("j", "2025-01-01", nil)], identity: "owner", access: .owner, earthExperience: "default")
+        router.presentation.insets = SceneInsets(top: 114, bottom: 420)
+        router.clear()
+        XCTAssertEqual(router.presentation.insets, SceneInsets(top: 0, bottom: 0))
+        XCTAssertFalse(router.installed)
+    }
 }

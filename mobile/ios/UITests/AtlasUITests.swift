@@ -22,6 +22,42 @@ final class AtlasUITests: XCTestCase {
     }
 
     @MainActor
+    func testSignInIsNativeWithoutAnyWebPage() throws {
+        let app = XCUIApplication()
+        app.launch()
+        let signIn = app.buttons["welcome.sign-in"]
+        XCTAssertTrue(signIn.waitForExistence(timeout: 15))
+        signIn.tap()
+        let email = app.textFields["login.email"]
+        XCTAssertTrue(email.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.secureTextFields["login.password"].exists)
+        for id in ["login.submit", "login.google", "login.register", "login.forgot"] {
+            XCTAssertTrue(app.buttons[id].exists, id)
+            XCTAssertGreaterThanOrEqual(app.buttons[id].frame.height, 44, id)
+        }
+        XCTAssertEqual(app.buttons["login.google"].label, "使用 Google 登录")
+        // No embedded web sign-in or Atlas page remains; nothing is submitted to a server here.
+        XCTAssertEqual(app.webViews.count, 0)
+        capture(app, "native-sign-in")
+    }
+
+    @MainActor
+    func testConnectedWithoutAnAtlasKeepsSettingsAndAWayOut() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture", "-atlas-stalled-probe"]
+        app.launch()
+        // Formerly a blank globe with no chrome: the top bar and both exits stay.
+        XCTAssertTrue(app.buttons["atlas.stalled.retry"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.buttons["atlas.stalled.sign-out"].isHittable)
+        XCTAssertTrue(app.buttons["atlas.account"].isHittable)
+        XCTAssertTrue(app.staticTexts["atlas.wordmark"].exists)
+        XCTAssertFalse(card(app).exists)
+        capture(app, "shell-stalled")
+        app.buttons["atlas.account"].tap()
+        XCTAssertTrue(app.buttons["退出登录"].waitForExistence(timeout: 10))
+    }
+
+    @MainActor
     func testBrandedLoadingIsFullBleed() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-loading-probe"]

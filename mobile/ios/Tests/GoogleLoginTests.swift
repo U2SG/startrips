@@ -51,8 +51,6 @@ final class GoogleLoginTests: XCTestCase {
             let authorize = raw + "/api/native-auth/authorize?request=opaque"
             XCTAssertThrowsError(try flow.authorize(JSONEncoder().encode(["authorizeUrl": authorize])))
         }
-        XCTAssertEqual(GoogleLoginAttempt.intent(url("startrips-google://login/sign-up")), "sign-up")
-        XCTAssertNil(GoogleLoginAttempt.intent(url("startrips-google://login/sign-in?return=https://example.com")))
         XCTAssertThrowsError(try flow.start("bind"))
     }
 

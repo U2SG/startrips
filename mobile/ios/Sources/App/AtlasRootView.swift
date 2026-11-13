@@ -9,16 +9,17 @@ struct AtlasRootView: View {
     @State private var launching = true
     @State private var sceneIdentity = UUID()
     @State private var fixtureMode = false
-    @State private var googleLoginFailed = false
     @State private var sceneRecoveryRequired = false
     @State private var settingsPresented = false
     @State private var pendingSettingsAction: SettingsAction?
     @StateObject private var covers = JourneyCoverStore()
     @Namespace private var storyNamespace
 
-    private var loading: Bool {
-        launching || (connected && !router.installed && session.busy)
+    private var shell: AtlasShell {
+        AtlasShell(launching: launching, connected: connected, installed: router.installed,
+                   busy: session.busy, failed: router.error != nil)
     }
+    private var loading: Bool { shell == .loading }
 
     var body: some View {
         // System pops (the zoom transition's interactive dismiss, edge swipe)
@@ -32,10 +33,13 @@ struct AtlasRootView: View {
                     AtlasSceneView(router: router, mapOrigin: session.origin)
                         .id(sceneIdentity)
                         .ignoresSafeArea()
-                    if router.presentation.globeOnly && router.installed {
-                        AtlasChrome(router: router, session: session, covers: covers,
-                                    storyNamespace: storyNamespace) { settingsPresented = true }
+                    // The top bar (wordmark + Settings) is always reachable once connected;
+                    // the card and ribbon need an installed Atlas.
+                    if shell == .stalled {
+                        AtlasStalledView(guest: router.access == .guest, retry: restartScene, signOut: signOut)
                     }
+                    AtlasChrome(router: router, session: session, covers: covers, storyNamespace: storyNamespace,
+                                installed: router.installed) { settingsPresented = true }
                 } else if !launching {
                     #if DEBUG
                     WelcomeView(signIn: signIn, pasteShare: pasteShare, debugOrigin: $session.originText)
@@ -62,11 +66,11 @@ struct AtlasRootView: View {
                         .accessibilityIdentifier("atlas.native-scene-reload")
                         .font(.headline)
                         .foregroundStyle(AtlasPalette.ink)
-                        .padding(.horizontal, 20)
-                        .frame(minHeight: 44)
+                        .padding(.horizontal, NightFlight.edge)
+                        .frame(minHeight: NightFlight.hitTarget)
                         .background(Capsule().fill(AtlasPalette.background.opacity(0.92)))
                         .overlay(Capsule().stroke(AtlasPalette.line))
-                        .padding(.top, 8)
+                        .padding(.top, NightFlight.grid(2))
                 }
                 #if DEBUG
                 if fixtureMode {
@@ -93,21 +97,7 @@ struct AtlasRootView: View {
         }
         .sheet(isPresented: $session.loginPresented, onDismiss: { connectOwner() }) {
             if let origin = session.origin {
-                let generation = session.generation
-                NavigationStack {
-                    PrivateWebView(url: origin, store: session.cookieStore, googleLogin: .init(
-                        isCurrent: { session.isOwnerLoginCurrent(generation, at: origin) },
-                        install: { cookie, pending in
-                            await session.publishGoogleSession(cookie, at: origin, generation: generation, pending: pending)
-                        },
-                        failed: { googleLoginFailed = true }
-                    ))
-                    .id(generation)
-                    .toolbar { Button("返回图谱") { session.loginPresented = false } }
-                    .alert("Google 登录未完成", isPresented: $googleLoginFailed) {
-                        Button("好", role: .cancel) { }
-                    } message: { Text("请确认此 Startrips 站点支持 App 登录，然后重试。") }
-                }
+                NativeSignInView(session: session, origin: origin)
             }
         }
         .alert("图谱暂不可用", isPresented: Binding(get: { router.error != nil }, set: { if !$0 { router.error = nil } })) {
@@ -132,6 +122,12 @@ struct AtlasRootView: View {
             router.onInvalidation = { refresh() }
             router.onSwitchAccess = { settingsPresented = true }
             #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-atlas-login-probe") {
+                // Screenshot probe only: the native sign-in sheet without a tap.
+                launching = false
+                signIn()
+                return
+            }
             if ProcessInfo.processInfo.arguments.contains("-atlas-loading-probe") {
                 // Test-only: hold the branded launch state for a screenshot.
                 return
@@ -163,6 +159,10 @@ struct AtlasRootView: View {
                     }
                     router.install(fixtureJourneys, identity: "synthetic-ci", access: .owner, earthExperience: "default")
                     connected = true
+                    if ProcessInfo.processInfo.arguments.contains("-atlas-stalled-probe") {
+                        // Test-only: connected without an installed Atlas, the former dead end.
+                        router.clear()
+                    }
                     if ProcessInfo.processInfo.arguments.contains("-atlas-open-settings") {
                         // Screenshot probe only: open Settings without a tap.
                         settingsPresented = true
@@ -229,6 +229,7 @@ struct AtlasRootView: View {
         let link = (UIPasteboard.general.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             try session.configureGuest(link)
+            fixtureMode = false
             router.clear(); sceneRecoveryRequired = false
             connected = true; sceneIdentity = UUID()
             Task { await session.refresh(router) }
@@ -243,6 +244,7 @@ struct AtlasRootView: View {
 
     private func leaveAtlas(_ end: () -> Void) {
         end()
+        fixtureMode = false
         covers.reset()
         router.clear()
         sceneRecoveryRequired = false
@@ -252,7 +254,9 @@ struct AtlasRootView: View {
 
     private func connectOwner() {
         do {
-            try session.configureOwner(); router.clear(); connected = true; sceneIdentity = UUID()
+            // A real owner session ends any synthetic fixture: refresh() must run.
+            try session.configureOwner(); fixtureMode = false
+            router.clear(); connected = true; sceneIdentity = UUID()
             refresh()
         } catch { router.error = error.localizedDescription }
     }
@@ -280,17 +284,17 @@ private struct WelcomeView: View {
         GeometryReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
-                    Spacer(minLength: 48)
+                    Spacer(minLength: NightFlight.grid(12))
                     AtlasWordmark()
-                    Spacer(minLength: 48)
-                    VStack(spacing: 12) {
+                    Spacer(minLength: NightFlight.grid(12))
+                    VStack(spacing: NightFlight.grid(3)) {
                         #if DEBUG
                         // Only explicit developer launches expose a server override.
                         if let debugOrigin, ProcessInfo.processInfo.arguments.contains("-allow-server-override") {
                             TextField("调试服务器（仅开发版）", text: debugOrigin)
                                 .textContentType(.URL).keyboardType(.URL)
                                 .textInputAutocapitalization(.never).autocorrectionDisabled()
-                                .padding(12)
+                                .padding(NightFlight.grid(3))
                                 .nightFlightSurface(radius: NightFlight.radiusSmall)
                         }
                         #endif
@@ -309,7 +313,7 @@ private struct WelcomeView: View {
                     }
                     .padding(.bottom, NightFlight.grid(6))
                 }
-                .padding(.horizontal, NightFlight.grid(6))
+                .padding(.horizontal, NightFlight.edge)
                 .frame(maxWidth: 520)
                 .frame(maxWidth: .infinity, minHeight: proxy.size.height)
             }
@@ -318,12 +322,47 @@ private struct WelcomeView: View {
     }
 }
 
+/// Which surface the root shows. Connected without an installed Atlas, not
+/// loading, is never a blank globe: it is `stalled`, with a way out.
+enum AtlasShell: Equatable {
+    case loading, welcome, atlas, stalled
+
+    init(launching: Bool, connected: Bool, installed: Bool, busy: Bool, failed: Bool) {
+        if launching { self = .loading }
+        else if !connected { self = .welcome }
+        else if installed { self = .atlas }
+        else if busy && !failed { self = .loading }
+        else { self = .stalled }
+    }
+}
+
+/// Retry or leave; no helper copy. The top bar above it still opens Settings.
+private struct AtlasStalledView: View {
+    let guest: Bool
+    let retry: () -> Void
+    let signOut: () -> Void
+    var body: some View {
+        VStack(spacing: NightFlight.grid(3)) {
+            Button("重试", action: retry)
+                .buttonStyle(NightFlightPillButtonStyle())
+                .accessibilityIdentifier("atlas.stalled.retry")
+            Button(guest ? "退出分享" : "退出登录", action: signOut)
+                .buttonStyle(NightFlightPillButtonStyle(prominent: false))
+                .accessibilityIdentifier("atlas.stalled.sign-out")
+        }
+        .frame(maxWidth: 520)
+        .padding(.horizontal, NightFlight.edge)
+        .frame(maxHeight: .infinity)
+        .background(NightFlight.background.opacity(0.6).ignoresSafeArea())
+    }
+}
+
 /// Full-bleed launch / loading surface; replaces the old material progress box.
 private struct AtlasLoadingView: View {
     var body: some View {
         ZStack {
             AtlasPalette.background.ignoresSafeArea()
-            VStack(spacing: 28) {
+            VStack(spacing: NightFlight.grid(7)) {
                 AtlasWordmark()
                 ProgressView().tint(NightFlight.muted)
             }
