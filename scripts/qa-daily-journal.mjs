@@ -171,15 +171,15 @@ try {
     assert.equal(await page.locator(".daily-journal__reader").count(),0);
     await page.getByRole("button",{name:"返回旅程",exact:true}).click();
     const appendix = page.getByRole("region",{name:"全部手记",exact:true});
-    const journal = page.locator(".journey-stream__journal-inline");
-    const summary = journal.locator("summary");
-    await summary.waitFor();
-    assert.equal((await summary.textContent()).trim(),"2027-04-03 手记");
+    const entry = page.getByRole("button",{name:"查看 2027-04-03 手记",exact:true});
+    await entry.waitFor();
+    const journal = page.getByRole("dialog",{name:"2027-04-03 手记",exact:true});
     const prose = journal.getByText("她手工修订了出发记录。",{exact:true});
     assert.equal(await prose.isVisible(),false,"the date is visible before its prose");
     const datePicker = page.getByRole("combobox",{name:"按日期查看手记",exact:true});
     await datePicker.selectOption("2027-04-03");
-    assert.equal(await summary.evaluate(el=>el===document.activeElement),true,"the date picker focuses the stop's journal");
+    const close = journal.getByRole("button",{name:"关闭手记",exact:true});
+    await page.waitForFunction(()=>document.activeElement?.getAttribute("aria-label")==="关闭手记");
     assert.equal(await appendix.locator("details[open]").count(),0,"the appendix remains folded");
     await prose.waitFor();
     for (const text of ["她记下海面反光。", "航班号未记录，但我们顺利抵达。", "计划公园取消", "19:06（当地） 从旅馆出发。"]) {
@@ -188,6 +188,8 @@ try {
     assert.doesNotMatch(await journal.innerText(),/待确认|起床|查看虚构公园|已取消|实际：/);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),true);
     await page.screenshot({path:`${output}/journal-${width}.png`});
+    await close.click();
+    assert.equal(await datePicker.evaluate(el=>el===document.activeElement),true);
     await appendix.getByRole("button",{name:"回到开头",exact:true}).click();
     assert.equal(await page.locator(".journey-stream__flow").evaluate(el=>el.scrollTop),0);
     await datePicker.selectOption("2027-04-03");
@@ -252,17 +254,24 @@ try {
     const journal=document.querySelector(".journey-stream__journal");
     return Boolean(journal && (el.compareDocumentPosition(journal) & Node.DOCUMENT_POSITION_FOLLOWING));
   }),"all media precedes the journal appendix");
-  const photoDay = page.locator(".journey-stream__journal-inline details");
+  const photoDay = page.getByRole("button",{name:"查看 2027-04-01 手记",exact:true});
   assert.equal(await photoDay.getAttribute("data-journal-date"),"2027-04-01");
   const datePicker = page.getByRole("combobox",{name:"按日期查看手记",exact:true});
-  await datePicker.selectOption("2027-04-01");
-  assert.equal(await photoDay.getAttribute("open"),"");
+  const mediaFlow = page.locator(".journey-stream__flow");
+  const beforeOpen = await mediaFlow.evaluate(el=>el.scrollHeight);
+  await photoDay.click();
+  const firstPanel = page.getByRole("dialog",{name:"2027-04-01 手记",exact:true});
+  await firstPanel.waitFor();
+  assert.equal(await mediaFlow.evaluate(el=>el.scrollHeight),beforeOpen,"the journal panel must not add space between photos");
   assert.ok(await photo.evaluate(el=>el.closest(".journey-stream__item").querySelector("[data-journal-date]")));
+  await firstPanel.getByRole("button",{name:"关闭手记",exact:true}).click();
   await page.getByRole("button",{name:"回到旅程开头",exact:true}).click();
   await datePicker.selectOption("2027-04-14");
-  const lastDay = day.last();
-  assert.equal(await lastDay.getAttribute("open"),"");
-  assert.equal(await lastDay.locator("summary").evaluate(el=>el===document.activeElement),true);
+  const lastPanel = page.getByRole("dialog",{name:"2027-04-14 手记",exact:true});
+  await lastPanel.waitFor();
+  assert.equal(await day.last().getAttribute("open"),null);
+  await page.keyboard.press("Escape");
+  await lastPanel.waitFor({state:"detached"});
   await page.getByRole("button",{name:"回到旅程开头",exact:true}).click();
   assert.equal(await page.locator(".journey-stream__flow").evaluate(el=>el.scrollTop),0);
   assert.deepEqual(stored.chapters[0].events[0].mediaIds,["photo-one"]);
@@ -314,7 +323,9 @@ try {
     await play.waitFor();
     assert.equal(await scrollTop(),0);
     await page.getByRole("combobox",{name:"按日期查看手记",exact:true}).selectOption("2027-04-03");
-    await page.locator(".journey-stream__journal-inline").getByText("我大约在 06:20 醒来。",{exact:true}).waitFor();
+    const journal = page.getByRole("dialog",{name:"2027-04-03 手记",exact:true});
+    await journal.getByText("我大约在 06:20 醒来。",{exact:true}).waitFor();
+    await journal.getByRole("button",{name:"关闭手记",exact:true}).click();
     assert.equal(await play.isVisible(),true);
   } finally { await autoplayContext.close(); }
   for(const [width,height] of [[320,700],[390,844],[844,390],[1112,402],[1280,900]]) {
