@@ -19,6 +19,10 @@ if(new URLSearchParams(location.search).has("media")) {
 fixture.media=[{id:"photo-one",journeyId:fixture.id,routePointId:null,fileName:"虚构照片.svg",mimeType:"image/svg+xml",bytes:100,sortOrder:0,createdAt:fixture.createdAt}];
 view.readMedia=async()=>({url:"/artifacts/daily-journal/fictional-photo.svg",expiresAt:"2099-01-01T00:00:00Z"});
 }
+if(new URLSearchParams(location.search).has("autoplay")) {
+const photo=fixture.media[0];
+for(let i=2;i<=4;i++) fixture.media.push({...photo,id:"photo-"+i,sortOrder:i});
+}
 if(new URLSearchParams(location.search).has("layout")) {
 fixture.title="虚构旅行与很长的章节标题".repeat(8);
 fixture.routePoints[0].note="沿途文字与路线记录。".repeat(80);
@@ -290,7 +294,7 @@ try {
     const chapters = fictionalChapters("2027-04-03 虚构记录\n起床：有约 06:20 醒来的描述");
     chapters[0].events[0].mediaIds = ["photo-one"];
     await page.route(/\/api\/journeys\/[^/]+\/journal$/, route => route.fulfill({json:{journal:{revision:1,chapters}}}));
-    await page.goto(`${origin}/${output}/index.html?media=1&layout=1`);
+    await page.goto(`${origin}/${output}/index.html?media=1&autoplay=1`);
     const pause = page.getByRole("button",{name:"暂停自动播放",exact:true});
     const play = page.getByRole("button",{name:"自动播放旅程",exact:true});
     const flow = page.locator(".journey-stream__flow");
