@@ -76,7 +76,8 @@ final class AppRouter: ObservableObject {
     func clear() {
         journeys = []; selection = nil; path = []; identity = nil; seen.removeAll()
         scopeId = UUID().uuidString; revision += 1; rendered = false
-        preview = nil; presentation.window = nil
+        // No Atlas, no chrome to clear: leftover card insets must not offset the globe.
+        preview = nil; presentation.window = nil; presentation.insets = SceneInsets(top: 0, bottom: 0)
     }
 
     func install(_ records: [AtlasJourney], identity newIdentity: String, access: AtlasAccess,

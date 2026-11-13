@@ -8,6 +8,8 @@ struct AtlasChrome: View {
     @ObservedObject var session: AtlasSession
     @ObservedObject var covers: JourneyCoverStore
     let storyNamespace: Namespace.ID
+    /// Without an installed Atlas only the top bar is drawn.
+    var installed = true
     let onAccount: () -> Void
     @State private var detent: CardDetent = .peek
     @State private var dragOffset: CGFloat = 0
@@ -32,7 +34,9 @@ struct AtlasChrome: View {
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { topBarHeight = $0 }
                 VStack(spacing: 0) {
                     Spacer(minLength: 0)
-                    if let journey {
+                    if !installed {
+                        EmptyView()
+                    } else if let journey {
                         JourneyCard(router: router, session: session, covers: covers, journey: journey,
                                     detent: $detent, dragOffset: $dragOffset,
                                     height: layout.cardHeight(detent, drag: dragOffset),
@@ -52,6 +56,7 @@ struct AtlasChrome: View {
             }
             .onAppear { report(layout) }
             .onChange(of: layout) { _, value in report(value) }
+            .onChange(of: installed) { _, _ in report(layout) }
             .onChange(of: detent) { _, _ in report(layout) }
             .onChange(of: ribbonHeight) { _, _ in report(layout) }
             .onChange(of: router.journeys.isEmpty) { _, _ in report(layout) }
@@ -81,6 +86,8 @@ struct AtlasChrome: View {
 
     /// Insets are sent only when the layout settles, never per drag frame.
     private func report(_ layout: Layout) {
+        // Without an Atlas the router already holds zero insets (AppRouter.clear()).
+        guard installed else { return }
         // At peek the globe stays full-bleed behind the wordmark. Once the card
         // rises, the focused point must not land under the top bar either.
         let top: CGFloat = detent >= .medium ? layout.safeTop + layout.topBar : 0
