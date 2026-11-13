@@ -65,7 +65,7 @@ await context.route("**/__integration_opening.jpg",async route=>{
   finally {if(held)acknowledgeSourceSettled();}
 });
 const account=page.locator(".account-sheet");
-const exitPresentation=()=>page.getByRole("button",{name:"退出媒体呈现",exact:true});
+const editorNavigation=()=>page.locator('.story-presentation-picker__navigation[data-opens-editor]');
 const enterPresentation=()=>page.getByRole("button",{name:"进入媒体呈现",exact:true});
 const story=page.locator(".journey-story");
 const exportButton=()=>page.getByRole("button",{name:"导出短片",exact:true});
@@ -74,30 +74,29 @@ async function ready(next) {
   await page.waitForFunction(value=>{
     const selector=value==="book"?".journey-book":value==="book-3d"?".journey-book-3d":value==="stream"?".journey-stream":".journey-story";
     const reader=document.querySelector(selector);
-    const exit=document.querySelector('button[aria-label="退出媒体呈现"]');
-    return reader && exit && !exit.disabled && reader.getAttribute('data-story-editing')!=="true"
+    const edit=document.querySelector('button[data-opens-editor]');
+    return reader && edit && !edit.disabled && reader.getAttribute('data-story-editing')!=="true"
       && (!["classic","note-overlay"].includes(value) || reader.getAttribute('data-story-presentation')===value);
   },next);
 }
 async function openAccount() {
-  // Full-screen readers own a modal. Leave through their exit icon before
+  // Full-screen readers own a modal. Open the editor before
   // opening Account from the editable Story, without writing a preference.
   await manage();
   await page.locator('.mobile-v2__account-trigger').click();
   await account.waitFor({state:"visible"});
 }
+async function selectAccountStyle(next) {
+  await openAccount();
+  const entry=account.locator('[data-media-presentation-entry="sheet"]');
+  assert.equal(await entry.getAttribute('data-media-presentation-value'),style);
+  await entry.click();
+  await account.locator(`[data-media-presentation-option="${next}"]`).click();
+}
 async function choose(next) {
-  // Saved presentation changes still belong to Account. Story's icon only
-  // leaves/enters the current presentation within this editing session.
-  for(let i=0;style!==next&&i<5;i++) {
-    const previous=style;
-    await openAccount();
-    const entry=account.locator('[data-media-presentation-entry="sheet"]');
-    assert.equal(await entry.getAttribute('data-media-presentation-value'),previous);
-    await entry.click();
+  if(style!==next) {
+    await selectAccountStyle(next);
     await account.waitFor({state:"detached"});
-    assert.notEqual(style,previous);
-    await ready(style);
   }
   assert.equal(style,next);
   await ready(next);
@@ -105,7 +104,7 @@ async function choose(next) {
 async function manage() {
   const saved=style, writes=requests.length;
   if(await story.count()===0 || await story.getAttribute("data-mobile-mode")!=="manage") {
-    await exitPresentation().click();
+    await editorNavigation().click();
   }
   await page.waitForFunction(()=>{
     const reader=document.querySelector('.journey-story');
@@ -142,9 +141,8 @@ try {
   mark("pending preference preserves export control without allowing activation");
   holdPreference=true;
   const pending=page.waitForRequest(r=>r.url().endsWith('/api/account-preferences/media-presentation')&&r.method()==='PUT');
-  await openAccount();
-  await account.locator('[data-media-presentation-entry="sheet"]').click();await pending;
-  assert.equal(requests.at(-1),"note-overlay","Account must advance the saved classic preference");
+  await selectAccountStyle("note-overlay");await pending;
+  assert.equal(requests.at(-1),"note-overlay","Account must submit the selected style");
   // Inert controls intentionally leave the accessibility tree. Include them
   // only for this DOM-preservation observation, never for a user interaction.
   const pendingExport=page.getByRole("button",{name:"导出短片",exact:true,includeHidden:true});

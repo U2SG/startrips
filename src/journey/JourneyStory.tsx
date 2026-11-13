@@ -5080,10 +5080,9 @@ export function JourneyStory({
           >{desktopEditing ? "完成" : "编辑"}</button> : null}
           <StoryPresentationPicker
             buttonRef={presentationNavigationRef}
+            canEdit={capabilities.canEditJourney}
             disabled={notesDirty || mutationPending || placementAnalyzing || placementReview !== null || mediaGestureHolding || Boolean(videoHandoffRef.current)}
-            // On desktop a member who can edit enters editing through 编辑, so
-            // 退出媒体呈现 is not offered as a second, unlabelled edit entry.
-            // Readers keep it: for them it only leaves the media presentation.
+            // Desktop editing members use the existing edit toggle.
             onOpenClassic={!mobileLayout && desktopEditOpensEditorSession ? undefined : onOpenEditor}
             onReturnPresentation={editorSession ? () => {
               exitMobileManageMode();

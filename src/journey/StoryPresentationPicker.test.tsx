@@ -32,6 +32,15 @@ describe("Story presentation entry", () => {
     expectIconOnlyAction(html, "退出媒体呈现");
   });
 
+  it("labels the editable reader's action as editing the Story", () => {
+    const html = renderToStaticMarkup(createElement(StoryPresentationPicker, {
+      canEdit: true, onOpenClassic: () => undefined,
+    }));
+    expect(html).toContain('aria-label="编辑故事"');
+    expect(html).toContain(">编辑故事</button>");
+    expect(html).not.toContain("退出媒体呈现");
+  });
+
   it("offers an icon-only return to the saved presentation, taking precedence over exit", () => {
     const html = renderToStaticMarkup(createElement(StoryPresentationPicker, {
       onOpenClassic: () => undefined, onReturnPresentation: () => undefined,

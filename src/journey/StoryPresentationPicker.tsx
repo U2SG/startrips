@@ -5,8 +5,9 @@ import { useMediaPresentationAccess } from "./MediaPresentationProvider";
 import "../styles/story-presentation-picker.css";
 
 /** Session navigation is independent of Account's saved media presentation. */
-export function StoryPresentationPicker({ disabled = false, onOpenClassic, onReturnPresentation, buttonRef }: {
+export function StoryPresentationPicker({ disabled = false, canEdit = false, onOpenClassic, onReturnPresentation, buttonRef }: {
   disabled?: boolean;
+  canEdit?: boolean;
   /** Shared readers use the same exit while their existing capabilities stay read-only. */
   onOpenClassic?: () => void;
   onReturnPresentation?: () => void;
@@ -14,15 +15,17 @@ export function StoryPresentationPicker({ disabled = false, onOpenClassic, onRet
 }) {
   const access = useMediaPresentationAccess();
   const navigate = onReturnPresentation ?? onOpenClassic;
+  const opensEditor = canEdit && Boolean(onOpenClassic) && !onReturnPresentation;
   if (!navigate && !access?.error) return null;
   return <div className="story-presentation-picker">
     {navigate ? <IconActionButton type="button" className="story-presentation-picker__navigation"
+      data-opens-editor={opensEditor || undefined}
       buttonRef={buttonRef}
-      label={onReturnPresentation ? "进入媒体呈现" : "退出媒体呈现"}
+      label={onReturnPresentation ? "进入媒体呈现" : opensEditor ? "编辑故事" : "退出媒体呈现"}
       disabled={disabled || Boolean(access?.busy)} onClick={navigate}>
       {onReturnPresentation
         ? <IconPlayerPlay size={19} stroke={1.5} aria-hidden="true" />
-        : <IconArrowBackUp size={19} stroke={1.5} aria-hidden="true" />}
+        : opensEditor ? "编辑故事" : <IconArrowBackUp size={19} stroke={1.5} aria-hidden="true" />}
     </IconActionButton> : null}
     {access?.error ? <span role="status" className="story-presentation-picker__error">
       {access.error}<button type="button" disabled={disabled || access.busy}

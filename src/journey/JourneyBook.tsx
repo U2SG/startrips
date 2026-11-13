@@ -136,7 +136,7 @@ export function JourneyBook({
   onNavigate?: (journeyId: string) => void;
   onObservationChange?: (observation: StoryLogicalObservation | null) => void;
 }) {
-  const { readMedia } = useAtlasView();
+  const { capabilities, readMedia } = useAtlasView();
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeyIndex >= 0 ? journeys[journeyIndex] : null;
   const previousJourney = journeyIndex > 0 ? journeys[journeyIndex - 1] : null;
@@ -566,7 +566,7 @@ export function JourneyBook({
             aria-expanded={tocOpen}
             onClick={() => setTocOpen((value) => !value)}
           ><IconLayoutList size={19} stroke={1.35} aria-hidden="true" /></button>
-          <StoryPresentationPicker onOpenClassic={() => onOpenClassic(classicTarget)} />
+          <StoryPresentationPicker canEdit={capabilities.canEditJourney} onOpenClassic={() => onOpenClassic(classicTarget)} />
         </div>
       </header>
       {tocOpen ? (

@@ -259,7 +259,7 @@ export function JourneyBook3d({
   /** The book covers the globe completely, so the globe can stop rendering. */
   onGlobeCoverChange?: (state: { opaqueMediaCover: boolean; coverTransitionActive: boolean }) => void;
 }) {
-  const { readMedia } = useAtlasView();
+  const { capabilities, readMedia } = useAtlasView();
   const recoverPresentation = useMediaPresentationRecovery();
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeyIndex >= 0 ? journeys[journeyIndex] : null;
@@ -920,7 +920,7 @@ export function JourneyBook3d({
             aria-expanded={tocOpen}
             onClick={() => setTocOpen((value) => !value)}
           ><IconLayoutList size={19} stroke={1.35} aria-hidden="true" /></button>
-          <StoryPresentationPicker onOpenClassic={() => onOpenClassic(classicTarget)} />
+          <StoryPresentationPicker canEdit={capabilities.canEditJourney} onOpenClassic={() => onOpenClassic(classicTarget)} />
         </div>
       </header>
       {tocOpen ? (

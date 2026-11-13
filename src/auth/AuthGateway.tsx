@@ -1516,7 +1516,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, userEmail, on
                 busy={earthExperienceEntryBusy(earthExperience)}
                 onToggle={() => void toggleEarthExperience()}
               />
-              <MediaPresentationMenuEntry surface="dock" onConfirmed={() => setDockOpen(false)} />
+              <MediaPresentationMenuEntry surface="dock" visible={dockOpen} onConfirmed={() => setDockOpen(false)} />
               <MobileClassicViewMenuEntry surface="dock" />
               <button type="button" onClick={() => window.location.assign("/soc/")}>学习</button>
               <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}>退出</button>
