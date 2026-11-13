@@ -73,7 +73,7 @@ try {
       const initialPresentation = await story.getAttribute("data-mobile-presentation");
       const initialModal = await story.getAttribute("aria-modal");
       const storyLayout = await story.getAttribute("data-story-layout");
-      const desktopEditControls = await story.getByRole("button", { name: "编辑故事", exact: true }).count();
+      const desktopEditControls = await story.locator(".journey-story__edit-toggle").count();
       const handleBox = await handle.boundingBox();
       const handleHit = handleBox ? Math.min(handleBox.width, handleBox.height) : 0;
       add({
