@@ -31,6 +31,12 @@
 .journey-stream:not([data-phase="closing"]) .journey-stream__backdrop { opacity: 1; }
 .journey-stream[data-phase="closing"] .journey-stream__backdrop { transition-delay: 380ms; }
 
+/* The desktop account dock sits outside the reader's stacking context. */
+body:has(.journey-stream) .account-dock {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 /* The thread: pours down from where the Journey was opened, glides to the
    centre, and stays as the spine the pictures hang on. */
 .journey-stream__thread {

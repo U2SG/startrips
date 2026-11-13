@@ -2,7 +2,7 @@ import type { DailyJournal } from "./dailyJournal";
 import { DailyJournalPanel } from "./DailyJournalPanel";
 import { StoryPresentationPicker } from "./StoryPresentationPicker";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref, type RefObject, type WheelEvent } from "react";
-import { IconArrowBarToUp, IconArrowUp, IconChevronLeft, IconChevronRight, IconMusic, IconMusicOff, IconPlayerPlay, IconX } from "@tabler/icons-react";
+import { IconArrowBarToUp, IconArrowUp, IconChevronLeft, IconChevronRight, IconMusic, IconMusicOff, IconPlayerPause, IconPlayerPlay, IconX } from "@tabler/icons-react";
 import { onMotionPreferenceChange, prefersReducedMotion } from "../motion/preferences";
 import { useAtlasView } from "./atlasView";
 import { journeySoundtrack } from "./journeyModel";
@@ -65,6 +65,11 @@ function entryAsset(entry: JourneyStreamEntry | undefined): JourneyMediaAsset | 
 
 function damp(current: number, target: number, rate: number, dt: number) {
   return target + (current - target) * Math.exp(-rate * dt);
+}
+
+function journalAutoplayEnd(flow: HTMLElement, journal: HTMLElement) {
+  // The journal appendix starts below the last view of the media.
+  return Math.max(0, journal.offsetTop - flow.clientHeight);
 }
 
 /**
@@ -339,6 +344,37 @@ function JourneyStreamContent({
     if (flowing) wakeRef.current();
   }, [flowing]);
 
+  // Keep native scrolling for the journal so touch, selection and expanded
+  // days continue to work. Advance that same scroll position during autoplay.
+  const canAutoplayJournal = readingJournal && !reduced && entries.length > 1;
+  const journalAutoplay = canAutoplayJournal && streamPhase === "unfolded" && !paused && !lightbox && !videoPlaying;
+  useEffect(() => {
+    const flow = flowRef.current;
+    const journal = journalRef.current;
+    if (!journalAutoplay || !flow || !journal) return;
+    let frame = 0;
+    let last = performance.now();
+    let carry = 0;
+    const advance = (now: number) => {
+      if (closingRef.current) return;
+      const end = journalAutoplayEnd(flow, journal);
+      if (flow.scrollTop >= end - 1) {
+        setPaused(true);
+        return;
+      }
+      carry += Math.min(0.05, (now - last) / 1000) * DRIFT_PX_S;
+      last = now;
+      const pixels = Math.floor(carry);
+      if (pixels) {
+        flow.scrollTop = Math.min(end, flow.scrollTop + pixels);
+        carry -= pixels;
+      }
+      frame = requestAnimationFrame(advance);
+    };
+    frame = requestAnimationFrame(advance);
+    return () => cancelAnimationFrame(frame);
+  }, [journalAutoplay]);
+
   // The flow: offset follows its target; the target drifts downward until
   // the newest entry reaches the centre, and never past either end. The loop
   // stops once everything has settled and is woken by any outside change.
@@ -459,6 +495,7 @@ function JourneyStreamContent({
     const day = container?.querySelector<HTMLDetailsElement>(`[data-journal-date="${date}"]`);
     const summary = day?.querySelector("summary");
     if (!flow || !day || !summary) return;
+    setPaused(true);
     day.open = true;
     const bounds = summary.getBoundingClientRect();
     const itemTop = item?.getBoundingClientRect().top ?? bounds.top;
@@ -468,8 +505,18 @@ function JourneyStreamContent({
   }
 
   function jumpToStart() {
+    setPaused(true);
     if (flowRef.current) flowRef.current.scrollTop = 0;
     itemRefs.current[0]?.querySelector("h2")?.focus({ preventScroll: true });
+  }
+
+  function toggleJournalAutoplay() {
+    const flow = flowRef.current;
+    const journal = journalRef.current;
+    if (paused && flow && journal && flow.scrollTop >= journalAutoplayEnd(flow, journal) - 1) {
+      flow.scrollTop = 0;
+    }
+    setPaused(!paused);
   }
 
   function centreOn(index: number) {
@@ -578,7 +625,10 @@ function JourneyStreamContent({
     if (lightbox || closingRef.current || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
     const target = event.target as HTMLElement;
     if (target.closest("video, input, textarea, select, .journey-stream__journal, .journey-stream__journal-day")) return;
-    if (readingJournal && ["ArrowUp", "ArrowDown", " "].includes(event.key)) return;
+    if (readingJournal && ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) {
+      setPaused(true);
+      return;
+    }
     if (event.key === "ArrowUp" || event.key === "ArrowDown") {
       event.preventDefault();
       centreOn(Math.min(entries.length - 1, Math.max(0, active + (event.key === "ArrowUp" ? 1 : -1))));
@@ -636,14 +686,15 @@ function JourneyStreamContent({
           event.stopPropagation();
         }}
         tabIndex={readingJournal ? 0 : undefined}
+        onFocusCapture={readingJournal ? () => setPaused(true) : undefined}
         onScroll={readingJournal ? updateReadingPosition : undefined}
-        onWheel={readingJournal ? undefined : onWheel}
+        onWheel={readingJournal ? () => setPaused(true) : onWheel}
         onPointerDownCapture={(event) => {
           // A fresh native-control press also ends the previous drag's click
           // suppression; only its late compatibility click must be blocked.
           if (event.isPrimary && event.button === 0 && !dragRef.current) draggedRef.current = false;
         }}
-        onPointerDown={readingJournal ? undefined : onPointerDown}
+        onPointerDown={readingJournal ? () => setPaused(true) : onPointerDown}
         onPointerMove={readingJournal ? undefined : onPointerMove}
         onPointerUp={(event) => onPointerUp(event)}
         onPointerCancel={(event) => onPointerUp(event, true)}
@@ -723,6 +774,13 @@ function JourneyStreamContent({
         </button>
         <p className="journey-stream__title">{journey.title}</p>
         <div className="journey-stream__actions">
+          {canAutoplayJournal ? (
+            <button type="button" className="journey-stream__icon"
+              aria-label={paused ? "自动播放旅程" : "暂停自动播放"} onClick={toggleJournalAutoplay}>
+              {paused ? <IconPlayerPlay size={18} stroke={1.35} aria-hidden="true" />
+                : <IconPlayerPause size={18} stroke={1.35} aria-hidden="true" />}
+            </button>
+          ) : null}
           {readingJournal ? (
             <button type="button" className="journey-stream__icon" aria-label="回到旅程开头" title="回到旅程开头"
               onClick={jumpToStart}>

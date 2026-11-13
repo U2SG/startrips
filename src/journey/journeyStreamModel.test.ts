@@ -201,6 +201,30 @@ it("keeps an explicitly linked accommodation from older planned and uncertain im
   ]);
 });
 
+it("reads recognizable imported summaries in the diarist's voice without changing source or edits", () => {
+  const [chapter] = previewJournalImport([
+    "2026-08-11",
+    "起床：有约 06:20 醒来的描述",
+    "19:05 提到街上的灯很亮。",
+    "我醒来时，朋友说她早就起床了。",
+    "起床：有约 07:10 醒来的描述",
+    "我在 08:20 醒来，先到窗边看天。",
+  ].join("\n"), base.startedOn);
+  chapter.events[0].localTime = "06:20";
+  chapter.events[3].edited = true;
+  chapter.events[4].text = "起床：有约 08:20 醒来的描述";
+  const [day] = journeyStreamJournalDays([chapter], new Map());
+  expect(day.chapters[0].events.map(event => event.text)).toEqual([
+    "我大约在 06:20 醒来。",
+    "19:05 街上的灯很亮。",
+    "我醒来时，朋友说她早就起床了。",
+    "起床：有约 07:10 醒来的描述",
+    "我在 08:20 醒来，先到窗边看天。",
+  ]);
+  expect(day.chapters[0].events[0].localTime).toBeNull();
+  expect(chapter.source).toContain("起床：有约 06:20 醒来的描述");
+});
+
 it("shows what happened when a plan was cancelled without presenting the plan as a visit", () => {
   const chapters = previewJournalImport(
     "2026-08-11\n取消\n参观花园\n取消：参观花园，乘坐游船\n取消：因下雨没赶上游船，改去看展。\n船班后来被取消了。",

@@ -284,6 +284,35 @@ try {
   assert.equal(await day.count(),0);
   await context.close();
   console.log("daily journal follows the media stream");
+  const autoplayContext = await browser.newContext({viewport:{width:390,height:844},reducedMotion:"no-preference"});
+  try {
+    const page = await autoplayContext.newPage();
+    const chapters = fictionalChapters("2027-04-03 虚构记录\n起床：有约 06:20 醒来的描述");
+    chapters[0].events[0].mediaIds = ["photo-one"];
+    await page.route(/\/api\/journeys\/[^/]+\/journal$/, route => route.fulfill({json:{journal:{revision:1,chapters}}}));
+    await page.goto(`${origin}/${output}/index.html?media=1&layout=1`);
+    const pause = page.getByRole("button",{name:"暂停自动播放",exact:true});
+    const play = page.getByRole("button",{name:"自动播放旅程",exact:true});
+    const flow = page.locator(".journey-stream__flow");
+    const scrollTop = () => flow.evaluate(el=>el.scrollTop);
+    await pause.waitFor();
+    await page.waitForFunction(()=>document.querySelector(".journey-stream__flow")?.scrollTop > 12);
+    await pause.click();
+    await play.waitFor();
+    const stopped = await scrollTop();
+    assert.equal(await flow.evaluate(async el=>{
+      for(let frame=0;frame<8;frame++) await new Promise(requestAnimationFrame);
+      return el.scrollTop;
+    }),stopped);
+    await play.click();
+    await page.waitForFunction(top=>document.querySelector(".journey-stream__flow")?.scrollTop > top + 8,stopped);
+    await page.getByRole("button",{name:"回到旅程开头",exact:true}).click();
+    await play.waitFor();
+    assert.equal(await scrollTop(),0);
+    await page.getByRole("combobox",{name:"按日期查看手记",exact:true}).selectOption("2027-04-03");
+    await page.locator(".journey-stream__journal-inline").getByText("我大约在 06:20 醒来。",{exact:true}).waitFor();
+    assert.equal(await play.isVisible(),true);
+  } finally { await autoplayContext.close(); }
   for(const [width,height] of [[320,700],[390,844],[844,390],[1112,402],[1280,900]]) {
     const context=await browser.newContext({viewport:{width,height},reducedMotion:"reduce"});
     const page=await context.newPage();

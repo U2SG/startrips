@@ -1,7 +1,7 @@
 import { JournalPlaceMedia } from "./JournalPlaceMedia";
 import { journalMediaGroups, firstJournalPlaceMediaEvents } from "./journalMedia";
 import { useState, type ReactNode } from "react";
-import type { JournalChapter, JournalStatus } from "./dailyJournal";
+import { journalNarrativeText, type JournalChapter, type JournalStatus } from "./dailyJournal";
 import type { Journey } from "./types";
 import { JournalChapterReview, hasJournalReadingSuggestion } from "./JournalChapterReview";
 
@@ -43,7 +43,7 @@ export function JournalReadingView({ chapters, journey, renderMedia }: Props) {
   const body = ({ event, suggestion }: typeof rows[number]) => {
     const media = journalMediaGroups(event, journey.media ?? []);
     return <>
-    <p className="daily-journal__prose">{event.text}</p>
+    <p className="daily-journal__prose">{journalNarrativeText(event)}</p>
     {media.manual.length ? <div><p>手动关联的照片/视频</p>{renderMedia(media.manual)}</div> : null}
     {media.place.length && event.routePointId ? <JournalPlaceMedia pointId={event.routePointId} first={firstPlaceMedia.get(event.routePointId) === event.id} ids={media.place} renderMedia={renderMedia} /> : null}
     {hasJournalReadingSuggestion(event, suggestion) && suggestion ? <details className="daily-journal__review"><summary tabIndex={0}>AI 阅读建议</summary>
