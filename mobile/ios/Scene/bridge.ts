@@ -81,9 +81,21 @@ export function acceptsSnapshot(current: Snapshot | null, next: Snapshot) {
   return !current || current.scopeId !== next.scopeId || next.revision >= current.revision;
 }
 
+/// System low-vision settings; they shape globe labels only, never the snapshot or its revision.
+export type SceneAccessibility = {
+  textScale: number;
+  accessibilitySize: boolean;
+  boldText: boolean;
+  increasedContrast: boolean;
+};
+
 declare global {
   interface Window {
-    atlasNative: { receive: (json: string) => void; command: (json: string) => void };
+    atlasNative: {
+      receive: (json: string) => void;
+      command: (json: string) => void;
+      setAccessibility: (settings: SceneAccessibility) => void;
+    };
     webkit?: { messageHandlers?: { atlas?: { postMessage: (body: string) => void } } };
   }
 }

@@ -1,3 +1,4 @@
+html { -webkit-text-size-adjust: 100%; }
 html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
 body { background: #07090f; color: var(--archive-ink); font-family: var(--archive-sans); }
 

@@ -4,7 +4,7 @@ import { StartripsBrandLoader } from "../../../src/brand/StartripsBrandMark";
 import { toJourneyRoutes } from "../../../src/journey/journeyModel";
 import { LivingAtlasGlobe, PersistentEarthProvider, usePersistentEarth } from "../../../src/scene/LivingAtlasGlobe";
 import { installDetailMapOverrides, setDetailLabelPreferences } from "./detailMap";
-import { acceptsSnapshot, atlasSceneFocus, decodeCommandOrDrop, decodeSnapshotOrReport, renderJourneys, send, windowReveal, type CameraInsets, type LabelPreferences, type Snapshot, type TimeWindow } from "./bridge";
+import { acceptsSnapshot, atlasSceneFocus, decodeCommandOrDrop, decodeSnapshotOrReport, renderJourneys, send, windowReveal, type CameraInsets, type LabelPreferences, type SceneAccessibility, type Snapshot, type TimeWindow } from "./bridge";
 import "../../../src/styles/tokens.css";
 import "../../../src/styles/controls.css";
 import "../../../src/styles/living-atlas.css";
@@ -15,15 +15,20 @@ import "./scene.css";
 
 // The native page-world receiver exists before deferred module evaluation.
 // Carry any snapshot sent by WKNavigationDelegate.didFinish into React's first effect.
-const early = window.atlasNative as { pending?: string | null; commands?: string[] } | undefined;
+const early = window.atlasNative as
+  { pending?: string | null; commands?: string[]; accessibility?: SceneAccessibility | null } | undefined;
 let pendingSnapshot: string | null = early?.pending ?? null;
 let deliverSnapshot: ((json: string) => void) | null = null;
 // Commands sent before the module ran are replayed after the pending snapshot.
 let pendingCommands: string[] = [...(early?.commands ?? [])];
 let deliverCommand: ((json: string) => void) | null = null;
+let sceneAccessibility: SceneAccessibility = early?.accessibility
+  ?? { textScale: 1, accessibilitySize: false, boldText: false, increasedContrast: false };
+let deliverAccessibility: ((settings: SceneAccessibility) => void) | null = null;
 window.atlasNative = {
   receive(json) { pendingSnapshot = json; deliverSnapshot?.(json); },
   command(json) { if (deliverCommand) deliverCommand(json); else pendingCommands.push(json); },
+  setAccessibility(settings) { sceneAccessibility = settings; deliverAccessibility?.(settings); },
 };
 
 // The detail map loads MapLibre lazily; patch the same module instance before it draws.
@@ -52,8 +57,7 @@ function AtlasScene() {
   useEffect(() => { earth.setStage("atlas"); return () => earth.setStage("idle"); }, [earth]);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [accessibility, setAccessibility] = useState(sceneAccessibility);
-  const { textScale, accessibilitySize, boldText, increasedContrast } = accessibility;
-  const scrollableDetails = accessibilitySize || textScale > 1 || boldText;
+  const { textScale, boldText, increasedContrast } = accessibility;
   const labelLegibility = useMemo(() => ({
     // Keep space around the anchor on a phone even at the largest text size.
     fontSize: Math.min(26, 15 * textScale),
@@ -156,6 +160,7 @@ function AtlasScene() {
         {...atlasSceneFocus(point, routes.find((route) => route.id === selected?.id))}
         focusRevision={focusRevision} focusEnabled={!interrupted && snapshot.active}
         earthExperiencePolicy={snapshot.earthExperience} routeEditingEnabled={false}
+        labelLegibility={labelLegibility}
         reduceMotion={reduceMotion}
         cinematicActive={!snapshot.active} mediaCoverHint={{ opaqueMediaCover: !snapshot.active, coverTransitionActive: false }}
         onManualCameraInteraction={interrupt} onFocusSettled={() => {

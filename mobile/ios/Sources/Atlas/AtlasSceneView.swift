@@ -40,8 +40,10 @@ struct AtlasSceneView: UIViewRepresentable {
     window.atlasNative = {
       pending: null,
       commands: [],
+      accessibility: null,
       receive(json) { this.pending = json; },
-      command(json) { this.commands.push(json); }
+      command(json) { this.commands.push(json); },
+      setAccessibility(settings) { this.accessibility = settings; }
     };
     """
 
@@ -91,7 +93,12 @@ struct AtlasSceneView: UIViewRepresentable {
         var lastPresentation: ScenePresentation?
         var lastPreview: String?
         var lastReady = 0
-        init(router: AppRouter) { self.router = router }
+        var accessibility: AccessibilitySettings
+        var lastAccessibility: AccessibilitySettings?
+        init(router: AppRouter, accessibility: AccessibilitySettings) {
+            self.router = router
+            self.accessibility = accessibility
+        }
 
         func start(mapOrigin: URL?) {
             guard let root = Bundle.main.url(forResource: "Scene", withExtension: nil) else {
@@ -123,7 +130,7 @@ struct AtlasSceneView: UIViewRepresentable {
                 evaluate("window.atlasNative.setAccessibility(" + String(decoding: data, as: UTF8.self) + ")")
             }
             encoder.outputFormatting = .sortedKeys
-            guard loaded, let data = try? encoder.encode(router.snapshot), let json = String(data: data, encoding: .utf8) else { return }
+            guard let data = try? encoder.encode(router.snapshot), let json = String(data: data, encoding: .utf8) else { return }
             if json != lastJSON, let script = try? AtlasSceneView.receiveScript(json) {
                 lastJSON = json
                 evaluate(script)
@@ -182,7 +189,7 @@ struct AtlasSceneView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-            loaded = false; lastJSON = nil; lastPresentation = nil; lastPreview = nil
+            loaded = false; lastJSON = nil; lastPresentation = nil; lastPreview = nil; lastAccessibility = nil
         }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             loaded = true; lastJSON = nil; lastPresentation = nil; lastPreview = nil; publish()
@@ -194,7 +201,7 @@ struct AtlasSceneView: UIViewRepresentable {
                             && url?.path == "/index.html" ? .allow : .cancel)
         }
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-            loaded = false; lastJSON = nil; lastPresentation = nil; lastPreview = nil
+            loaded = false; lastJSON = nil; lastPresentation = nil; lastPreview = nil; lastAccessibility = nil
             router.sceneRestarted(); restarts += 1
             guard restarts <= 2, let localURL else { router.error = "地球已暂停，请刷新重试。"; return }
             webView.load(URLRequest(url: localURL))
