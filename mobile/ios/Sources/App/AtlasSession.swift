@@ -41,6 +41,12 @@ final class AtlasSession: ObservableObject {
     @Published private(set) var mediaJourneys: [String: MediaJourney] = [:]
     private(set) var generation = UUID()
     private var refreshID = UUID()
+    /// One get-session per short window instead of one per media request (auth rate limit).
+    let verification = VerificationCache()
+    #if DEBUG
+    /// Unit tests count requests through a stub URLProtocol; never set in the app.
+    static var testProtocolClasses: [AnyClass] = []
+    #endif
     @Published private(set) var cookieStore = WKWebsiteDataStore.nonPersistent()
 
     #if DEBUG
@@ -105,6 +111,17 @@ final class AtlasSession: ObservableObject {
                               write: (HTTPCookie, WKWebsiteDataStore) async -> Void = {
                                   await $1.httpCookieStore.setCookie($0)
                               }) async -> Bool {
+        await publishOwnerSession([cookie], at: url, generation: captured, pending: pending, write: write)
+    }
+
+    /// Installs a freshly issued owner session (Google exchange or email sign-in)
+    /// into a new, unpublished profile, then publishes it in one main-actor step.
+    func publishOwnerSession(_ cookies: [HTTPCookie], at url: URL, generation captured: UUID,
+                             pending: () -> Bool,
+                             write: (HTTPCookie, WKWebsiteDataStore) async -> Void = {
+                                 await $1.httpCookieStore.setCookie($0)
+                             }) async -> Bool {
+        guard !cookies.isEmpty else { return false }
         guard isOwnerLoginCurrent(captured, at: url), pending() else { return false }
         let site = Self.ownerStoreID(url)
         let id = UUID()
@@ -113,7 +130,7 @@ final class AtlasSession: ObservableObject {
         save(record, for: site)
         Self.writingStores.insert(id)
         let candidate = WKWebsiteDataStore(forIdentifier: id)
-        await write(cookie, candidate)
+        for cookie in cookies { await write(cookie, candidate) }
         Self.writingStores.remove(id)
         guard isOwnerLoginCurrent(captured, at: url), pending() else {
             await cleanUnusedStores(for: site)
@@ -154,6 +171,7 @@ final class AtlasSession: ObservableObject {
     }
 
     func disconnect() {
+        verification.invalidate()
         activeIdentity = nil; mediaJourneys = [:]
         generation = UUID(); refreshID = UUID(); origin = nil; guestToken = nil; busy = false
         cookieStore = .nonPersistent()
@@ -224,17 +242,31 @@ final class AtlasSession: ObservableObject {
     private func credentials(for url: URL) async -> [String: String] {
         if let guestToken { return ["Authorization": "Bearer \(guestToken)"] }
         let cookies = await cookieStore.httpCookieStore.allCookies()
-        let matching = cookies.filter { cookie in
-            let domain = cookie.domain.hasPrefix(".") ? String(cookie.domain.dropFirst()) : cookie.domain
-            let host = url.host ?? ""
-            let matchesPath = url.path == cookie.path || url.path.hasPrefix(cookie.path.hasSuffix("/") ? cookie.path : cookie.path + "/")
-            return (host == domain || (cookie.domain.hasPrefix(".") && host.hasSuffix("." + domain)))
-                && matchesPath && (cookie.expiresDate.map { $0 > Date() } ?? true)
-        }
-        return HTTPCookie.requestHeaderFields(with: matching)
+        let now = Date()
+        return HTTPCookie.requestHeaderFields(with: cookies.filter { Self.cookie($0, matches: url, at: now) })
+    }
+
+    /// RFC 6265 domain/path/expiry match. A bare origin's empty path is "/": without
+    /// that, the launch-time restore check (`hasOwnerCredentials`, which asks with the
+    /// bare origin) never matched a `Path=/` session and every launch showed the welcome screen.
+    static func cookie(_ cookie: HTTPCookie, matches url: URL, at now: Date) -> Bool {
+        let domain = cookie.domain.hasPrefix(".") ? String(cookie.domain.dropFirst()) : cookie.domain
+        let host = (url.host ?? "").lowercased()
+        let path = url.path.isEmpty ? "/" : url.path
+        let matchesPath = path == cookie.path || path.hasPrefix(cookie.path.hasSuffix("/") ? cookie.path : cookie.path + "/")
+        return (host == domain.lowercased() || (cookie.domain.hasPrefix(".") && host.hasSuffix("." + domain.lowercased())))
+            && matchesPath && (cookie.expiresDate.map { $0 > now } ?? true)
     }
 
     private func perform(_ url: URL, method: String, body: Data?, headers: [String: String]) async throws -> Data {
+        let (data, response) = try await performResponse(url, method: method, body: body, headers: headers)
+        if response.statusCode == 429 { throw RateLimited(retryAfter: RateLimited.retryAfter(response)) }
+        guard (200..<300).contains(response.statusCode) else { throw MediaFailure.http(response.statusCode) }
+        return data
+    }
+
+    /// One request without any shared cookie storage; the caller sees every status and header.
+    func performResponse(_ url: URL, method: String, body: Data?, headers: [String: String]) async throws -> (Data, HTTPURLResponse) {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.httpMethod = method
         request.allHTTPHeaderFields = headers
@@ -246,11 +278,42 @@ final class AtlasSession: ObservableObject {
         }
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false; config.httpCookieStorage = nil; config.urlCredentialStorage = nil
+        #if DEBUG
+        if !Self.testProtocolClasses.isEmpty { config.protocolClasses = Self.testProtocolClasses + (config.protocolClasses ?? []) }
+        #endif
         let transport = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
         defer { transport.finishTasksAndInvalidate() }
         let (data, response) = try await transport.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(status) else { throw MediaFailure.http(status) }
+        guard let http = response as? HTTPURLResponse else { throw MediaFailure.http(0) }
+        return (data, http)
+    }
+
+    /// The active Organization of the signed-in owner profile, or nil when none is chosen yet.
+    func activeOrganization() async throws -> String? {
+        guard guestToken == nil, origin != nil else { throw SessionFailure.invalidOrigin }
+        guard let login = try JSONDecoder().decode(Login?.self, from: await read("/api/auth/get-session")) else {
+            throw SessionFailure.unavailable(401)
+        }
+        return login.session.activeOrganizationId
+    }
+
+    /// An owner Better Auth call that may refresh the session cookies (set-active
+    /// rewrites the cached session). Returned first-party cookies go into the
+    /// active profile; the generation must not change while it runs.
+    func ownerAuthCall(_ path: String, method: String = "GET", body: Data? = nil) async throws -> Data {
+        let ticket = generation
+        guard guestToken == nil, let origin, path.hasPrefix("/api/auth/"),
+              let url = URL(string: path, relativeTo: origin)?.absoluteURL else { throw SessionFailure.invalidOrigin }
+        // performResponse adds the first-party Origin header to every non-GET call.
+        let headers = await credentials(for: url)
+        let (data, response) = try await performResponse(url, method: method, body: body, headers: headers)
+        guard ticket == generation else { throw MediaFailure.accessChanged }
+        guard (200..<300).contains(response.statusCode) else { throw SessionFailure.unavailable(response.statusCode) }
+        let store = cookieStore.httpCookieStore
+        for cookie in (try? OwnerSignIn.sessionCookies(response, origin: origin, requireToken: false)) ?? [] {
+            await store.setCookie(cookie)
+        }
+        guard ticket == generation else { throw MediaFailure.accessChanged }
         return data
     }
 
@@ -270,14 +333,30 @@ final class AtlasSession: ObservableObject {
         let headers = await credentials(for: url)
         guard ticket == generation else { throw MediaFailure.accessChanged }
         // Reuse exactly the credentials verified here for this operation, including writes.
+        // The identity behind these credentials is verified once per short window and shared.
         if let scope, !guest {
-            let loginData = try await perform(origin.appendingPathComponent("api/auth/get-session"), method: "GET", body: nil, headers: headers)
-            let login = try JSONDecoder().decode(Login.self, from: loginData)
-            guard try login.identity(at: origin) == scope, ticket == generation, activeIdentity == scope else { throw MediaFailure.accessChanged }
+            let verified = try await verifiedIdentity(origin: origin, headers: headers, ticket: ticket)
+            guard verified == scope, ticket == generation, activeIdentity == scope else { throw MediaFailure.accessChanged }
         }
-        let data = try await perform(url, method: method, body: body, headers: headers)
+        let data = method == "GET"
+            ? try await retryOnRateLimit { try await self.perform(url, method: method, body: body, headers: headers) }
+            : try await perform(url, method: method, body: body, headers: headers)
         guard ticket == generation, scope == nil || scope == activeIdentity else { throw MediaFailure.accessChanged }
         return data
+    }
+
+    /// Coalesced, short-lived get-session verification for these exact credentials.
+    private func verifiedIdentity(origin: URL, headers: [String: String], ticket: UUID) async throws -> String {
+        let url = origin.appendingPathComponent("api/auth/get-session")
+        do {
+            return try await verification.identity(for: .init(generation: ticket, credential: VerificationCache.credential(headers))) {
+                let data = try await retryOnRateLimit { try await self.perform(url, method: "GET", body: nil, headers: headers) }
+                guard let login = try JSONDecoder().decode(Login?.self, from: data) else { throw SessionFailure.unavailable(401) }
+                return try login.identity(at: origin)
+            }
+        } catch MediaFailure.http(let status) where status == 401 {
+            verification.invalidate(); throw SessionFailure.unavailable(401)
+        }
     }
 
     func revalidate(_ scope: String) async throws {
@@ -287,12 +366,18 @@ final class AtlasSession: ObservableObject {
         #endif
         let ticket = generation
         if guestToken != nil {
-            _ = try await api("/api/shared/journeys", method: "GET", body: nil, scope: scope)
+            // A share is re-checked at most once per window, not before and after every picture.
+            _ = try await verification.identity(for: .init(generation: ticket, credential: "guest")) {
+                _ = try await self.api("/api/shared/journeys", method: "GET", body: nil, scope: scope)
+                return scope
+            }
         } else {
             guard let origin else { throw MediaFailure.accessChanged }
-            let data = try await read("/api/auth/get-session")
-            let login = try JSONDecoder().decode(Login.self, from: data)
-            guard try login.identity(at: origin) == scope else { throw MediaFailure.accessChanged }
+            let headers = await credentials(for: origin.appendingPathComponent("api/auth/get-session"))
+            guard ticket == generation else { throw MediaFailure.accessChanged }
+            guard try await verifiedIdentity(origin: origin, headers: headers, ticket: ticket) == scope else {
+                throw MediaFailure.accessChanged
+            }
         }
         guard ticket == generation, activeIdentity == scope else { throw MediaFailure.accessChanged }
     }
@@ -361,7 +446,8 @@ final class AtlasSession: ObservableObject {
         let observation = UUID()
         refreshID = observation
         busy = true
-        defer { if generation == request && refreshID == observation { busy = false } }
+        // Only a newer refresh owns `busy`; a superseded generation must not leave it stuck on.
+        defer { if refreshID == observation { busy = false } }
         let isGuest = guestToken != nil
         do {
             guard let origin else { throw SessionFailure.invalidOrigin }
@@ -406,6 +492,8 @@ final class AtlasSession: ObservableObject {
                            earthExperience: preference, mediaJourneys: projected)
         } catch {
             guard generation == request && refreshID == observation else { return }
+            // Rate limiting is a pause, not a broken Atlas: keep what is installed and try later.
+            if error is RateLimited && router.installed { return }
             activeIdentity = nil; mediaJourneys = [:]
             router.clear()
             if !isGuest, case SessionFailure.unavailable(401) = error { signInRequired = true }

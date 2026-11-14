@@ -1,5 +1,9 @@
 import Foundation
 
+/// One contract version for snapshots, scene events and native commands.
+/// Swift, `Scene/bridge.ts` and `Fixtures/bridge.json` move together.
+enum SceneContract { static let version = 2 }
+
 enum AtlasAccess: String, Codable { case owner, guest }
 enum SceneEventKind: String, Codable { case ready, select, story, invalidate, cameraInterrupted, rendered, switchAccess, sceneFailed }
 
@@ -116,7 +120,7 @@ struct SceneSnapshot: Codable {
 enum BridgeFailure: Error { case invalidMessage, stale, unknownTarget }
 
 func validateSceneEvent(_ event: SceneEvent, snapshot: SceneSnapshot) throws {
-    guard event.version == 1, UUID(uuidString: event.requestId) != nil else { throw BridgeFailure.invalidMessage }
+    guard event.version == SceneContract.version, UUID(uuidString: event.requestId) != nil else { throw BridgeFailure.invalidMessage }
     if event.kind == .sceneFailed {
         // Origin and main-frame checks already happened in the message handler.
         guard event.journeyId == nil, event.routePointId == nil, event.assetId == nil,
@@ -134,5 +138,86 @@ func validateSceneEvent(_ event: SceneEvent, snapshot: SceneSnapshot) throws {
         }
     } else if event.journeyId != nil || event.routePointId != nil || event.assetId != nil {
         throw BridgeFailure.invalidMessage
+    }
+}
+
+// MARK: Native -> scene commands (contract v2)
+
+/// Presentation commands never change data, so they carry the live scope and
+/// revision without bumping it; a command for an older snapshot is stale.
+enum SceneCommandKind: String, Codable { case focus, timeWindow, chrome, insets, labels }
+
+/// Closed ISO day range (`YYYY-MM-DD`); `nil` on a timeWindow command clears it.
+struct SceneTimeWindow: Codable, Equatable {
+    let start: String
+    let end: String
+}
+
+/// Points the native chrome covers at the top and bottom of the globe.
+struct SceneInsets: Codable, Equatable {
+    let top: Double
+    let bottom: Double
+}
+
+/// Map label preferences from native Settings. `language` is `zh` or `bilingual`.
+struct SceneLabelPreferences: Codable, Equatable {
+    var language: String = "zh"
+    var showPlaceNames: Bool = false
+    static let languages = ["zh", "bilingual"]
+}
+
+struct SceneCommand: Codable, Equatable {
+    let version: Int
+    let kind: SceneCommandKind
+    let scopeId: String
+    let revision: Int
+    let requestId: String
+    var journeyId: String? = nil
+    var routePointId: String? = nil
+    var window: SceneTimeWindow? = nil
+    var globeOnly: Bool? = nil
+    var insets: SceneInsets? = nil
+    var labels: SceneLabelPreferences? = nil
+}
+
+private let isoDay = try! NSRegularExpression(pattern: "^\\d{4}-\\d{2}-\\d{2}$")
+private func isDay(_ text: String) -> Bool {
+    isoDay.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+}
+
+/// Native emits only commands the scene's `decodeCommand` accepts; both run the fixture.
+func validateSceneCommand(_ command: SceneCommand, snapshot: SceneSnapshot) throws {
+    guard command.version == SceneContract.version, UUID(uuidString: command.requestId) != nil else {
+        throw BridgeFailure.invalidMessage
+    }
+    guard command.scopeId == snapshot.scopeId, command.revision == snapshot.revision else { throw BridgeFailure.stale }
+    let targeted = command.journeyId != nil || command.routePointId != nil
+    if command.kind != .labels && command.labels != nil { throw BridgeFailure.invalidMessage }
+    switch command.kind {
+    case .labels:
+        guard !targeted, command.window == nil, command.globeOnly == nil, command.insets == nil,
+              let labels = command.labels, SceneLabelPreferences.languages.contains(labels.language) else {
+            throw BridgeFailure.invalidMessage
+        }
+    case .focus:
+        guard command.window == nil, command.globeOnly == nil, command.insets == nil else { throw BridgeFailure.invalidMessage }
+        guard let journey = snapshot.journeys.first(where: { $0.id == command.journeyId }) else { throw BridgeFailure.unknownTarget }
+        if let point = command.routePointId, !journey.routePoints.contains(where: { $0.id == point }) {
+            throw BridgeFailure.unknownTarget
+        }
+    case .timeWindow:
+        guard !targeted, command.globeOnly == nil, command.insets == nil else { throw BridgeFailure.invalidMessage }
+        if let window = command.window {
+            guard isDay(window.start), isDay(window.end), window.start <= window.end else { throw BridgeFailure.invalidMessage }
+        }
+    case .chrome:
+        guard !targeted, command.window == nil, command.insets == nil, command.globeOnly != nil else {
+            throw BridgeFailure.invalidMessage
+        }
+    case .insets:
+        guard !targeted, command.window == nil, command.globeOnly == nil, let insets = command.insets,
+              [insets.top, insets.bottom].allSatisfy({ $0.isFinite && $0 >= 0 && $0 <= 4096 }) else {
+            throw BridgeFailure.invalidMessage
+        }
     }
 }

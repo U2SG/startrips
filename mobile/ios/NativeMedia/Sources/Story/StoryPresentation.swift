@@ -27,14 +27,16 @@ public enum StoryPresentationStyle: String, CaseIterable, Identifiable, Sendable
     public init(stored: String) { self = StoryPresentationStyle(rawValue: stored) ?? .classic }
 }
 
-/// Native counterpart of the Mobile V2 dark shell tokens (AtlasRootView).
+/// Mirrors the app's Night Flight tokens (Sources/Design/NightFlight.swift);
+/// this package cannot import the app target, so the values are repeated here.
 enum StoryTheme {
-    static let background = Color(red: 2 / 255, green: 7 / 255, blue: 6 / 255)
-    static let surface = Color(red: 10 / 255, green: 20 / 255, blue: 18 / 255)
-    static let ink = Color(red: 230 / 255, green: 238 / 255, blue: 233 / 255)
-    static let muted = Color(red: 230 / 255, green: 238 / 255, blue: 233 / 255).opacity(0.62)
-    static let accent = Color(red: 118 / 255, green: 198 / 255, blue: 188 / 255)
-    static let line = Color(red: 118 / 255, green: 198 / 255, blue: 188 / 255).opacity(0.32)
+    static let background = Color(red: 7 / 255, green: 9 / 255, blue: 15 / 255)
+    static let surface = Color(red: 18 / 255, green: 21 / 255, blue: 30 / 255)
+    static let ink = Color(red: 242 / 255, green: 244 / 255, blue: 248 / 255)
+    static let muted = Color(red: 169 / 255, green: 176 / 255, blue: 191 / 255)
+    /// The single warm accent: selection and the current position only.
+    static let accent = Color(red: 232 / 255, green: 182 / 255, blue: 92 / 255)
+    static let line = Color.white.opacity(0.08)
     // Journey Book tokens (src/styles/journey-book.css).
     static let paper = Color(red: 247 / 255, green: 246 / 255, blue: 240 / 255)
     static let paperInk = Color(red: 41 / 255, green: 44 / 255, blue: 38 / 255)
@@ -42,6 +44,16 @@ enum StoryTheme {
     static let gold = Color(red: 217 / 255, green: 185 / 255, blue: 122 / 255)
     static let coverInk = Color(red: 236 / 255, green: 230 / 255, blue: 214 / 255)
     static func serif(_ style: Font.TextStyle) -> Font { .system(style, design: .serif) }
+
+    // Layout tokens (4pt grid), shared by every Story row so edges line up.
+    static func grid(_ units: CGFloat) -> CGFloat { units * 4 }
+    static let hitTarget: CGFloat = 44
+    /// Inset of an icon row; a 44pt slot then puts its glyph near `edge`.
+    static let slotInset: CGFloat = grid(1)
+    /// Text side margin: the optical edge of a glyph in an inset 44pt slot.
+    static let edge: CGFloat = grid(4)
+    /// Paper page text inset (旅程之书).
+    static let pageInset: CGFloat = grid(6)
 }
 
 /// Port of `src/journey/journeyBookPages.ts` (#393): the Journey read as a book.

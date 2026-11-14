@@ -1,6 +1,6 @@
 {
   "snapshot": {
-    "version": 1,
+    "version": 2,
     "scopeId": "synthetic-atlas-scope",
     "revision": 7,
     "access": "owner",
@@ -65,7 +65,7 @@
     ]
   },
   "event": {
-    "version": 1,
+    "version": 2,
     "kind": "story",
     "scopeId": "synthetic-atlas-scope",
     "requestId": "00000000-0000-4000-8000-000000000002",
@@ -73,5 +73,48 @@
     "journeyId": "journey-fixture",
     "routePointId": "point-a",
     "assetId": "asset-fixture"
-  }
+  },
+  "commands": [
+    {
+      "version": 2,
+      "kind": "focus",
+      "scopeId": "synthetic-atlas-scope",
+      "revision": 7,
+      "requestId": "00000000-0000-4000-8000-000000000003",
+      "journeyId": "journey-fixture",
+      "routePointId": "point-b"
+    },
+    {
+      "version": 2,
+      "kind": "timeWindow",
+      "scopeId": "synthetic-atlas-scope",
+      "revision": 7,
+      "requestId": "00000000-0000-4000-8000-000000000004",
+      "window": { "start": "2025-01-01", "end": "2025-01-01" }
+    },
+    {
+      "version": 2,
+      "kind": "chrome",
+      "scopeId": "synthetic-atlas-scope",
+      "revision": 7,
+      "requestId": "00000000-0000-4000-8000-000000000005",
+      "globeOnly": true
+    },
+    {
+      "version": 2,
+      "kind": "insets",
+      "scopeId": "synthetic-atlas-scope",
+      "revision": 7,
+      "requestId": "00000000-0000-4000-8000-000000000006",
+      "insets": { "top": 64, "bottom": 188 }
+    },
+    {
+      "version": 2,
+      "kind": "labels",
+      "scopeId": "synthetic-atlas-scope",
+      "revision": 7,
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "labels": { "language": "bilingual", "showPlaceNames": true }
+    }
+  ]
 }

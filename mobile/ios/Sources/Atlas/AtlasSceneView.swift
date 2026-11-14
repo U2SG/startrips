@@ -25,10 +25,13 @@ struct AtlasSceneView: UIViewRepresentable {
         )
     }
 
-    static func receiveScript(_ json: String) throws -> String {
+    static func receiveScript(_ json: String) throws -> String { try script("receive", json) }
+    static func commandScript(_ json: String) throws -> String { try script("command", json) }
+
+    private static func script(_ method: String, _ json: String) throws -> String {
         // JSONEncoder produces one quoted data literal, including escaping untrusted text.
         let literal = String(decoding: try JSONEncoder().encode(json), as: UTF8.self)
-        return "window.atlasNative.receive(" + literal + ")"
+        return "window.atlasNative." + method + "(" + literal + ")"
     }
 
     // Document-start delivery does not depend on a late WebKit message
@@ -36,8 +39,10 @@ struct AtlasSceneView: UIViewRepresentable {
     static let earlyReceiverScript = """
     window.atlasNative = {
       pending: null,
+      commands: [],
       accessibility: null,
       receive(json) { this.pending = json; },
+      command(json) { this.commands.push(json); },
       setAccessibility(settings) { this.accessibility = settings; }
     };
     """
@@ -56,7 +61,7 @@ struct AtlasSceneView: UIViewRepresentable {
         // Full-bleed: the page receives real env(safe-area-inset-*) values instead
         // of UIKit insetting the scroll view a second time, and nothing light
         // shows before the first frame or during a WebKit restart.
-        let background = UIColor(red: 2 / 255, green: 7 / 255, blue: 6 / 255, alpha: 1)
+        let background = NightFlight.backgroundUIColor
         view.backgroundColor = background
         view.scrollView.backgroundColor = background
         view.underPageBackgroundColor = background
@@ -85,6 +90,9 @@ struct AtlasSceneView: UIViewRepresentable {
         var loaded = false
         var restarts = 0
         var lastJSON: String?
+        var lastPresentation: ScenePresentation?
+        var lastPreview: String?
+        var lastReady = 0
         var accessibility: AccessibilitySettings
         var lastAccessibility: AccessibilitySettings?
         init(router: AppRouter, accessibility: AccessibilitySettings) {
@@ -123,9 +131,43 @@ struct AtlasSceneView: UIViewRepresentable {
             }
             encoder.outputFormatting = .sortedKeys
             guard let data = try? encoder.encode(router.snapshot), let json = String(data: data, encoding: .utf8) else { return }
-            guard json != lastJSON, let script = try? AtlasSceneView.receiveScript(json) else { return }
-            lastJSON = json
-            evaluate(script)
+            if json != lastJSON, let script = try? AtlasSceneView.receiveScript(json) {
+                lastJSON = json
+                evaluate(script)
+            }
+            sendCommands()
+        }
+
+        /// Presentation travels as commands so a layout change never rebuilds the
+        /// globe's routes or bumps the revision that scene events must echo.
+        private func sendCommands() {
+            if router.sceneReadyCount != lastReady { lastReady = router.sceneReadyCount; lastPresentation = nil; lastPreview = nil }
+            let presentation = router.presentation
+            var commands: [SceneCommand] = []
+            if lastPresentation?.globeOnly != presentation.globeOnly {
+                commands.append(router.command(.chrome, globeOnly: presentation.globeOnly))
+            }
+            if lastPresentation?.insets != presentation.insets {
+                commands.append(router.command(.insets, insets: presentation.insets))
+            }
+            if lastPresentation?.labels != presentation.labels {
+                commands.append(router.command(.labels, labels: presentation.labels))
+            }
+            if lastPresentation == nil || lastPresentation?.window != presentation.window {
+                commands.append(router.command(.timeWindow, window: presentation.window))
+            }
+            lastPresentation = presentation
+            if let preview = router.preview, preview.requestId != lastPreview {
+                lastPreview = preview.requestId
+                commands.append(router.command(.focus, journeyId: preview.journeyId, routePointId: preview.routePointId))
+            }
+            let snapshot = router.snapshot
+            for command in commands {
+                guard (try? validateSceneCommand(command, snapshot: snapshot)) != nil,
+                      let data = try? JSONEncoder().encode(command),
+                      let script = try? AtlasSceneView.commandScript(String(decoding: data, as: UTF8.self)) else { continue }
+                evaluate(script)
+            }
         }
 
         private func evaluate(_ script: String) {
@@ -147,9 +189,11 @@ struct AtlasSceneView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-            loaded = false; lastJSON = nil; lastAccessibility = nil
+            loaded = false; lastJSON = nil; lastPresentation = nil; lastPreview = nil; lastAccessibility = nil
         }
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loaded = true; publish() }
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            loaded = true; lastJSON = nil; lastPresentation = nil; lastPreview = nil; publish()
+        }
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             let url = navigationAction.request.url
@@ -157,7 +201,8 @@ struct AtlasSceneView: UIViewRepresentable {
                             && url?.path == "/index.html" ? .allow : .cancel)
         }
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-            loaded = false; lastJSON = nil; lastAccessibility = nil; router.sceneRestarted(); restarts += 1
+            loaded = false; lastJSON = nil; lastPresentation = nil; lastPreview = nil; lastAccessibility = nil
+            router.sceneRestarted(); restarts += 1
             guard restarts <= 2, let localURL else { router.error = "地球已暂停，请刷新重试。"; return }
             webView.load(URLRequest(url: localURL))
         }

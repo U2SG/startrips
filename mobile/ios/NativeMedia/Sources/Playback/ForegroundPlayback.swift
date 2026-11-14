@@ -51,6 +51,15 @@ public enum SoundtrackGain {
     private var baseline: Float = 0.8
     private var paused = false
     private var muted = false
+    private var playRange: ClosedRange<Double>?
+
+    /// How far the current clip has played (0...1 within its trim), for the stream's even flow.
+    public var progress: Double? {
+        guard ready, let player, let range = playRange, range.upperBound > range.lowerBound else { return nil }
+        let seconds = player.currentTime().seconds
+        guard seconds.isFinite else { return nil }
+        return min(1, max(0, (seconds - range.lowerBound) / (range.upperBound - range.lowerBound)))
+    }
 
     public init(ownership: PlaybackOwnership? = nil) { self.ownership = ownership ?? .shared }
     public func takeOwnership() {
@@ -71,6 +80,7 @@ public enum SoundtrackGain {
                 try Task.checkCancellation()
                 guard epoch == self.generation else { return }
                 let bounds = trim?.resolved(sourceSeconds: duration)
+                self.playRange = bounds ?? (duration.isFinite && duration > 0 ? 0...duration : nil)
                 let item = AVPlayerItem(asset: asset)
                 if let bounds { item.forwardPlaybackEndTime = CMTime(seconds: bounds.upperBound, preferredTimescale: 600) }
                 let player = AVPlayer(playerItem: item)

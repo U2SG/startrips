@@ -9,17 +9,14 @@ final class StoryPresentationUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture"]
         app.launch()
-        let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
-        XCTAssertTrue(chip.waitForExistence(timeout: 30))
-        chip.tap()
-        let point = app.webViews.switches["起点"]
-        XCTAssertTrue(point.waitForExistence(timeout: 10))
-        point.tap()
-        chip.tap()
-        let story = app.webViews.buttons["打开故事：起点"].firstMatch
-        XCTAssertTrue(story.waitForExistence(timeout: 10))
+        XCTAssertTrue(card(app).waitForExistence(timeout: 30))
+        choosePoint(app, "point-a")
+        let story = openCard(app)
+        XCTAssertEqual(story.label, "打开故事：起点")
         story.tap()
         XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10))
+        assertStoryChromeIsCentred(app)
+        assertTempoBeforePlay(app)
         let style = app.buttons["story.style"]
         XCTAssertEqual(style.label, "展示方式")
         XCTAssertEqual(style.value as? String, "默认")
@@ -36,6 +33,7 @@ final class StoryPresentationUITests: XCTestCase {
         XCTAssertTrue(photo.waitForExistence(timeout: 10))
         XCTAssertTrue(note.waitForExistence(timeout: 10))
         XCTAssertTrue(photo.frame.intersects(note.frame), "图上感想 lays the note on the picture")
+        assertTempoBeforePlay(app)
         capture(app, "story-style-note-overlay")
 
         choose(app, "旅程之书")
@@ -43,6 +41,7 @@ final class StoryPresentationUITests: XCTestCase {
         XCTAssertTrue(opened.waitForExistence(timeout: 10))
         XCTAssertTrue(app.images["synthetic.jpg"].waitForExistence(timeout: 10))
         capture(app, "story-style-book")
+        assertTempoBeforePlay(app)
         app.buttons["story.next"].tap()
         XCTAssertTrue(element(app, "story.book.media:asset-second").waitForExistence(timeout: 10))
         app.buttons["story.previous"].tap()
@@ -53,24 +52,77 @@ final class StoryPresentationUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
 
         choose(app, "旅程之流")
-        XCTAssertTrue(element(app, "story.stream.media:asset-fixture").waitForExistence(timeout: 10))
+        let streamed = element(app, "story.stream.media:asset-fixture")
+        XCTAssertTrue(streamed.waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["story.next"].exists)
+        // One thread down the centre, running through every picture (web journey-stream).
+        let thread = element(app, "story.stream.thread")
+        XCTAssertTrue(thread.waitForExistence(timeout: 10))
+        XCTAssertEqual(thread.frame.midX, app.windows.firstMatch.frame.midX, accuracy: 1)
+        // The thread is fixed to the viewport behind the rows, so it spans the whole stream view.
+        XCTAssertGreaterThanOrEqual(thread.frame.height, element(app, "story.stream").frame.height - 1)
+        assertTempoBeforePlay(app)
+
+        // Play flows down the stream itself: no pager, the content keeps moving, pause freezes it.
+        app.buttons["story.play"].tap()
+        XCTAssertTrue(app.buttons["story.pause"].waitForExistence(timeout: 5))
+        // Few snapshots while the flow moves every frame: each query walks the whole tree,
+        // and a slow CI simulator times out when they are fired back to back.
+        var samples: [CGFloat] = []
+        for _ in 0..<4 {
+            RunLoop.current.run(until: Date().addingTimeInterval(2))
+            samples.append(streamed.frame.minY)
+        }
+        XCTAssertTrue(element(app, "story.stream").exists, "the stream stays on screen while playing")
+        XCTAssertFalse(element(app, "story.photo.media:asset-fixture").exists, "no page-by-page player")
+        XCTAssertGreaterThan((samples.max() ?? 0) - (samples.min() ?? 0), 40, "the stream flows while playing")
+        capture(app, "story-style-stream-playing")
+        app.buttons["story.pause"].tap()
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        let frozen = streamed.frame.minY
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertEqual(streamed.frame.minY, frozen, accuracy: 1, "pause freezes the flow")
+        // The first close ends playback and stays in Story, as in every style.
+        app.buttons["story.close"].tap()
+        XCTAssertTrue(app.buttons["story.play"].waitForExistence(timeout: 5))
         capture(app, "story-style-stream")
 
         // The choice is remembered: closing and reopening the Story keeps the stream.
         app.buttons["story.close"].tap()
-        XCTAssertTrue(chip.waitForExistence(timeout: 10))
-        chip.tap()
-        XCTAssertTrue(point.waitForExistence(timeout: 10))
-        point.tap()
-        chip.tap()
-        XCTAssertTrue(story.waitForExistence(timeout: 10))
-        story.tap()
+        XCTAssertTrue(card(app).waitForExistence(timeout: 10))
+        choosePoint(app, "point-a")
+        openCard(app).tap()
         XCTAssertTrue(element(app, "story.stream").waitForExistence(timeout: 10))
         XCTAssertEqual(app.buttons["story.style"].value as? String, "旅程之流")
         choose(app, "默认")
         XCTAssertTrue(photo.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["story.next"].exists)
+    }
+
+    /// The tempo slot sits left of play before playback starts, in every style.
+    @MainActor private func assertTempoBeforePlay(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let tempo = element(app, "story.tempo"), play = app.buttons["story.play"]
+        XCTAssertTrue(tempo.waitForExistence(timeout: 5), "tempo is offered before playback", file: file, line: line)
+        XCTAssertTrue(play.exists, file: file, line: line)
+        XCTAssertEqual(tempo.value as? String, "标准", file: file, line: line)
+        XCTAssertLessThan(tempo.frame.maxX, play.frame.minX, "tempo sits left of play", file: file, line: line)
+    }
+
+    /// Title and play sit on the screen axis; the header's outer icons mirror each other.
+    @MainActor private func assertStoryChromeIsCentred(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let window = app.windows.firstMatch.frame
+        let title = app.staticTexts["story.title"].frame
+        let play = app.buttons["story.play"].frame
+        let close = app.buttons["story.close"].frame
+        let expand = app.buttons["story.expand"].frame
+        XCTAssertEqual(title.midX, window.midX, accuracy: 1, "title is centred", file: file, line: line)
+        XCTAssertEqual(play.midX, window.midX, accuracy: 1, "play is centred", file: file, line: line)
+        XCTAssertEqual(close.minX - window.minX, window.maxX - expand.maxX, accuracy: 1, "header slots mirror", file: file, line: line)
+        for frame in [play, close, expand, app.buttons["story.previous"].frame, app.buttons["story.next"].frame] {
+            XCTAssertGreaterThanOrEqual(min(frame.width, frame.height), 44, file: file, line: line)
+        }
+        XCTAssertEqual(app.buttons["story.previous"].frame.minX - window.minX,
+                       window.maxX - app.buttons["story.next"].frame.maxX, accuracy: 1, "controls mirror", file: file, line: line)
     }
 
     @MainActor private func element(_ app: XCUIApplication, _ id: String) -> XCUIElement {

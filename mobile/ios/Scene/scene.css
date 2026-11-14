@@ -1,20 +1,20 @@
-html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
 html { -webkit-text-size-adjust: 100%; }
-body { background: var(--archive-bg); color: var(--archive-ink); font-family: var(--archive-sans); }
+html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+body { background: #07090f; color: var(--archive-ink); font-family: var(--archive-sans); }
 
-/* The iPhone Atlas uses the same compact header / chip / sheet geometry and
-   tokens as src/journey/LivingAtlasApp.tsx (Mobile V2). Only native-specific
-   positioning and the privacy-preserving media placeholder belong here. */
+/* The iPhone scene is globe-only (contract v2). Native SwiftUI draws every
+   control and reports the points it covers through --native-atlas-top-inset /
+   --native-atlas-bottom, so the camera viewport stays clear of the card. */
 .living-atlas.native-atlas {
   position: relative;
   width: 100%;
   height: 100%;
   min-height: 0;
   isolation: isolate;
-  --native-atlas-top: calc(env(safe-area-inset-top, 0px) + 62px);
+  --native-atlas-top: var(--native-atlas-top-inset, 0px);
 }
 .persistent-earth-host {
-  top: calc(env(safe-area-inset-top, 0px) + 62px);
+  top: var(--native-atlas-top-inset, 0px);
   bottom: var(--native-atlas-bottom, 0px);
 }
 .particle-earth-journey-connector { display: none; }
@@ -24,72 +24,6 @@ body { background: var(--archive-bg); color: var(--archive-ink); font-family: va
 }
 .living-atlas.native-atlas > .native-atlas__earth { pointer-events: none; }
 .native-atlas__earth > * { width: 100%; height: 100%; }
-.native-atlas__header { background: linear-gradient(180deg, rgba(1, 8, 9, .78), rgba(1, 8, 9, 0)); }
-.native-atlas__header .startrips-wordmark { display: inline-flex; align-items: center; }
-.native-atlas__chrome { pointer-events: none; }
-.native-atlas__chrome > * { pointer-events: auto; }
-
-/* No signed owner media URL crosses the loopback bridge. Until the native
-   viewer supplies an authorized cover, retain the Web sheet's visual rhythm
-   with the existing Startrips brand mark, never a fake photograph. */
-.native-atlas__sheet-cover {
-  height: min(20svh, 156px);
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-  margin: 0 0 12px;
-  border: 1px solid color-mix(in srgb, var(--journey-color) 20%, rgba(118, 198, 188, .15));
-  border-radius: 15px;
-  background:
-    radial-gradient(circle at 50% 110%, color-mix(in srgb, var(--journey-color) 28%, transparent), transparent 64%),
-    linear-gradient(160deg, rgba(4, 23, 24, .95), rgba(2, 9, 11, .98));
-}
-.native-atlas__sheet-cover .startrips-journey-cue { opacity: .72; }
-.native-atlas__route-points {
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 8px;
-  padding: 2px 2px 14px;
-  margin-bottom: 4px;
-  overflow-x: auto;
-  scrollbar-width: thin;
-  -webkit-overflow-scrolling: touch;
-}
-.native-atlas__route-points button {
-  min-width: 70px;
-  min-height: 44px;
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 7px 12px;
-  border: 1px solid rgba(118, 198, 188, .20);
-  border-radius: 999px;
-  background: rgba(4, 25, 24, .68);
-  color: rgba(218, 237, 230, .82);
-  font: 500 11px/1.2 var(--archive-sans);
-}
-.native-atlas__route-points button[aria-checked="true"] {
-  border-color: color-mix(in srgb, var(--journey-color) 60%, rgba(118, 198, 188, .30));
-  background: color-mix(in srgb, var(--journey-color) 16%, rgba(4, 25, 24, .88));
-  color: #edf7f2;
-}
-.native-atlas__sheet .mobile-v2__sheet-actions > button:not(.is-primary) { grid-column: 1 / -1; }
-.native-atlas__empty {
-  position: absolute;
-  top: 50%;
-  right: 20px;
-  left: 20px;
-  transform: translateY(-50%);
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  color: rgba(226, 239, 233, .85);
-  text-align: center;
-  pointer-events: none;
-}
-.native-atlas__empty p { margin: 0; font: 500 21px/1.2 var(--archive-serif); }
 .native-atlas__status {
   display: grid;
   place-items: center;
@@ -99,174 +33,44 @@ body { background: var(--archive-bg); color: var(--archive-ink); font-family: va
   box-sizing: border-box;
   text-align: center;
 }
-.native-atlas :is(button, [role="switch"], [role="slider"]):focus-visible {
-  outline: 2px solid var(--control-focus, #7de9d1);
+.native-atlas :is(button, [role="button"]):focus-visible {
+  outline: 2px solid #e8b65c;
   outline-offset: 3px;
 }
-/* Dialog containers take programmatic focus for VoiceOver; only their
-   controls draw a focus ring (WebKit may treat that focus as focus-visible). */
-.native-atlas__sheet:focus-visible,
-.native-atlas__picker:focus-visible { outline: none; }
-@media (max-height: 480px) and (orientation: landscape) {
-  .native-atlas__sheet-cover { display: none; }
-  /* Medium leaves the globe and route visible; large is the near-full detent. */
-  .native-atlas__sheet { max-height: 60svh; }
-}
 
-.native-atlas :is(.mobile-v2__journey-copy, .mobile-v2__picker-copy) small,
-.native-atlas .mobile-v2__sheet-heading p,
-.native-atlas .mobile-v2__stats dt {
-  font-size: calc(8px * var(--native-text-scale, 1));
-}
-.native-atlas :is(.mobile-v2__journey-copy, .mobile-v2__picker-copy) > span,
-.native-atlas .mobile-v2__timeline .globe-time-scrubber__date {
-  font-size: calc(9px * var(--native-text-scale, 1));
-}
-.native-atlas .mobile-v2__journey-copy strong { font-size: calc(16px * var(--native-text-scale, 1)); }
-.native-atlas .mobile-v2__picker-copy strong { font-size: calc(15px * var(--native-text-scale, 1)); }
-.native-atlas .mobile-v2__picker > header h2 { font-size: calc(29px * var(--native-text-scale, 1)); }
-.native-atlas .mobile-v2__sheet-heading h2 {
-  font-size: calc(clamp(24px, 7vw, 31px) * var(--native-text-scale, 1));
-}
-.native-atlas .mobile-v2__sheet-heading span { font-size: calc(10px * var(--native-text-scale, 1)); }
-.native-atlas .mobile-v2__stats dd { font-size: calc(20px * var(--native-text-scale, 1)); }
-.native-atlas :is(.mobile-v2__sheet-note, .native-atlas__route-points button) {
-  font-size: calc(11px * var(--native-text-scale, 1));
-}
-.native-atlas .mobile-v2__sheet-actions button {
-  font-size: calc(12px * var(--native-text-scale, 1));
-  min-height: 44px;
-}
-.native-atlas .native-atlas__empty p { font-size: calc(21px * var(--native-text-scale, 1)); }
-.native-atlas :is(.living-atlas-globe__controls button, .detailed-earth-map .maplibregl-ctrl-attrib) {
-  font-size: calc(11px * var(--native-text-scale, 1));
-  line-height: 1.35;
-}
-/* The native map viewport already clears the header and dock. */
-.native-atlas .living-atlas-globe.is-detail .living-atlas-globe__controls {
-  top: 8px;
-  left: calc(10px + env(safe-area-inset-left, 0px));
-  right: auto;
-  display: flex;
-}
-.native-atlas .living-atlas-globe__language {
-  grid-template-columns: repeat(2, minmax(44px, max-content));
-  height: auto;
-}
-.native-atlas .living-atlas-globe__language button { height: auto; }
-.native-atlas .detailed-earth-map :is(.maplibregl-ctrl-bottom-right, .maplibregl-ctrl-bottom-left) {
-  bottom: 0;
-}
-
-.native-atlas[data-native-large-text] .native-atlas__chrome {
-  height: auto;
-  grid-template-rows: auto 48px;
-}
-.native-atlas[data-native-large-text] .mobile-v2__journey-chip {
-  height: auto;
-  min-height: 56px;
-}
-@media (max-height: 480px) and (orientation: landscape) {
-  .native-atlas[data-native-large-text] .mobile-v2__journey-copy :is(small, span) { display: none; }
-}
-
-.native-atlas__sheet[data-scrollable] {
-  /* Let touch swipes scroll the content from its first presentation. */
-  max-height: calc(100svh - env(safe-area-inset-top, 0px) - 12px);
-  overflow-y: auto;
-  overflow-x: hidden;
-  touch-action: pan-y;
-}
-.native-atlas__sheet[data-scrollable] .mobile-v2__sheet-heading { touch-action: pan-y; }
-.native-atlas__sheet[data-scrollable] .native-atlas__sheet-cover { display: none; }
-.native-atlas__sheet-close {
-  position: sticky;
-  z-index: 1;
-  top: 0;
-  display: grid;
-  place-items: center;
-  margin-left: auto;
-  width: 44px;
-  height: 44px;
-  border: 1px solid var(--control-line);
-  border-radius: var(--mobile-control-radius, 999px);
-  background: var(--archive-bg);
-  color: var(--archive-ink);
-}
-.native-atlas__sheet[data-scrollable] .native-atlas__route-points {
-  flex-wrap: wrap;
-  overflow: visible;
-}
-.native-atlas__sheet[data-scrollable] .native-atlas__route-points button {
-  max-width: 100%;
-  text-align: left;
-}
-.native-atlas__sheet[data-scrollable] .mobile-v2__sheet-actions button { padding-block: 8px; }
-.native-atlas :is(.mobile-v2__sheet-heading, .mobile-v2__sheet-note, .mobile-v2__stats, .native-atlas__route-points button) {
-  overflow-wrap: anywhere;
-}
-.native-atlas .mobile-v2__picker > header button { flex: none; }
-.native-atlas .mobile-v2__picker-copy > * {
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
-.native-atlas[data-native-bold-text] :is(
-  .mobile-v2__journey-copy > *, .mobile-v2__picker-copy > *, .mobile-v2__picker h2,
-  .mobile-v2__sheet-heading > *, .mobile-v2__stats dt, .mobile-v2__stats dd,
-  .mobile-v2__sheet-note, .native-atlas__route-points button, .mobile-v2__sheet-actions button,
-  .native-atlas__empty p, .globe-time-scrubber__date, .living-atlas-globe__controls button
-) { font-weight: 700; }
-
-.native-atlas[data-native-increased-contrast] {
-  --control-line: #9fb9b1;
-  --control-ink: #f1f8f4;
-  --control-muted: #d4e7df;
-  --control-focus: #9fffe7;
-}
-.native-atlas[data-native-increased-contrast] :is(.native-atlas__header, .native-atlas__sheet),
-.native-atlas[data-native-increased-contrast] .native-atlas__chrome::before {
-  background: var(--archive-bg);
-  border-color: var(--control-line);
-  backdrop-filter: none;
-}
-.native-atlas[data-native-increased-contrast] :is(
-  .mobile-v2__journey-copy > *, .mobile-v2__picker-copy > *, .mobile-v2__sheet-heading > *,
-  .mobile-v2__stats dt, .mobile-v2__stats dd, .mobile-v2__sheet-note,
-  .native-atlas__route-points button, .globe-time-scrubber__date
-) { color: var(--control-ink); }
-.native-atlas[data-native-increased-contrast] :is(
-  .native-atlas__route-points button, .mobile-v2__sheet-actions button,
-  .mobile-v2__picker li button, .mobile-v2__header nav button
-) { border-color: var(--control-line); }
-.native-atlas[data-native-increased-contrast] :is(
-  .native-atlas__route-points button[aria-checked="true"], .mobile-v2__picker li button.is-active,
-  .mobile-v2__sheet-actions .is-primary
-) { background: #1c3b37; }
-.native-atlas[data-native-increased-contrast] .globe-time-scrubber__track::before {
-  background: var(--control-line);
-}
-
-/* The persistent particle host is a sibling of the Atlas chrome. The
-   renderer uses this same size, weight and halo for collision placement. */
-.particle-earth-scene[data-legible-labels] :is(.particle-earth-route__label text, .particle-earth-city) {
-  fill: #e9f4ee;
-  stroke: #020706;
-  stroke-width: 4px;
+/* Low vision (S3), iPhone scene only: fewer, larger, opaque globe labels.
+   The persistent Earth host is a sibling of <main>, so these rules are scoped
+   to the document; this stylesheet ships only in the iPhone bundle. Only the
+   focused Journey's Route Point labels are drawn (main.tsx filters the
+   others); city names follow the native 城市名称 setting. The detail map's
+   MapLibre labels are sized in detailMap.ts. Increase Contrast (WebKit
+   mirrors it as prefers-contrast: more) strengthens the halo further. */
+html:not([data-place-names="on"]) .particle-earth-city-layer { display: none; }
+/* Native Settings owns the detail map's language; pinch and rotate replace the
+   zoom/compass buttons. Attribution stays (map data licence). */
+html .living-atlas-globe__language,
+html .detailed-earth-map .maplibregl-ctrl-group { display: none !important; }
+html .particle-earth-route__label text {
+  fill: #f2f4f8;
+  fill-opacity: 1;
+  stroke: #07090f;
+  stroke-opacity: 1;
+  stroke-width: 5px;
   stroke-linejoin: round;
-  paint-order: stroke fill;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+html .particle-earth-route__label[data-attention-role="selected"] text,
+html .particle-earth-route__label[data-attention-role="narrative-current"] text { fill: #e8b65c; }
+/* System text size and Bold Text reach the globe as label legibility: the renderer
+   places labels with this same size and weight, so draw them with it too. */
+html .particle-earth-scene[data-legible-labels] :is(.particle-earth-route__label text, .particle-earth-city) {
   font: var(--earth-label-weight) var(--earth-label-size)/1 system-ui, sans-serif;
-  letter-spacing: 0;
 }
-.particle-earth-scene[data-legible-labels] .particle-earth-city { fill: #bed4cb; }
-.particle-earth-scene[data-label-contrast] :is(.particle-earth-route__label text, .particle-earth-city) {
-  fill: #f1f8f4;
-  stroke-width: 6px;
-}
-.particle-earth-scene[data-legible-labels] .particle-earth-route__label[data-attention-role="selected"] text {
-  fill: #ffe7a4;
-}
-.particle-earth-scene[data-label-contrast] .particle-earth-route__leader {
-  stroke-width: 1.2px;
-  opacity: .9;
+html .particle-earth-scene[data-label-contrast] .particle-earth-route__label text { stroke-width: 7px; }
+html .particle-earth-scene[data-label-contrast] .particle-earth-route__leader { opacity: .9; stroke-width: 1.2px; }
+@media (prefers-contrast: more) {
+  html .particle-earth-route__label text { stroke-width: 7px; font-weight: 700; }
+  html .particle-earth-route__leader { opacity: 1; stroke-width: 1.2; stroke-dasharray: none; }
 }

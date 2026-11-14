@@ -1,0 +1,322 @@
+import SwiftUI
+
+/// Month buckets from the earliest Journey start to the latest Journey end.
+/// Pure and deterministic so the ribbon's date math is unit-tested.
+struct TimeRibbonModel: Equatable {
+    struct Month: Hashable {
+        let year: Int
+        let month: Int
+        var id: String { String(format: "%04d-%02d", year, month) }
+        var firstDay: String { id + "-01" }
+        var lastDay: String {
+            let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+            let days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+            return id + String(format: "-%02d", days)
+        }
+        var ordinal: Int { year * 12 + month - 1 }
+        init(year: Int, month: Int) { self.year = year; self.month = month }
+        init(ordinal: Int) { self.init(year: ordinal / 12, month: ordinal % 12 + 1) }
+        /// Reads the `YYYY-MM` prefix of an ISO date or timestamp.
+        init?(iso: String?) {
+            guard let iso, iso.count >= 7 else { return nil }
+            let parts = iso.prefix(7).split(separator: "-")
+            guard parts.count == 2, let year = Int(parts[0]), let month = Int(parts[1]),
+                  (1...12).contains(month), year > 0 else { return nil }
+            self.init(year: year, month: month)
+        }
+    }
+
+    struct Span: Equatable {
+        let journeyId: String
+        let start: Int
+        let end: Int
+    }
+
+    let months: [Month]
+    /// Dated Journeys in server order, as month index ranges into `months`.
+    let spans: [Span]
+
+    init(journeys: [AtlasJourney]) {
+        let dated = journeys.compactMap { journey -> (String, Int, Int)? in
+            guard let start = Month(iso: journey.startedOn) else { return nil }
+            let end = Month(iso: journey.endedOn) ?? start
+            return (journey.id, start.ordinal, max(start.ordinal, end.ordinal))
+        }
+        guard let first = dated.map(\.1).min(), let last = dated.map(\.2).max() else {
+            months = []; spans = []; return
+        }
+        months = (first...last).map(Month.init(ordinal:))
+        spans = dated.map { Span(journeyId: $0.0, start: $0.1 - first, end: $0.2 - first) }
+    }
+
+    var isEmpty: Bool { months.isEmpty }
+    var lastIndex: Int { max(0, months.count - 1) }
+
+    func index(at fraction: Double) -> Int {
+        guard !months.isEmpty else { return 0 }
+        let clamped = min(1, max(0, fraction.isFinite ? fraction : 1))
+        return Int((clamped * Double(lastIndex)).rounded())
+    }
+
+    func fraction(of index: Int) -> Double {
+        lastIndex == 0 ? 1 : Double(min(max(0, index), lastIndex)) / Double(lastIndex)
+    }
+
+    /// The Journey under the cursor: one that spans the month, else the latest
+    /// one already started (so the time window never hides it), else the first.
+    func journey(at index: Int) -> String? {
+        if let covering = spans.last(where: { $0.start <= index && index <= $0.end }) { return covering.journeyId }
+        let started = spans.filter { $0.start <= index }
+        if let latest = started.max(by: { $0.start < $1.start }) {
+            return started.last(where: { $0.start == latest.start })?.journeyId
+        }
+        return spans.min(by: { $0.start < $1.start })?.journeyId
+    }
+
+    func index(of journeyId: String?) -> Int? {
+        spans.first(where: { $0.journeyId == journeyId })?.end
+    }
+
+    /// Everything up to the end of the cursor's month; the final month clears it.
+    func window(through index: Int) -> SceneTimeWindow? {
+        guard let first = months.first, months.indices.contains(index), index < lastIndex else { return nil }
+        return SceneTimeWindow(start: first.firstDay, end: months[index].lastDay)
+    }
+}
+
+/// Route Point ticks inside one Journey, as fractions 0...1 of its time span.
+/// `occurredAt` places a point; without one it is spaced evenly by order.
+enum RoutePointTicks {
+    struct Tick: Equatable { let id: String; let position: Double }
+
+    static func ticks(for journey: AtlasJourney) -> [Tick] {
+        let points = journey.routePoints
+        guard !points.isEmpty else { return [] }
+        let even = { (index: Int) in points.count == 1 ? 0.5 : Double(index) / Double(points.count - 1) }
+        let times = points.map { date($0.occurredAt) }
+        let explicit = times.compactMap { $0 }
+        let starts = [date(journey.startedOn)].compactMap { $0 } + explicit
+        let ends = [date(journey.endedOn ?? journey.startedOn).map { $0.addingTimeInterval(86_399) }].compactMap { $0 } + explicit
+        guard let low = starts.min(), let high = ends.max(), high > low else {
+            return points.enumerated().map { Tick(id: $0.element.id, position: even($0.offset)) }
+        }
+        let span = high.timeIntervalSince(low)
+        return points.enumerated().map { index, point in
+            guard let time = times[index] else { return Tick(id: point.id, position: even(index)) }
+            return Tick(id: point.id, position: min(1, max(0, time.timeIntervalSince(low) / span)))
+        }
+    }
+
+    /// The Route Point closest to a position on the point track.
+    static func nearest(_ position: Double, in ticks: [Tick]) -> String? {
+        ticks.min(by: { abs($0.position - position) < abs($1.position - position) })?.id
+    }
+
+    /// `YYYY-MM-DD` (UTC midnight) or a full ISO 8601 timestamp.
+    static func date(_ text: String?) -> Date? {
+        guard let text, !text.isEmpty else { return nil }
+        let full = ISO8601DateFormatter()
+        if let value = full.date(from: text) { return value }
+        full.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let value = full.date(from: text) { return value }
+        let day = ISO8601DateFormatter()
+        day.formatOptions = [.withFullDate]
+        return day.date(from: String(text.prefix(10)))
+    }
+}
+
+/// Draggable year/month ribbon. Dragging flies the camera across Journeys by
+/// date (preview only); releasing commits the Journey under the cursor.
+struct TimeRibbon: View {
+    @ObservedObject var router: AppRouter
+    let model: TimeRibbonModel
+    @State private var dragIndex: Int?
+    /// Where the cursor was released; kept until another surface changes the Journey.
+    @State private var restingIndex: Int?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private var selectedIndex: Int {
+        dragIndex ?? restingIndex ?? model.index(of: router.focusedJourneyId) ?? model.lastIndex
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let journey = focusedJourney, !journey.routePoints.isEmpty {
+                RoutePointTrack(router: router, journey: journey)
+            }
+            journeyTrack
+        }
+    }
+
+    private var focusedJourney: AtlasJourney? {
+        router.journeys.first(where: { $0.id == router.focusedJourneyId })
+    }
+
+    private var journeyTrack: some View {
+        GeometryReader { proxy in
+            let width = max(1, proxy.size.width - NightFlight.edge * 2)
+            ZStack(alignment: .leading) {
+                track(width: width)
+                cursor
+                    .offset(x: NightFlight.edge + width * model.fraction(of: selectedIndex) - 1)
+                    .animation(dragIndex == nil ? NightFlight.motion(NightFlight.snappy, reduceMotion: reduceMotion) : nil,
+                               value: selectedIndex)
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                scrub(to: model.index(at: (value.location.x - NightFlight.edge) / width))
+            }.onEnded { _ in commit() })
+        }
+        .frame(height: NightFlight.hitTarget + NightFlight.grid(3))
+        .accessibilityElement()
+        .accessibilityLabel("时间轴")
+        .accessibilityValue(label(for: selectedIndex))
+        .accessibilityAdjustableAction { direction in
+            let step = direction == .increment ? 1 : -1
+            scrub(to: min(model.lastIndex, max(0, selectedIndex + step)))
+            commit()
+        }
+        .accessibilityIdentifier("atlas.ribbon")
+        .onChange(of: router.selection?.journeyId) { _, journey in
+            guard dragIndex == nil, let resting = restingIndex, model.journey(at: resting) != journey else { return }
+            restingIndex = nil
+            router.presentation.window = nil
+        }
+    }
+
+    private func track(width: CGFloat) -> some View {
+        Canvas { context, size in
+            let mid = size.height / 2
+            let step = width / CGFloat(max(1, model.lastIndex))
+            for (index, month) in model.months.enumerated() {
+                let x = NightFlight.edge + CGFloat(index) * step
+                let tall = month.month == 1 || index == 0
+                var tick = Path()
+                tick.move(to: CGPoint(x: x, y: mid - (tall ? 7 : 3)))
+                tick.addLine(to: CGPoint(x: x, y: mid + (tall ? 7 : 3)))
+                context.stroke(tick, with: .color(NightFlight.muted.opacity(contrast == .increased ? 0.9 : 0.45)),
+                               lineWidth: tall ? 1.5 : 1)
+            }
+            for span in model.spans {
+                var bar = Path()
+                let start = NightFlight.edge + CGFloat(span.start) * step
+                let end = NightFlight.edge + CGFloat(span.end) * step
+                bar.move(to: CGPoint(x: start, y: mid)); bar.addLine(to: CGPoint(x: max(start + 2, end), y: mid))
+                let current = span.journeyId == router.focusedJourneyId
+                context.stroke(bar, with: .color(current ? NightFlight.accent : NightFlight.ink.opacity(0.6)),
+                               style: StrokeStyle(lineWidth: 3, lineCap: .round))
+            }
+        }
+        .overlay(alignment: .bottomLeading) { yearLabels(width: width) }
+        .accessibilityHidden(true)
+    }
+
+    private func yearLabels(width: CGFloat) -> some View {
+        let step = width / CGFloat(max(1, model.lastIndex))
+        let years = model.months.enumerated().filter { $0.offset == 0 || $0.element.month == 1 }
+        // Thin labels so neighbouring years never collide.
+        let stride = max(1, Int((NightFlight.hitTarget / max(step * 12, 1)).rounded(.up)))
+        return ZStack(alignment: .leading) {
+            ForEach(Array(years.enumerated()).filter { $0.offset % stride == 0 }.map(\.element), id: \.offset) { item in
+                Text(String(item.element.year))
+                    .font(.caption2.monospacedDigit())
+                    .dynamicTypeSize(...DynamicTypeSize.xxLarge)
+                    .nightFlightMuted()
+                    .fixedSize()
+                    .offset(x: NightFlight.edge + CGFloat(item.offset) * step)
+            }
+        }
+    }
+
+    private var cursor: some View {
+        Capsule().fill(NightFlight.accent).frame(width: 2, height: NightFlight.grid(7))
+            .shadow(color: NightFlight.accent.opacity(0.6), radius: 4)
+    }
+
+    private func label(for index: Int) -> String {
+        guard model.months.indices.contains(index) else { return "" }
+        let month = model.months[index]
+        return "\(month.year)年\(month.month)月"
+    }
+
+    private func scrub(to index: Int) {
+        guard index != dragIndex else { return }
+        dragIndex = index
+        router.presentation.window = model.window(through: index)
+        router.previewFocus(journeyId: model.journey(at: index))
+    }
+
+    private func commit() {
+        guard let index = dragIndex else { return }
+        dragIndex = nil
+        restingIndex = index == model.lastIndex ? nil : index
+        if let journey = model.journey(at: index) { router.select(journeyId: journey) }
+        router.previewFocus(journeyId: nil)
+    }
+}
+
+/// Finer ticks for the focused Journey's Route Points. Dragging previews each
+/// point on the globe; release commits it through the normal selection flow.
+struct RoutePointTrack: View {
+    @ObservedObject var router: AppRouter
+    let journey: AtlasJourney
+    @State private var dragPoint: String?
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private var ticks: [RoutePointTicks.Tick] { RoutePointTicks.ticks(for: journey) }
+    private var currentPoint: String? {
+        dragPoint ?? (router.preview?.journeyId == journey.id ? router.preview?.routePointId : nil)
+            ?? (router.selection?.journeyId == journey.id ? router.selection?.routePointId : nil)
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let inset = NightFlight.edge
+            let width = max(1, proxy.size.width - inset * 2)
+            Canvas { context, size in
+                let mid = size.height / 2
+                var line = Path()
+                line.move(to: CGPoint(x: inset, y: mid)); line.addLine(to: CGPoint(x: inset + width, y: mid))
+                context.stroke(line, with: .color(Color(cssHex: journey.lightColor).opacity(0.5)), lineWidth: 1)
+                for tick in ticks {
+                    let x = inset + width * tick.position
+                    let current = tick.id == currentPoint
+                    let dot = Path(ellipseIn: CGRect(x: x - (current ? 5 : 3), y: mid - (current ? 5 : 3),
+                                                     width: current ? 10 : 6, height: current ? 10 : 6))
+                    context.fill(dot, with: .color(current ? NightFlight.accent
+                        : NightFlight.ink.opacity(contrast == .increased ? 1 : 0.7)))
+                }
+            }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                preview(RoutePointTicks.nearest((value.location.x - inset) / width, in: ticks))
+            }.onEnded { _ in commit() })
+        }
+        .frame(height: NightFlight.hitTarget)
+        .accessibilityElement()
+        .accessibilityLabel("路线点")
+        .accessibilityValue(journey.routePoints.first(where: { $0.id == currentPoint })?.label ?? "")
+        .accessibilityAdjustableAction { direction in
+            let ids = ticks.sorted(by: { $0.position < $1.position }).map(\.id)
+            let index = currentPoint.flatMap { ids.firstIndex(of: $0) } ?? (direction == .increment ? -1 : ids.count)
+            let next = min(ids.count - 1, max(0, index + (direction == .increment ? 1 : -1)))
+            guard ids.indices.contains(next) else { return }
+            preview(ids[next]); commit()
+        }
+        .accessibilityIdentifier("atlas.ribbon.points")
+    }
+
+    private func preview(_ point: String?) {
+        guard let point, point != dragPoint else { return }
+        dragPoint = point
+        router.previewFocus(journeyId: journey.id, routePointId: point)
+    }
+
+    private func commit() {
+        guard let point = dragPoint else { return }
+        dragPoint = nil
+        router.select(journeyId: journey.id, routePointId: point)
+    }
+}

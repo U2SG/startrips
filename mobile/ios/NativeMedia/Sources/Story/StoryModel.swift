@@ -1,4 +1,6 @@
+import AVFoundation
 import Combine
+import QuartzCore
 import Foundation
 import ImageIO
 import UIKit
@@ -8,7 +10,12 @@ import UIKit
     @Published public private(set) var cursor: StoryCursor
     @Published public private(set) var images: [String: UIImage] = [:]
     @Published public private(set) var failure: String?
-    @Published public private(set) var playback: PlaybackClock?
+    /// The 50ms clock tick only moves `elapsedMS`; publishing that would re-render and re-lay out
+    /// the whole Story 20 times a second (a slow device never idles). Views are told about beat,
+    /// pause, tempo and start/stop changes; the stream's display link reads the live clock itself.
+    public private(set) var playback: PlaybackClock? {
+        willSet { if !PlaybackClock.sameForViews(playback, newValue) { objectWillChange.send() } }
+    }
     @Published public var expanded = true
     @Published public private(set) var paused = false
     @Published public private(set) var tempo: NarrativeTempo = .standard
@@ -67,25 +74,95 @@ import UIKit
         images.removeAll(); clearLibrary(); journalTask?.cancel(); journalTask = nil
     }
     /// Loads one picture for a book page or stream row. Bounded; the caller cancels when its row leaves.
-    public func requestLibraryImage(_ asset: MediaAsset) {
-        guard !closed, !asset.isVideo, library[asset.id] == nil, images[asset.id] == nil, libraryTasks[asset.id] == nil,
-              journey.media.contains(where: { $0.id == asset.id }) else { return }
-        let ticket = libraryEpoch
-        libraryTasks[asset.id] = Task { [weak self] in
-            guard let self else { return }
-            defer { if ticket == self.libraryEpoch && !Task.isCancelled { self.libraryTasks[asset.id] = nil } }
-            guard let image = try? await self.loadImage(asset, maxPixel: 1600),
-                  !Task.isCancelled, ticket == self.libraryEpoch, !self.closed,
-                  self.journey.media.contains(where: { $0.id == asset.id }) else { return }
-            self.library[asset.id] = image
-            self.libraryOrder.removeAll { $0 == asset.id }; self.libraryOrder.append(asset.id)
-            while self.libraryOrder.count > 12 { self.library[self.libraryOrder.removeFirst()] = nil }
+    /// Pixel size of a picture as soon as its display read answers, before its bytes arrive.
+    @Published public private(set) var displaySizes: [String: CGSize] = [:]
+    static let libraryLimit = 16
+    /// At most this many picture reads at once; the rest wait their turn (server rate limits).
+    static let libraryConcurrency = 4
+    /// Waiting reads, nearest-needed first (`rank`: 0 = the next beat's picture; rows that
+    /// merely scrolled into view during playback come after everything playback needs).
+    private var libraryQueue: [(asset: MediaAsset, rank: Int)] = []
+    static let visibleRank = 1_000
+    /// Set by 旅程之流: playback reads its pictures through the stream's library (preview,
+    /// prefetched) and never waits more than `mediaWaitLimitMS` for one slow picture.
+    public var streamPlayback = false {
+        didSet {
+            // Leaving the stream mid-playback: its picture request may have been for the stream's
+            // library only (or cancelled with its rows), so load the current picture for the new style.
+            guard oldValue, !streamPlayback, playback != nil, let asset = activeAsset, !asset.isVideo,
+                  image(for: asset.id) == nil else { return }
+            loadCurrent()
         }
     }
-    public func cancelLibraryImage(_ assetID: String) { libraryTasks.removeValue(forKey: assetID)?.cancel() }
+    static let mediaWaitLimitMS: Double = 2_500
+    static let videoWaitLimitMS: Double = 5_000
+    private var mediaWaitMS: Double = 0
+    /// Watchdog: playback that makes no progress at all for this long while not paused skips the beat.
+    static let stuckLimitMS: Double = 8_000
+    private var stuckMS: Double = 0
+    private var lastProgress: (index: Int, elapsed: Double, video: Double?)?
+
+    /// Prefetches and pre-decodes upcoming pictures, nearest first, ahead of rows that are
+    /// merely visible. Waiting reads no longer needed by playback lose their place.
+    public func prefetchLibrary(_ assets: [MediaAsset]) {
+        let wanted = Set(assets.map(\.id))
+        libraryQueue = libraryQueue.map { wanted.contains($0.asset.id) ? $0 : ($0.asset, max($0.rank, Self.visibleRank)) }
+        for (rank, asset) in assets.enumerated() { requestLibraryImage(asset, rank: rank) }
+    }
+
+    public func requestLibraryImage(_ asset: MediaAsset) { requestLibraryImage(asset, rank: Self.visibleRank) }
+
+    func requestLibraryImage(_ asset: MediaAsset, rank: Int) {
+        // Videos get a poster (preview image or first frame), so a stream row is never a dark block.
+        guard !closed, asset.isVisual, library[asset.id] == nil, images[asset.id] == nil, libraryTasks[asset.id] == nil,
+              journey.media.contains(where: { $0.id == asset.id }) else { return }
+        if let queued = libraryQueue.firstIndex(where: { $0.asset.id == asset.id }) {
+            libraryQueue[queued].rank = min(libraryQueue[queued].rank, rank)
+            libraryQueue.sort { $0.rank < $1.rank }
+            return
+        }
+        guard libraryTasks.count < Self.libraryConcurrency else {
+            libraryQueue.append((asset, rank)); libraryQueue.sort { $0.rank < $1.rank }; return
+        }
+        let ticket = libraryEpoch
+        #if DEBUG
+        let requested = Date()
+        #endif
+        libraryTasks[asset.id] = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if ticket == self.libraryEpoch && !Task.isCancelled { self.libraryTasks[asset.id] = nil }
+                if ticket == self.libraryEpoch { self.pumpLibraryQueue() }
+            }
+            guard let image = try? await (asset.isVideo ? self.loadPoster(asset) : self.loadImage(asset, maxPixel: 1600, display: true)),
+                  !Task.isCancelled, ticket == self.libraryEpoch, !self.closed,
+                  self.journey.media.contains(where: { $0.id == asset.id }) else { return }
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-stream-timing") {
+                let line = String(format: "STREAMLOAD %@ rank=%d total=%.0fms at=%.3f playbackIndex=%d\n", asset.id, rank,
+                                  Date().timeIntervalSince(requested) * 1000, Date().timeIntervalSince1970, self.playback?.index ?? -1)
+                StreamTimingLog.write(line.trimmingCharacters(in: .newlines))
+            }
+            #endif
+            self.library[asset.id] = image
+            self.libraryOrder.removeAll { $0 == asset.id }; self.libraryOrder.append(asset.id)
+            while self.libraryOrder.count > Self.libraryLimit { self.library[self.libraryOrder.removeFirst()] = nil }
+        }
+    }
+    public func cancelLibraryImage(_ assetID: String) {
+        libraryQueue.removeAll { $0.asset.id == assetID }
+        libraryTasks.removeValue(forKey: assetID)?.cancel()
+        pumpLibraryQueue()
+    }
+    private func pumpLibraryQueue() {
+        while libraryTasks.count < Self.libraryConcurrency, !libraryQueue.isEmpty {
+            let next = libraryQueue.removeFirst()
+            requestLibraryImage(next.asset, rank: next.rank)
+        }
+    }
     public func image(for assetID: String) -> UIImage? { images[assetID] ?? library[assetID] }
     private func clearLibrary() {
-        libraryEpoch += 1; libraryTasks.values.forEach { $0.cancel() }; libraryTasks.removeAll()
+        libraryEpoch += 1; libraryTasks.values.forEach { $0.cancel() }; libraryTasks.removeAll(); libraryQueue.removeAll()
         library.removeAll(); libraryOrder.removeAll()
     }
     /// Owner-only, read-only, and silent on failure: the stream simply omits the journal.
@@ -146,12 +223,33 @@ import UIKit
         }
     }
     public func changeTempo(_ value: NarrativeTempo) {
+        #if DEBUG
+        if let clock = playback, let beat = clock.current {
+            Self.timingLog(String(format: "TEMPO %@->%@ beat=%d id=%@ fraction=%.3f", tempo.rawValue, value.rawValue, clock.index,
+                                  beat.id, beat.durationMS > 0 ? clock.elapsedMS / beat.durationMS : 0))
+        }
+        #endif
         tempo = value
         playback?.changeTempo(to: JourneyPlaybackPlan.build(journey, tempo: value))
     }
+    /// An explicit tap on a clip's play button. During playback it seeks to that clip's beat and
+    /// plays it, even when paused; otherwise it selects the entry as before.
+    public func play(entry index: Int) {
+        guard let clock = playback, cursor.entries.indices.contains(index), let asset = cursor.entries[index].asset,
+              let beat = clock.beatIndex(for: asset.id) else { select(index); return }
+        if beat != clock.index { playback?.seek(beat) }
+        if paused { setPaused(false) }
+        activateBeat()
+    }
     public func skip(_ direction: Int) {
         guard playback != nil else { select(cursor.index + direction); return }
+        #if DEBUG
+        let from = playback?.index ?? -1
+        #endif
         playback?.nextMeaningful(direction); activateBeat()
+        #if DEBUG
+        Self.timingLog("SEEKSOURCE button direction=\(direction) beat=\(from)->\(playback?.index ?? -1)")
+        #endif
     }
     private func startClock() {
         clockTask?.cancel()
@@ -164,10 +262,54 @@ import UIKit
                 let delta = (now - last) * 1000; last = now
                 let previous = self.playback?.index
                 let asset = self.activeAsset
-                let ready = asset == nil || (asset?.isVideo == true ? self.foreground.ready : self.images[asset!.id] != nil)
+                var ready = asset == nil || (asset?.isVideo == true ? self.foreground.ready : self.image(for: asset!.id) != nil)
+                // The stream never stalls on one slow picture: after a short wait it flows on
+                // and the picture fades in when it arrives.
+                if !ready && self.streamPlayback && asset?.isVideo == false && !self.paused {
+                    self.mediaWaitMS += delta
+                    if self.mediaWaitMS >= Self.mediaWaitLimitMS { ready = true }
+                }
+                // A video that cannot start (or fails) never holds the stream: after a bounded
+                // wait the flow moves on, exactly as if the clip had ended.
+                if self.streamPlayback, asset?.isVideo == true, !self.paused,
+                   !self.foreground.ready || self.foreground.failure != nil {
+                    self.mediaWaitMS += delta
+                    if self.foreground.failure != nil || self.mediaWaitMS >= Self.videoWaitLimitMS {
+                        self.mediaWaitMS = 0
+                        self.videoEnded()
+                        continue
+                    }
+                }
                 self.playback?.tick(milliseconds: delta, mediaReady: ready, videoOwnsCompletion: asset?.isVideo == true)
                 if self.playback?.completed == true { self.finish(.completed); return }
-                if previous != self.playback?.index { self.activateBeat() }
+                // Watchdog: no clock, video or beat progress while playing → log and move on.
+                if !self.paused, let clock = self.playback {
+                    let progress = (clock.index, clock.elapsedMS, self.foreground.progress)
+                    if let last = self.lastProgress, last.index == progress.0, last.elapsed == progress.1, last.video == progress.2 {
+                        self.stuckMS += delta
+                    } else { self.stuckMS = 0 }
+                    self.lastProgress = progress
+                    if self.stuckMS >= Self.stuckLimitMS {
+                        #if DEBUG
+                        Self.timingLog(String(format: "WATCHDOG beat=%d asset=%@ stuck=%.0fms", clock.index,
+                                              clock.current?.asset?.id ?? "-", self.stuckMS))
+                        #endif
+                        self.stuckMS = 0
+                        self.playback?.advance()
+                        if self.playback?.completed == true { self.finish(.completed); return }
+                        self.activateBeat(); continue
+                    }
+                }
+                if previous != self.playback?.index {
+                    #if DEBUG
+                    if ProcessInfo.processInfo.arguments.contains("-stream-timing"), let beat = self.playback?.current {
+                        let waited = String(format: "BEAT %d asset=%@ ready=%@ at=%.3f\n", self.playback?.index ?? -1, beat.asset?.id ?? "-",
+                                            beat.asset.map { self.image(for: $0.id) != nil ? "yes" : "NO" } ?? "n/a", Date().timeIntervalSince1970)
+                        StreamTimingLog.write(waited.trimmingCharacters(in: .newlines))
+                    }
+                    #endif
+                    self.activateBeat()
+                }
             }
         }
     }
@@ -177,6 +319,7 @@ import UIKit
         if playback?.completed == true { finish(.completed) } else { activateBeat() }
     }
     private func activateBeat() {
+        mediaWaitMS = 0
         let live = currentIntent()
         guard live.requestId == intent.requestId, live.revision == intent.revision, let beat = playback?.current else { return }
         if beat.asset != nil || beat.routePointId != nil {
@@ -232,6 +375,12 @@ import UIKit
                         guard ticket == self.epoch, !Task.isCancelled else { return }
                         self.foreground.activate(url: url, trim: self.playback?.current?.trim)
                         self.foreground.setPaused(self.paused)
+                    } else if self.streamPlayback && self.playback != nil {
+                        // The stream shows library pictures: ask for this one first, never the original.
+                        self.requestLibraryImage(asset, rank: -1)
+                    } else if self.images[asset.id] == nil, let decoded = self.library[asset.id], self.playback != nil {
+                        // A prefetched stream picture is already decoded: never download it twice.
+                        self.images[asset.id] = decoded
                     } else if self.images[asset.id] == nil {
                         let image = try await self.loadImage(asset)
                         guard ticket == self.epoch, !Task.isCancelled else { return }
@@ -254,16 +403,54 @@ import UIKit
             }
         }
     }
-    private func loadImage(_ asset: MediaAsset, maxPixel: Int = 2560) async throws -> UIImage {
-        let url = try await session.mediaURL(asset.id)
-        let (file, response) = try await session.imageTransport.download(from: url)
+    private func loadImage(_ asset: MediaAsset, maxPixel: Int = 2560, display: Bool = false) async throws -> UIImage {
+        let read = display ? try await session.mediaDisplay(asset.id) : MediaDisplayRead(url: try await session.mediaURL(asset.id))
+        if let width = read.width, let height = read.height, width > 0, height > 0 {
+            displaySizes[asset.id] = CGSize(width: width, height: height)
+        }
+        let (file, response) = try await session.imageTransport.download(from: read.url)
         defer { try? FileManager.default.removeItem(at: file) }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw MediaFailure.unavailable }
         try Task.checkCancellation(); try await session.revalidate()
-        guard let source = CGImageSourceCreateWithURL(file as CFURL, nil),
+        // Decode off the main actor: a camera original decoded here stalls every frame of the stream.
+        let image = try await Task.detached(priority: .userInitiated) { try Self.decode(file, maxPixel: maxPixel) }.value
+        if displaySizes[asset.id] == nil { displaySizes[asset.id] = image.size }
+        return image
+    }
+
+    /// A video's still: the server preview when it has one, else the clip's first frame.
+    private func loadPoster(_ asset: MediaAsset) async throws -> UIImage {
+        let read = try await session.mediaDisplay(asset.id)
+        if read.width != nil, let image = try? await loadImage(asset, maxPixel: 1600, display: true) { return image }
+        let url = read.url
+        let image = try await Task.detached(priority: .userInitiated) { () -> UIImage in
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 1600, height: 1600)
+            let (cgImage, _) = try await generator.image(at: .zero)
+            return UIImage(cgImage: cgImage)
+        }.value
+        try Task.checkCancellation(); try await session.revalidate()
+        if displaySizes[asset.id] == nil { displaySizes[asset.id] = image.size }
+        return image
+    }
+
+    #if DEBUG
+    static func timingLog(_ line: String) {
+        StreamTimingLog.write(String(format: "%@ t=%.3f", line, CACurrentMediaTime()))
+    }
+    #endif
+
+    /// Progress of the current beat's video (0...1), so the stream flows while it plays.
+    public var videoProgress: Double? { foreground.progress }
+
+    /// Downsampled and fully decoded (`ShouldCacheImmediately`), so drawing it costs nothing later.
+    nonisolated static func decode(_ file: URL, maxPixel: Int) throws -> UIImage {
+        guard let source = CGImageSourceCreateWithURL(file as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
                 kCGImageSourceThumbnailMaxPixelSize: maxPixel
               ] as CFDictionary) else { throw MediaFailure.unavailable }
         return UIImage(cgImage: image)

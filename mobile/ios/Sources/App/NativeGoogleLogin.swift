@@ -1,7 +1,7 @@
 import AuthenticationServices
 import CryptoKit
 import Security
-import WebKit
+import UIKit
 
 enum GoogleLoginError: Error, Equatable { case invalid, unavailable, cancelled }
 
@@ -34,16 +34,6 @@ struct GoogleLoginAttempt {
               let host = origin.host, url.host?.lowercased() == host.lowercased(),
               url.user == nil, url.password == nil else { return false }
         return (url.port ?? 443) == (origin.port ?? 443)
-    }
-
-    static func intent(_ url: URL) -> String? {
-        guard url.scheme == "startrips-google", url.host == "login", url.port == nil,
-              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { return nil }
-        switch url.path {
-        case "/sign-in": return "sign-in"
-        case "/sign-up": return "sign-up"
-        default: return nil
-        }
     }
 
     func start(_ intent: String) throws -> URLRequest {
@@ -80,11 +70,7 @@ struct GoogleLoginAttempt {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var components = URLComponents(url: origin, resolvingAgainstBaseURL: false)
-        components?.path = ""
-        components?.host = origin.host?.lowercased()
-        if components?.port == 443 { components?.port = nil }
-        request.setValue(components?.string, forHTTPHeaderField: "Origin")
+        request.setValue(OwnerSignIn.originHeader(origin), forHTTPHeaderField: "Origin")
         request.httpBody = try JSONEncoder().encode(fields)
         return request
     }
@@ -116,15 +102,16 @@ final class NativeGoogleLogin: NSObject, ASWebAuthenticationPresentationContextP
     private let access: Access
     private let anchor: ASPresentationAnchor
     private let origin: URL
-    private weak var view: WKWebView?
+    private let setBusy: (Bool) -> Void
     private var pending: GoogleLoginAttempt?
     private var browser: ASWebAuthenticationSession?
     private var task: Task<Void, Never>?
     private let transport: URLSession
 
-    init(origin: URL, view: WKWebView, anchor: ASPresentationAnchor, access: Access) {
+    /// Started from the native sign-in button; `setBusy` locks that form while Google runs.
+    init(origin: URL, anchor: ASPresentationAnchor, access: Access, setBusy: @escaping (Bool) -> Void) {
         self.origin = origin
-        self.view = view
+        self.setBusy = setBusy
         self.anchor = anchor
         self.access = access
         let config = URLSessionConfiguration.ephemeral
@@ -136,7 +123,7 @@ final class NativeGoogleLogin: NSObject, ASWebAuthenticationPresentationContextP
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor { anchor }
 
-    func begin(_ intent: String) {
+    func begin(_ intent: String = "sign-in") {
         guard pending == nil, access.isCurrent() else { return }
         do {
             let attempt = try GoogleLoginAttempt(origin: origin)
@@ -170,7 +157,7 @@ final class NativeGoogleLogin: NSObject, ASWebAuthenticationPresentationContextP
                 guard isCurrent(attempt) else { return }
                 guard let response = response as? HTTPURLResponse else { throw GoogleLoginError.invalid }
                 let cookie = try attempt.sessionCookie(response)
-                // The replacement view starts on the normal first-party Atlas selector after publication.
+                // After publication the native sheet continues with the Atlas (Organization) step.
                 guard await access.install(cookie, { [weak self] in self?.isCurrent(attempt) == true }) else {
                     finish(attempt, error: GoogleLoginError.cancelled)
                     return
@@ -181,7 +168,7 @@ final class NativeGoogleLogin: NSObject, ASWebAuthenticationPresentationContextP
     }
 
     private func isCurrent(_ attempt: GoogleLoginAttempt) -> Bool {
-        pending?.state == attempt.state && view != nil && access.isCurrent()
+        pending?.state == attempt.state && access.isCurrent()
     }
 
     private func finish(_ attempt: GoogleLoginAttempt, error: Error?) {
@@ -196,11 +183,7 @@ final class NativeGoogleLogin: NSObject, ASWebAuthenticationPresentationContextP
         access.failed()
     }
 
-    private func setPageInteractive(_ enabled: Bool) {
-        if !enabled { view?.endEditing(true) }
-        view?.isUserInteractionEnabled = enabled
-        view?.accessibilityElementsHidden = !enabled
-    }
+    private func setPageInteractive(_ enabled: Bool) { setBusy(!enabled) }
 
     func invalidate() {
         pending = nil

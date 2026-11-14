@@ -22,6 +22,42 @@ final class AtlasUITests: XCTestCase {
     }
 
     @MainActor
+    func testSignInIsNativeWithoutAnyWebPage() throws {
+        let app = XCUIApplication()
+        app.launch()
+        let signIn = app.buttons["welcome.sign-in"]
+        XCTAssertTrue(signIn.waitForExistence(timeout: 15))
+        signIn.tap()
+        let email = app.textFields["login.email"]
+        XCTAssertTrue(email.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.secureTextFields["login.password"].exists)
+        for id in ["login.submit", "login.google", "login.register", "login.forgot"] {
+            XCTAssertTrue(app.buttons[id].exists, id)
+            XCTAssertGreaterThanOrEqual(app.buttons[id].frame.height, 44, id)
+        }
+        XCTAssertEqual(app.buttons["login.google"].label, "使用 Google 登录")
+        // No embedded web sign-in or Atlas page remains; nothing is submitted to a server here.
+        XCTAssertEqual(app.webViews.count, 0)
+        capture(app, "native-sign-in")
+    }
+
+    @MainActor
+    func testConnectedWithoutAnAtlasKeepsSettingsAndAWayOut() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture", "-atlas-stalled-probe"]
+        app.launch()
+        // Formerly a blank globe with no chrome: the top bar and both exits stay.
+        XCTAssertTrue(app.buttons["atlas.stalled.retry"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.buttons["atlas.stalled.sign-out"].isHittable)
+        XCTAssertTrue(app.buttons["atlas.account"].isHittable)
+        XCTAssertTrue(app.staticTexts["atlas.wordmark"].exists)
+        XCTAssertFalse(card(app).exists)
+        capture(app, "shell-stalled")
+        app.buttons["atlas.account"].tap()
+        XCTAssertTrue(app.buttons["退出登录"].waitForExistence(timeout: 10))
+    }
+
+    @MainActor
     func testBrandedLoadingIsFullBleed() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-loading-probe"]
@@ -35,17 +71,21 @@ final class AtlasUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture"]
         app.launch()
-        let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
-        XCTAssertTrue(chip.waitForExistence(timeout: 30))
-        XCTAssertTrue(chip.isHittable)
+        let peek = card(app)
+        XCTAssertTrue(peek.waitForExistence(timeout: 30))
+        XCTAssertTrue(peek.isHittable)
+        XCTAssertEqual(peek.label, "旅程：海岸旅程")
         assertDarkFullBleed(capture(app, "shell-connected-atlas"))
         app.terminate()
 
         app.launchArguments = ["-atlas-fixture", "-atlas-empty-fixture"]
         app.launch()
-        XCTAssertTrue(app.webViews.staticTexts["图谱里还没有旅程"].waitForExistence(timeout: 30))
-        XCTAssertFalse(app.webViews.staticTexts["登录后可在 Startrips 中记录第一段旅程。"].exists)
-        XCTAssertTrue(app.webViews.buttons["切换账户或分享"].exists)
+        let empty = app.staticTexts["atlas.empty"]
+        XCTAssertTrue(empty.waitForExistence(timeout: 30))
+        XCTAssertEqual(empty.label, "图谱里还没有旅程")
+        XCTAssertFalse(app.staticTexts["登录后可在 Startrips 中记录第一段旅程。"].exists)
+        XCTAssertFalse(card(app).exists)
+        XCTAssertTrue(app.buttons["atlas.account"].exists)
         assertDarkFullBleed(capture(app, "shell-empty-atlas"))
     }
 
@@ -54,73 +94,50 @@ final class AtlasUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture"]
         app.launch()
-        let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
-        XCTAssertTrue(chip.waitForExistence(timeout: 30))
+        let peek = card(app)
+        XCTAssertTrue(peek.waitForExistence(timeout: 30))
         addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
-        XCUIDevice.shared.orientation = .landscapeLeft
-        // Capture only after the window has rotated and the rotation animation settled.
-        let window = app.windows.firstMatch
-        let deadline = Date().addingTimeInterval(15)
-        while Date() < deadline && !(window.frame.width > window.frame.height) {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-        }
-        XCTAssertGreaterThan(window.frame.width, window.frame.height)
-        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
-        XCTAssertTrue(chip.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.webViews.buttons["切换账户或分享"].isHittable)
+        rotate(app, to: .landscapeLeft)
+        XCTAssertTrue(peek.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["atlas.account"].isHittable)
         assertDarkFullBleed(capture(app, "shell-landscape", screen: true), checkSides: true)
     }
 
     @MainActor
-    func testJourneySheetHasMediumAndLargeDetents() throws {
+    func testJourneyCardHasPeekMediumAndLargeDetents() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture"]
         app.launch()
-        let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
-        XCTAssertTrue(chip.waitForExistence(timeout: 30))
+        let peek = card(app)
+        XCTAssertTrue(peek.waitForExistence(timeout: 30))
         addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
-        // The accessible toggle names the next action, so it doubles as the detent probe.
-        let expand = app.webViews.buttons["展开旅程详情"]
-        let collapse = app.webViews.buttons["收起旅程详情"]
-        let mediumHandle = app.webViews.buttons["向下滑动或点击关闭旅程详情"]
-        let largeHandle = app.webViews.buttons["向下滑动或点击收起旅程详情"]
-        func drag(_ handle: XCUIElement, by multiple: CGFloat) {
-            let from = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            from.press(forDuration: 0.05,
-                       thenDragTo: handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5 + multiple)))
-        }
+        let grabber = app.buttons["atlas.card.grabber"]
+        XCTAssertEqual(grabber.value as? String, "预览")
+        XCTAssertTrue(app.descendants(matching: .any)["atlas.ribbon"].exists, "peek keeps the time ribbon")
+        capture(app, "card-peek")
 
-        chip.tap()
-        XCTAssertTrue(expand.waitForExistence(timeout: 10))
-        XCTAssertTrue(mediumHandle.exists)
-        capture(app, "sheet-medium")
+        peek.tap()
+        XCTAssertTrue(waitForValue(grabber, "半屏"))
+        XCTAssertTrue(app.buttons["atlas.card.cover"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["atlas.card.story"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["atlas.ribbon"].waitForNonExistence(timeout: 5), "medium hides the ribbon")
+        capture(app, "card-medium")
 
-        drag(mediumHandle, by: -3)
-        XCTAssertTrue(collapse.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.webViews.buttons["打开故事：起点"].exists || app.webViews.buttons["打开故事"].exists)
-        capture(app, "sheet-large")
+        drag(grabber, by: -6)
+        XCTAssertTrue(waitForValue(grabber, "全屏"))
+        XCTAssertTrue(app.buttons["atlas.journeys.journey-fixture"].waitForExistence(timeout: 10))
+        capture(app, "card-large")
 
-        drag(largeHandle, by: 3)
-        XCTAssertTrue(expand.waitForExistence(timeout: 10), "large must step down to medium, not close")
+        drag(grabber, by: 4)
+        XCTAssertTrue(waitForValue(grabber, "半屏"), "large must step down to medium")
 
-        XCUIDevice.shared.orientation = .landscapeLeft
-        let window = app.windows.firstMatch
-        let deadline = Date().addingTimeInterval(15)
-        while Date() < deadline && !(window.frame.width > window.frame.height) {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-        }
-        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
-        XCTAssertTrue(expand.waitForExistence(timeout: 10))
-        assertDarkFullBleed(capture(app, "sheet-medium-landscape", screen: true), checkSides: true)
-        drag(mediumHandle, by: -2)
-        XCTAssertTrue(collapse.waitForExistence(timeout: 10))
-        capture(app, "sheet-large-landscape", screen: true)
-
-        drag(largeHandle, by: 2)
-        XCTAssertTrue(expand.waitForExistence(timeout: 10))
-        drag(mediumHandle, by: 2)
-        XCTAssertTrue(expand.waitForNonExistence(timeout: 10), "medium must close on a downward swipe")
-        XCTAssertTrue(chip.waitForExistence(timeout: 10))
+        rotate(app, to: .landscapeLeft)
+        XCTAssertTrue(grabber.waitForExistence(timeout: 10))
+        assertDarkFullBleed(capture(app, "card-medium-landscape", screen: true), checkSides: true)
+        rotate(app, to: .portrait)
+        drag(grabber, by: 4)
+        XCTAssertTrue(waitForValue(grabber, "预览"), "medium steps down to peek, never closes")
+        XCTAssertTrue(peek.waitForExistence(timeout: 10))
     }
 
     @MainActor
@@ -139,48 +156,67 @@ final class AtlasUITests: XCTestCase {
 
         app.launchArguments = ["-atlas-fixture"] + largest
         app.launch()
-        let webView = app.webViews.firstMatch
-        let chip = webView.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
-        XCTAssertTrue(chip.waitForExistence(timeout: 30))
-        XCTAssertGreaterThan(chip.frame.height, 85, "The Atlas dock should grow with system text size")
+        let peek = card(app)
+        XCTAssertTrue(peek.waitForExistence(timeout: 30))
+        XCTAssertTrue(peek.isHittable)
+        XCTAssertTrue(app.buttons["atlas.account"].isHittable)
         assertDarkFullBleed(capture(app, "shell-ax5-atlas"))
-
-        // Landscape makes the AX5 detail taller than the available viewport.
-        addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
-        XCUIDevice.shared.orientation = .landscapeLeft
-        let window = app.windows.firstMatch
-        let deadline = Date().addingTimeInterval(15)
-        while Date() < deadline && window.frame.width <= window.frame.height {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-        }
-        XCTAssertGreaterThan(window.frame.width, window.frame.height)
-        chip.tap()
-        XCTAssertTrue(webView.buttons["返回地球"].waitForExistence(timeout: 10))
-        let story = webView.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "打开故事")).firstMatch
-        for _ in 0..<5 {
-            if story.isHittable { break }
-            webView.swipeUp()
-        }
+        peek.tap()
+        let story = app.buttons["atlas.card.story"]
+        XCTAssertTrue(story.waitForExistence(timeout: 10))
+        // Medium scrolls at accessibility sizes, so the Story action stays reachable.
+        if !story.isHittable { app.buttons["atlas.card.cover"].swipeUp() }
         XCTAssertTrue(story.isHittable)
-        story.tap()
-        XCTAssertTrue(app.staticTexts["story.title"].waitForExistence(timeout: 10))
+        capture(app, "card-ax5-medium")
     }
 
     @MainActor
-    func testAccountMenuOffersSwitchShareAndSignOut() throws {
+    func testSettingsOffersAccountActionsAndSignOut() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture"]
         app.launch()
-        let account = app.webViews.buttons["切换账户或分享"]
+        let account = app.buttons["atlas.account"]
         XCTAssertTrue(account.waitForExistence(timeout: 30))
+        XCTAssertEqual(account.label, "设置")
         account.tap()
         XCTAssertTrue(app.buttons["切换图谱"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.buttons["settings.switch-atlas"].label, "切换图谱")
         XCTAssertTrue(app.buttons["粘贴分享链接"].exists)
         let signOut = app.buttons["退出登录"]
         XCTAssertTrue(signOut.exists)
-        capture(app, "shell-account-menu")
+        XCTAssertTrue(signOut.isHittable)
+        capture(app, "settings")
         signOut.tap()
         XCTAssertTrue(app.buttons["welcome.sign-in"].waitForExistence(timeout: 15))
+    }
+
+    @MainActor
+    func testSettingsLabelPreferencesPersistAcrossReopen() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture"]
+        app.launch()
+        let account = app.buttons["atlas.account"]
+        XCTAssertTrue(account.waitForExistence(timeout: 30))
+        account.tap()
+        let placeNames = app.switches["settings.place-names"]
+        XCTAssertTrue(placeNames.waitForExistence(timeout: 10))
+        XCTAssertEqual(placeNames.value as? String, "0")
+        placeNames.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertTrue(waitForValue(placeNames, "1"))
+        let language = app.buttons["settings.label-language"]
+        XCTAssertTrue(language.exists)
+        language.tap()
+        let bilingual = app.buttons["双语"]
+        XCTAssertTrue(bilingual.waitForExistence(timeout: 5))
+        bilingual.tap()
+        capture(app, "settings-labels")
+        app.buttons["settings.done"].tap()
+        XCTAssertTrue(card(app).waitForExistence(timeout: 10))
+        account.tap()
+        XCTAssertTrue(waitForValue(app.switches["settings.place-names"], "1"))
+        XCTAssertTrue(app.buttons["settings.label-language"].label.contains("双语")
+                      || (app.buttons["settings.label-language"].value as? String) == "双语")
+        app.buttons["settings.done"].tap()
     }
 
     @MainActor
@@ -228,55 +264,114 @@ final class AtlasUITests: XCTestCase {
     }
 
     @MainActor
-    func testMobileWordmarkTriggersBrandInteraction() throws {
+    func testGlobeOnlySceneLeavesAllChromeToNative() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture"]
         app.launch()
-        let logo = app.webViews.buttons["播放 Startrips 动画"]
-        XCTAssertTrue(logo.waitForExistence(timeout: 20))
-        XCTAssertTrue(logo.isHittable)
-        logo.tap()
-        // The Web brand moment is an in-place interaction, not a dead label
-        // or a navigation away from the Atlas.
-        XCTAssertTrue(logo.exists)
-        XCTAssertTrue(app.webViews.buttons["切换账户或分享"].exists)
+        XCTAssertTrue(card(app).waitForExistence(timeout: 30))
+        XCTAssertTrue(app.staticTexts["atlas.wordmark"].exists)
+        // The bundled scene renders only the globe: no Web header, chip, time
+        // scrubber, sheet or picker is left inside the web view.
+        XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 30))
+        for label in ["切换账户或分享", "打开全部旅程", "播放 Startrips 动画"] {
+            XCTAssertFalse(app.webViews.buttons[label].exists, label)
+        }
+        XCTAssertFalse(app.webViews.sliders["时间轴"].exists)
     }
 
     @MainActor
-    func testMobileJourneyChipSwipesBetweenRealJourneys() throws {
+    func testJourneyCardSwipesBetweenRealJourneys() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture", "-atlas-multi-journey-fixture"]
         app.launch()
-        let coast = app.webViews.buttons[
-            "查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
-        let valley = app.webViews.buttons[
-            "查看当前旅程详情：山谷旅程。左右滑动切换旅程"]
-        XCTAssertTrue(coast.waitForExistence(timeout: 30))
+        let peek = card(app)
+        XCTAssertTrue(peek.waitForExistence(timeout: 30))
+        XCTAssertEqual(peek.label, "旅程：海岸旅程")
+        swipe(peek, from: 0.86, to: 0.14)
+        XCTAssertTrue(waitForLabel(peek, "旅程：山谷旅程"))
+        XCTAssertEqual(app.buttons["atlas.card.grabber"].value as? String, "预览", "a swipe never opens the card")
 
-        // Actual iPhone drag on the upper Journey row, not a synthetic
-        // React callback or the lower time-scrubber track.
-        coast.coordinate(withNormalizedOffset: CGVector(dx: 0.86, dy: 0.5))
-            .press(forDuration: 0.08,
-                   thenDragTo: coast.coordinate(withNormalizedOffset: CGVector(dx: 0.14, dy: 0.5)))
-        XCTAssertTrue(valley.waitForExistence(timeout: 15))
-        XCTAssertFalse(app.webViews.buttons["返回地球"].exists)
+        // Match the Web boundary rule: never wrap past the last Journey.
+        swipe(peek, from: 0.86, to: 0.14)
+        XCTAssertTrue(waitForLabel(peek, "旅程：山谷旅程"))
+        swipe(peek, from: 0.14, to: 0.86)
+        XCTAssertTrue(waitForLabel(peek, "旅程：海岸旅程"))
 
-        // Match Mobile V2 boundary behavior: don't wrap at the last Journey.
-        valley.coordinate(withNormalizedOffset: CGVector(dx: 0.86, dy: 0.5))
-            .press(forDuration: 0.08,
-                   thenDragTo: valley.coordinate(withNormalizedOffset: CGVector(dx: 0.14, dy: 0.5)))
-        XCTAssertTrue(valley.exists)
+        // The time ribbon flies across Journeys by date and commits on release.
+        let ribbon = app.descendants(matching: .any)["atlas.ribbon"]
+        XCTAssertTrue(ribbon.exists)
+        ribbon.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: ribbon.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)))
+        XCTAssertTrue(waitForLabel(peek, "旅程：山谷旅程"))
+        XCTAssertTrue(waitForValue(ribbon, "2025年2月"))
+        ribbon.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: ribbon.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.5)))
+        XCTAssertTrue(waitForLabel(peek, "旅程：海岸旅程"))
+        capture(app, "ribbon-scrubbed")
 
-        valley.coordinate(withNormalizedOffset: CGVector(dx: 0.14, dy: 0.5))
-            .press(forDuration: 0.08,
-                   thenDragTo: valley.coordinate(withNormalizedOffset: CGVector(dx: 0.86, dy: 0.5)))
-        XCTAssertTrue(coast.waitForExistence(timeout: 15))
-        XCTAssertTrue(app.webViews.sliders["时间轴"].exists)
+        // The focused Journey's Route Points sit on a finer track: dragging previews,
+        // release commits the point through the normal selection flow.
+        let points = app.descendants(matching: .any)["atlas.ribbon.points"]
+        XCTAssertTrue(points.waitForExistence(timeout: 10))
+        points.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: points.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)))
+        XCTAssertTrue(waitForLabel(app.staticTexts["atlas.selection.point"], "point-b"))
+        XCTAssertTrue(waitForValue(points, "海岸"))
+        XCTAssertTrue(waitForLabel(peek, "旅程：海岸旅程"))
+        capture(app, "ribbon-route-points")
 
-        // A real tap after swiping must still open the details sheet.
-        coast.tap()
-        XCTAssertTrue(app.webViews.buttons["返回地球"].waitForExistence(timeout: 10))
+        // The large detent lists every Journey; picking one returns to peek on it.
+        peek.tap()
+        let grabber = app.buttons["atlas.card.grabber"]
+        XCTAssertTrue(waitForValue(grabber, "半屏"))
+        drag(grabber, by: -6)
+        let valley = app.buttons["atlas.journeys.journey-fixture-valley"]
+        XCTAssertTrue(valley.waitForExistence(timeout: 10))
+        XCTAssertEqual(valley.label, "切换到旅程：山谷旅程")
+        capture(app, "card-large-journeys")
+        valley.tap()
+        XCTAssertTrue(waitForValue(grabber, "预览"))
+        XCTAssertTrue(waitForLabel(peek, "旅程：山谷旅程"))
     }
+
+    @MainActor
+    func testCoverZoomsIntoStoryAndCloseReturnsToTheCard() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture"]
+        app.launch()
+        XCTAssertTrue(card(app).waitForExistence(timeout: 30))
+        openCard(app)
+        let cover = app.buttons["atlas.card.cover"]
+        XCTAssertTrue(cover.waitForExistence(timeout: 10))
+        XCTAssertEqual(cover.label, "封面：海岸旅程")
+        // The cover is loaded natively through the scoped read path.
+        cover.tap()
+        let title = app.staticTexts["story.title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        XCTAssertEqual(title.label, "海岸旅程")
+        capture(app, "story-from-cover")
+        app.buttons["story.close"].tap()
+        XCTAssertTrue(cover.waitForExistence(timeout: 10), "Story zooms back into the medium card")
+        XCTAssertEqual(app.buttons["atlas.card.grabber"].value as? String, "半屏")
+    }
+
+    @MainActor
+    func testPinchReachesTheGlobeThroughTheNativeChrome() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-atlas-fixture"]
+        app.launch()
+        XCTAssertTrue(card(app).waitForExistence(timeout: 30))
+        choosePoint(app, "point-a")
+        let rendered = app.staticTexts["earth-rendered"]
+        XCTAssertTrue(rendered.waitForExistence(timeout: 30))
+        // A two-finger pinch over the globe must reach the scene (it claims the
+        // camera, which drops the focus acknowledgement); no native layer may eat it.
+        app.webViews.firstMatch.pinch(withScale: 2.5, velocity: 2)
+        XCTAssertTrue(rendered.waitForNonExistence(timeout: 10))
+        capture(app, "globe-after-pinch")
+        XCTAssertTrue(card(app).isHittable)
+    }
+
     @MainActor
     func testNativeSceneRecoveryDoesNotDependOnWebViewControls() throws {
         let app = XCUIApplication()
@@ -287,120 +382,119 @@ final class AtlasUITests: XCTestCase {
         let retry = dialog.buttons["重新加载地球"]
         XCTAssertTrue(retry.exists)
         retry.tap()
-        XCTAssertTrue(app.webViews.buttons[
-            "查看当前旅程详情：海岸旅程。左右滑动切换旅程"
-        ].waitForExistence(timeout: 30))
+        XCTAssertTrue(card(app).waitForExistence(timeout: 30))
         XCTAssertFalse(dialog.exists)
     }
 
-    @MainActor
-    func testMobileV2HeaderJourneySheetAndPicker() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["-atlas-fixture"]
-        app.launch()
-        XCTAssertTrue(app.webViews.buttons["切换账户或分享"].waitForExistence(timeout: 20))
-        let logo = app.webViews.buttons["播放 Startrips 动画"]
-        XCTAssertTrue(logo.waitForExistence(timeout: 20))
-        logo.tap()
-        XCTAssertTrue(logo.exists)
-        let picker = app.webViews.buttons["打开全部旅程"]
-        XCTAssertTrue(picker.waitForExistence(timeout: 20))
-        let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
-        XCTAssertTrue(chip.waitForExistence(timeout: 30))
-        chip.tap()
-        let initialPoint = app.webViews.switches["起点"]
-        XCTAssertTrue(initialPoint.waitForExistence(timeout: 10))
-        initialPoint.tap()
-        chip.tap()
-        XCTAssertTrue(app.webViews.buttons["打开故事：起点"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.webViews.switches["海岸"].waitForExistence(timeout: 10))
-        let sheet = XCTAttachment(screenshot: app.screenshot())
-        sheet.name = "native-mobile-v2-journey-sheet"
-        sheet.lifetime = .keepAlways
-        add(sheet)
-        let closeSheet = app.webViews.buttons["返回地球"]
-        closeSheet.tap()
-        XCTAssertTrue(closeSheet.waitForNonExistence(timeout: 10))
-        XCTAssertTrue(chip.waitForExistence(timeout: 10))
-        XCTAssertTrue(picker.isHittable)
-        picker.tap()
-        XCTAssertTrue(app.webViews.buttons["切换到旅程：海岸旅程"].waitForExistence(timeout: 10))
-        let journeys = XCTAttachment(screenshot: app.screenshot())
-        journeys.name = "native-mobile-v2-journey-picker"
-        journeys.lifetime = .keepAlways
-        add(journeys)
-        app.webViews.buttons["关闭全部旅程"].tap()
-        XCTAssertTrue(chip.waitForExistence(timeout: 10))
-    }
     @MainActor
     func testGlobePointSelectionAndStoryRoundTrip() async throws {
         let app = XCUIApplication()
         app.launchArguments = ["-atlas-fixture"]
         app.launch()
-        let picker = app.webViews.buttons["打开全部旅程"]
-        XCTAssertTrue(picker.waitForExistence(timeout: 20))
-        let chip = app.webViews.buttons["查看当前旅程详情：海岸旅程。左右滑动切换旅程"]
-        XCTAssertTrue(chip.waitForExistence(timeout: 30))
-        chip.tap()
-        let entryPoint = app.webViews.switches["起点"]
-        XCTAssertTrue(entryPoint.waitForExistence(timeout: 10))
-        entryPoint.tap()
-        chip.tap()
-        let opening = app.webViews.buttons["打开故事：起点"]
-        XCTAssertTrue(opening.waitForExistence(timeout: 10))
+        let peek = card(app)
+        XCTAssertTrue(peek.waitForExistence(timeout: 30))
+        choosePoint(app, "point-a")
+        let opening = openCard(app)
+        XCTAssertEqual(opening.label, "打开故事：起点")
         opening.tap()
         let storyTitle = app.staticTexts["story.title"]
         XCTAssertTrue(storyTitle.waitForExistence(timeout: 10))
         XCTAssertEqual(storyTitle.label, "海岸旅程")
         XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10))
         app.buttons["story.close"].tap()
-        XCTAssertTrue(chip.waitForExistence(timeout: 10))
-        chip.tap()
-        let start = app.webViews.switches["起点"]
-        XCTAssertTrue(start.waitForExistence(timeout: 10)); start.tap()
-        chip.tap()
-        let coast = app.webViews.switches["海岸"]
-        XCTAssertTrue(coast.waitForExistence(timeout: 10)); coast.tap()
+        XCTAssertTrue(peek.waitForExistence(timeout: 10))
+        choosePoint(app, "point-a")
+        choosePoint(app, "point-b")
         XCTAssertTrue(app.staticTexts["earth-rendered"].waitForExistence(timeout: 30))
         let count = app.staticTexts["atlas.focus.count"]
         let beforeDrag = try XCTUnwrap(Int(count.label))
         XCTAssertGreaterThan(beforeDrag, 0)
         let earth = app.webViews.firstMatch
-        earth.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.28))
-            .press(forDuration: 0.1, thenDragTo: earth.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.35)))
+        earth.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.32))
+            .press(forDuration: 0.1, thenDragTo: earth.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.4)))
         XCTAssertTrue(app.staticTexts["earth-rendered"].waitForNonExistence(timeout: 5))
         // Every acknowledged focus transition is counted, including one that would
         // finish and disappear between snapshots. Leave the real idle timer alone.
         try await Task.sleep(for: .seconds(22))
         XCTAssertEqual(Int(count.label), beforeDrag)
         XCTAssertFalse(app.staticTexts["earth-rendered"].exists)
-        chip.tap()
-        XCTAssertTrue(coast.waitForExistence(timeout: 10)); coast.tap()
+        choosePoint(app, "point-b")
         XCTAssertTrue(app.staticTexts["earth-rendered"].waitForExistence(timeout: 30))
         XCTAssertGreaterThan(try XCTUnwrap(Int(count.label)), beforeDrag)
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "production-globe-after-consecutive-selection"; screenshot.lifetime = .keepAlways
-        add(screenshot)
-        let cursor = app.webViews.sliders["时间轴"]
-        XCTAssertTrue(cursor.waitForExistence(timeout: 10))
-        let center = cursor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        center.press(forDuration: 0.1, thenDragTo: cursor.coordinate(withNormalizedOffset: CGVector(dx: -0.03, dy: 0.5)))
-        chip.tap()
-        XCTAssertTrue(app.webViews.buttons["打开故事：起点"].waitForExistence(timeout: 10))
-        app.webViews.buttons["返回地球"].tap()
-        center.press(forDuration: 0.1, thenDragTo: cursor.coordinate(withNormalizedOffset: CGVector(dx: 1.03, dy: 0.5)))
-        chip.tap()
-        let coastStory = app.webViews.buttons["打开故事：海岸"]
-        XCTAssertTrue(coastStory.waitForExistence(timeout: 10))
+        capture(app, "production-globe-after-consecutive-selection")
+        let coastStory = openCard(app)
+        XCTAssertEqual(coastStory.label, "打开故事：海岸")
         coastStory.tap()
         XCTAssertTrue(storyTitle.waitForExistence(timeout: 10))
         XCTAssertEqual(storyTitle.label, "海岸旅程")
         XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10))
         app.buttons["story.close"].tap()
-        XCTAssertTrue(chip.waitForExistence(timeout: 10))
+        XCTAssertTrue(peek.waitForExistence(timeout: 10))
         XCUIDevice.shared.press(.home)
         app.activate()
-        XCTAssertTrue(chip.waitForExistence(timeout: 10))
+        XCTAssertTrue(peek.waitForExistence(timeout: 10))
         verifyNativeMediaRoundTrip(in: app)
+    }
+}
+
+/// Native Atlas chrome helpers, shared by the Atlas and Story UI tests.
+extension XCTestCase {
+    @MainActor func card(_ app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "atlas.card.peek").firstMatch
+    }
+
+    /// Opens the card to medium and returns its Story button.
+    @MainActor @discardableResult
+    func openCard(_ app: XCUIApplication) -> XCUIElement {
+        let story = app.buttons["atlas.card.story"]
+        if !story.exists || !story.isHittable {
+            let peek = card(app)
+            XCTAssertTrue(peek.waitForExistence(timeout: 10))
+            peek.tap()
+        }
+        XCTAssertTrue(story.waitForExistence(timeout: 10))
+        return story
+    }
+
+    /// Picks a Route Point from the medium card; the card returns to peek.
+    @MainActor func choosePoint(_ app: XCUIApplication, _ id: String) {
+        openCard(app)
+        let point = app.buttons["atlas.card.point." + id]
+        XCTAssertTrue(point.waitForExistence(timeout: 10))
+        point.tap()
+        XCTAssertTrue(waitForValue(app.buttons["atlas.card.grabber"], "预览"))
+    }
+
+    @MainActor func drag(_ handle: XCUIElement, by multiple: CGFloat) {
+        let from = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        from.press(forDuration: 0.05, thenDragTo: handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5 + multiple)))
+    }
+
+    @MainActor func swipe(_ element: XCUIElement, from: CGFloat, to: CGFloat) {
+        element.coordinate(withNormalizedOffset: CGVector(dx: from, dy: 0.5))
+            .press(forDuration: 0.08, thenDragTo: element.coordinate(withNormalizedOffset: CGVector(dx: to, dy: 0.5)))
+    }
+
+    @MainActor func waitForValue(_ element: XCUIElement, _ value: String, timeout: TimeInterval = 10) -> Bool {
+        let predicate = NSPredicate(format: "value == %@", value)
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: timeout) == .completed
+    }
+
+    @MainActor func waitForLabel(_ element: XCUIElement, _ label: String, timeout: TimeInterval = 15) -> Bool {
+        let predicate = NSPredicate(format: "label == %@", label)
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: timeout) == .completed
+    }
+
+    @MainActor func rotate(_ app: XCUIApplication, to orientation: UIDeviceOrientation) {
+        XCUIDevice.shared.orientation = orientation
+        // Capture only after the window has rotated and the rotation animation settled.
+        let window = app.windows.firstMatch
+        let landscape = orientation.isLandscape
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline && (window.frame.width > window.frame.height) != landscape {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+        XCTAssertEqual(window.frame.width > window.frame.height, landscape)
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
     }
 }

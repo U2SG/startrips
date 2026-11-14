@@ -144,6 +144,74 @@ final class StoryPlaybackTests: XCTestCase {
         XCTAssertEqual(first.playback?.paused, true)
         first.disappear(); second.disappear()
     }
+    @MainActor func testTempoChosenBeforePlaybackShapesTheFirstPlanAndCanStillChange() throws {
+        let journey = try MediaFixtures.journey(), intent = MediaFixtures.intent()
+        let session = ScopedMediaSession(scopeID: "owner", access: .owner,
+            read: { _ in throw MediaFailure.unavailable }, request: { _, _, _ in Data() }, revalidate: {})
+        let model = try StoryModel(journey: journey, intent: intent, session: session, ownership: PlaybackOwnership(),
+            currentIntent: { intent }, latestJourney: { journey }, onReturn: { _ in })
+        model.changeTempo(.immersive)
+        XCTAssertNil(model.playback)
+        model.playJourney()
+        XCTAssertEqual(model.playback?.beats, JourneyPlaybackPlan.build(journey, tempo: .immersive))
+        model.changeTempo(.fast)
+        XCTAssertEqual(model.tempo, .fast)
+        XCTAssertEqual(model.playback?.beats, JourneyPlaybackPlan.build(journey, tempo: .fast))
+        model.disappear()
+    }
+    @MainActor func testLeavingTheStreamMidPlaybackLoadsTheCurrentPicture() async throws {
+        let journey = try MediaFixtures.journey(), intent = MediaFixtures.intent()
+        let model = try StoryModel(journey: journey, intent: intent, session: StubPictures.session(), ownership: PlaybackOwnership(),
+            currentIntent: { intent }, latestJourney: { journey }, onReturn: { _ in })
+        defer { model.disappear() }
+        model.streamPlayback = true
+        model.playJourney()
+        for _ in 0..<6 where model.activeAsset?.id != "photo-one" { model.skip(1) }
+        XCTAssertEqual(model.activeAsset?.id, "photo-one")
+        // The stream asked for its library copy and its row went away before it arrived.
+        try await waitFor { StubPictures.requested.contains("photo-one") }
+        model.cancelLibraryImage("photo-one")
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertNil(model.image(for: "photo-one"), "the cancelled stream read never lands")
+        model.setPaused(true)
+        model.streamPlayback = false   // 旅程之流 → 默认 while paused
+        try await waitFor { model.image(for: "photo-one") != nil }
+        model.streamPlayback = true    // and back: the stream reads the same picture
+        XCTAssertNotNil(model.image(for: "photo-one"))
+    }
+    @MainActor func testTappingAnotherClipSeeksPlaybackAndPlaysItEvenWhenPaused() throws {
+        let journey = try MediaFixtures.journey(), intent = MediaFixtures.intent()
+        let session = ScopedMediaSession(scopeID: "owner", access: .owner,
+            read: { _ in throw MediaFailure.unavailable }, request: { _, _, _ in Data() }, revalidate: {})
+        let model = try StoryModel(journey: journey, intent: intent, session: session, ownership: PlaybackOwnership(),
+            currentIntent: { intent }, latestJourney: { journey }, onReturn: { _ in })
+        defer { model.disappear() }
+        model.playJourney()
+        model.setPaused(true)
+        let clip = try XCTUnwrap(model.cursor.entries.firstIndex { $0.asset?.id == "video-two" })
+        XCTAssertEqual(model.playback?.beatIndex(for: "video-two"), 6)
+        model.play(entry: clip)
+        XCTAssertEqual(model.playback?.current?.asset?.id, "video-two")
+        XCTAssertEqual(model.activeAsset?.id, "video-two")
+        XCTAssertFalse(model.paused)
+        XCTAssertEqual(model.playback?.paused, false)
+    }
+    func testClockTicksAreNotViewChangesButBeatsPausesAndTempoAre() throws {
+        let journey = try MediaFixtures.journey()
+        let clock = PlaybackClock(beats: JourneyPlaybackPlan.build(journey))
+        var ticked = clock
+        ticked.tick(milliseconds: 50, mediaReady: true, videoOwnsCompletion: false)
+        XCTAssertNotEqual(ticked.elapsedMS, clock.elapsedMS)
+        XCTAssertTrue(PlaybackClock.sameForViews(clock, ticked), "a 50ms tick never re-renders the Story")
+        var advanced = clock; advanced.advance()
+        XCTAssertFalse(PlaybackClock.sameForViews(clock, advanced))
+        var paused = clock; paused.paused = true
+        XCTAssertFalse(PlaybackClock.sameForViews(clock, paused))
+        var faster = clock; faster.changeTempo(to: JourneyPlaybackPlan.build(journey, tempo: .fast))
+        XCTAssertFalse(PlaybackClock.sameForViews(clock, faster))
+        XCTAssertFalse(PlaybackClock.sameForViews(nil, clock))
+        XCTAssertTrue(PlaybackClock.sameForViews(nil, nil))
+    }
     func testFullPlanKeepsTransitNoteAndLiteralTempoValues() throws {
         let journey = try MediaFixtures.journey()
         let beats = JourneyPlaybackPlan.build(journey)
@@ -180,4 +248,39 @@ final class StoryPlaybackTests: XCTestCase {
         XCTAssertEqual(SoundtrackGain.ramp(from: 0.8, to: 0.24, elapsed: 0.11), 0.52, accuracy: 0.001)
         XCTAssertEqual(SoundtrackGain.ramp(from: 0.24, to: 0.5, elapsed: 0.45), 0.5, accuracy: 0.001)
     }
+}
+
+/// Serves a small PNG for every https://media.test read, so model image loads run without a network.
+final class StubPictures: URLProtocol {
+    static let png = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 3)).pngData { context in
+        UIColor.blue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 4, height: 3))
+    }
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "media.test" }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    nonisolated(unsafe) static var requested: Set<String> = []
+    override func startLoading() {
+        Self.requested.insert(request.url!.lastPathComponent)
+        // Answer a little later, so a test can cancel a read while it is in flight.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { [self] in self.answer() }
+    }
+    private func answer() {
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "image/png"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Self.png)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+    @MainActor static func session() -> ScopedMediaSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubPictures.self]
+        return ScopedMediaSession(scopeID: "owner", access: .owner, imageTransport: URLSession(configuration: configuration),
+            read: { URL(string: "https://media.test/" + $0)! }, request: { _, _, _ in Data() }, revalidate: {})
+    }
+}
+
+@MainActor func waitFor(timeout: TimeInterval = 3, _ condition: () -> Bool,
+                        file: StaticString = #filePath, line: UInt = #line) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition() && Date() < deadline { try await Task.sleep(nanoseconds: 20_000_000) }
+    XCTAssertTrue(condition(), "condition not met in \(timeout)s", file: file, line: line)
 }
