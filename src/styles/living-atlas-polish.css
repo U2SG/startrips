@@ -59,13 +59,17 @@
   box-shadow: 0 0 12px color-mix(in srgb, var(--journey-color) 55%, transparent);
 }
 
-.living-atlas .living-atlas__journey-rail ol::-webkit-scrollbar {
-  width: 4px;
-}
+/* Legacy fallback only: the rail's standard scrollbar-width/scrollbar-color
+   live in living-atlas.css and win wherever they are supported. */
+@supports not (scrollbar-color: auto) {
+  .living-atlas .living-atlas__journey-rail ol::-webkit-scrollbar {
+    width: 4px;
+  }
 
-.living-atlas .living-atlas__journey-rail ol::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: rgba(122, 244, 237, 0.22);
+  .living-atlas .living-atlas__journey-rail ol::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: rgba(122, 244, 237, 0.22);
+  }
 }
 
 /* --- Active journey card: lift + journey-colored bloom + media parallax --- */
