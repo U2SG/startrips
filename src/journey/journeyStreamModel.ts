@@ -132,7 +132,7 @@ export function journeyStreamJournalDays(
         && linkedPoint?.placeRole === "accommodation" && isLodgingLabelLine(event.source);
       const point = event.status === "actual" || confirmedLodging ? linkedPoint : undefined;
       const text = journalReadingText(journalNarrativeText(event), confirmedLodging ? undefined : event.status);
-      const startsWithClock = event.localTime && text.replace(/^我(?:大约)?在 /u, "").startsWith(event.localTime);
+      const startsWithClock = event.localTime && text.replace(/^(?:大约\s+|我(?:大约)?在\s+)/u, "").startsWith(event.localTime);
       return text || point ? [{
         id: event.id,
         text,

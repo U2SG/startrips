@@ -14,8 +14,22 @@ describe("daily journal standard model adapter", () => {
     expect(url).toBe("https://model.example.test/v1/chat/completions");
     expect(body.response_format.json_schema).toMatchObject({ name:"daily_journal_reading", strict:true });
     expect(body.messages[1].content).not.toContain("private manual reading");
-    expect(body.messages[0].content).toContain("Do not infer UTC");
+    expect(body.messages[0].content).toContain("leave the subject implicit");
     expect(body).not.toHaveProperty("document");
+  });
+  it("rewrites all events across bounded requests and preserves their order", async () => {
+    const source = ["2027-05-01", ...Array.from({length: 55}, (_, index) => `清晨到了码头，看到第 ${index + 1} 艘船。`)].join("\n");
+    const input = previewJournalImport(source, "2027-05-01");
+    const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(init!.body as string);
+      const { chapters } = JSON.parse(body.messages[1].content) as {chapters: {events: {eventId: string; source: string}[]}[]};
+      const events = chapters.flatMap(chapter => chapter.events);
+      expect(events.length).toBeLessThanOrEqual(24);
+      return completion(events.reverse().map(({eventId, source: text}) => ({eventId, text, questions: [], background: ""})));
+    });
+    const suggestions = await suggestJournalReading(input, { ...options, fetcher });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(suggestions.map(({eventId}) => eventId)).toEqual(input[0].events.map(event => event.id));
   });
   it("keeps questions/background separate and rejects duplicates, omissions, refusals and failed responses", async () => {
     const suggestions = [{ eventId: chapters[0].events[0].id, text: "她记录了事件，位置待确认。", questions: ["哪处地点准确？"], background: "待核实背景" }];
