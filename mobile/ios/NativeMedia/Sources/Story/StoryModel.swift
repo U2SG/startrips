@@ -82,7 +82,9 @@ import UIKit
               live.revision == journey.revision else { return }
         let entries = cursor.entries
         let target: Int?
-        if isCover { target = entries.firstIndex { $0.role == .journeyCover } }
+        // The Journey note page names neither a point nor an asset; like the cover it is
+        // journey-level, and the cover entry is the native page that carries the Journey note.
+        if isCover || (routePointID == nil && assetID == nil) { target = entries.firstIndex { $0.role == .journeyCover } }
         else if let assetID {
             target = entries.firstIndex { $0.role == .media && $0.asset?.id == assetID && $0.routePointId == routePointID }
         } else {
