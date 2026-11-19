@@ -20,6 +20,7 @@
 | 导航、返回、前后台恢复 | `Sources/App/AppRouter.swift`、`AtlasRootView.swift` | 由原生导航保存当前旅程、地点和素材。按照当前身份和旅程修订重新解析它们。 |
 | 地球、时间轴、地点控件 | `Scene/main.tsx`、`Scene/scene.css`、`Sources/Atlas/` | 复用生产地球、时间轴和字体。拖动摄像机后释放居中，下一次明确选点才重新聚焦。 |
 | 场景与 App 之间的消息 | `Scene/bridge.ts`、`Sources/Bridge/SceneContract.swift`、`Fixtures/bridge.json` | Swift 和 TypeScript 读取同一个 fixture。请求、身份与修订不匹配时丢弃过时消息。 |
+| 新建和编辑旅程（仅主人） | `Sources/App/JourneyComposer.swift`、`JourneyComposerView.swift` | 字段与校验对齐 Web 编辑器。保存带服务端修订；409 时让用户载入最新或合并后再存，绝不静默覆盖。删除可撤销。 |
 | 登录、分享和私有媒体读取 | `Sources/App/AtlasSession.swift`、`StoryDestination.swift` | 登录窗口与本地地球分开。主人用当前会话，访客只用分享令牌。私有签名和凭据留在原生侧。 |
 | Story 和旅程连播 | `NativeMedia/Sources/Story/`、`Playback/` | 区分拖动中的候选页与已翻到的页。只有当前素材使用前台播放器，返回时按已提交的位置恢复。 |
 | 导入、移动和恢复 | `NativeMedia/Sources/Import/`、`Sources/App/TransferAppDelegate.swift` | 系统相册选择后记录目标地点。按账户保存待传文件和分片回执，完成时使用服务端返回的素材 ID。 |

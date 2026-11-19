@@ -11,6 +11,8 @@ struct AtlasChrome: View {
     /// Without an installed Atlas only the top bar is drawn.
     var installed = true
     let onAccount: () -> Void
+    /// Owner only: opens the native Journey composer. Nil for a shared Atlas.
+    var onCompose: ((ComposerTarget) -> Void)? = nil
     @State private var detent: CardDetent = .peek
     @State private var dragOffset: CGFloat = 0
     @State private var peekHeight: CGFloat = 96
@@ -41,7 +43,8 @@ struct AtlasChrome: View {
                                     detent: $detent, dragOffset: $dragOffset,
                                     height: layout.cardHeight(detent, drag: dragOffset),
                                     mediumScrolls: layout.medium >= layout.large || typeSize.isAccessibilitySize,
-                                    storyNamespace: storyNamespace, onPeekHeight: { peekHeight = $0 })
+                                    storyNamespace: storyNamespace, onPeekHeight: { peekHeight = $0 },
+                                    onEdit: compose.map { open -> () -> Void in { open(.edit(journey)) } })
                             .padding(.horizontal, NightFlight.cardInset)
                         if detent == .peek && !ribbon.isEmpty {
                             TimeRibbon(router: router, model: ribbon)
@@ -109,6 +112,19 @@ struct AtlasChrome: View {
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("atlas.wordmark")
             Spacer()
+            if let compose, installed, !router.journeys.isEmpty {
+                Button { compose(.create) } label: {
+                    Image(systemName: "plus")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(NightFlight.ink)
+                        .frame(width: NightFlight.hitTarget, height: NightFlight.hitTarget)
+                        .nightFlightSurface(Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("新建旅程")
+                .accessibilityIdentifier("atlas.compose")
+            }
             Button(action: onAccount) {
                 Image(systemName: router.access == .guest ? "person.2" : "person.crop.circle")
                     .font(.body.weight(.medium))
@@ -130,13 +146,30 @@ struct AtlasChrome: View {
         }
     }
 
+    /// The composer entry exists only for the owner of an installed Atlas.
+    private var compose: ((ComposerTarget) -> Void)? {
+        router.access == .owner ? onCompose : nil
+    }
+
     private var empty: some View {
-        Text("图谱里还没有旅程")
-            .font(NightFlight.serif(.title2))
-            .foregroundStyle(NightFlight.ink)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, NightFlight.edge)
-            .accessibilityIdentifier("atlas.empty")
+        VStack(spacing: NightFlight.grid(6)) {
+            Text("图谱里还没有旅程")
+                .font(NightFlight.serif(.title2))
+                .foregroundStyle(NightFlight.ink)
+                .multilineTextAlignment(.center)
+                .accessibilityIdentifier("atlas.empty")
+            if let compose {
+                Button { compose(.create) } label: {
+                    Label("创建第一段旅程", systemImage: "plus")
+                        .multilineTextAlignment(.center)
+                        .padding(.vertical, NightFlight.grid(2))
+                }
+                .buttonStyle(NightFlightPillButtonStyle())
+                .frame(maxWidth: 420)
+                .accessibilityIdentifier("atlas.create-first")
+            }
+        }
+        .padding(.horizontal, NightFlight.edge)
     }
 }
 

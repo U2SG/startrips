@@ -53,6 +53,8 @@ struct JourneyCard: View {
     let mediumScrolls: Bool
     let storyNamespace: Namespace.ID
     let onPeekHeight: (CGFloat) -> Void
+    /// Owner only: opens this Journey in the native composer.
+    var onEdit: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -181,16 +183,32 @@ struct JourneyCard: View {
         VStack(alignment: .leading, spacing: NightFlight.grid(4)) {
             cover
             if !journey.routePoints.isEmpty { routePoints }
-            Button { openStory() } label: {
-                HStack {
-                    Text("打开故事")
-                    Spacer()
-                    Image(systemName: "arrow.right")
+            HStack(spacing: NightFlight.grid(3)) {
+                Button { openStory() } label: {
+                    HStack {
+                        Text("打开故事")
+                        Spacer()
+                        Image(systemName: "arrow.right")
+                    }
+                }
+                .buttonStyle(NightFlightPillButtonStyle())
+                .accessibilityLabel(point.map { "打开故事：" + $0.label } ?? "打开故事")
+                .accessibilityIdentifier("atlas.card.story")
+                // Owner only, beside Story so it is reachable at the medium detent.
+                if let onEdit {
+                    Button(action: onEdit) {
+                        Image(systemName: "pencil")
+                            .font(.headline)
+                            .foregroundStyle(NightFlight.ink)
+                            .frame(width: 52, height: 52)
+                            .nightFlightSurface(Circle())
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("编辑旅程")
+                    .accessibilityIdentifier("atlas.card.edit")
                 }
             }
-            .buttonStyle(NightFlightPillButtonStyle())
-            .accessibilityLabel(point.map { "打开故事：" + $0.label } ?? "打开故事")
-            .accessibilityIdentifier("atlas.card.story")
             if detent == .large {
                 if !journey.note.isEmpty {
                     Text(journey.note).font(NightFlight.serif(.body)).lineSpacing(5)
