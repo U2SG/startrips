@@ -19,7 +19,13 @@ const STALE_UPLOAD_AFTER_MS = 24 * 60 * 60 * 1_000;
 const RECONCILE_INTERVAL_MS = 60 * 60 * 1_000;
 const RECONCILE_BATCH_SIZE = 25;
 
+const UPLOAD_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// A malformed id would make Postgres reject the uuid cast (500); answer it
+// exactly like an id this Atlas does not own.
 async function findUpload(uploadId: string, atlasId: string) {
+  if (!UPLOAD_ID_PATTERN.test(uploadId)) return undefined;
   const [row] = await db
     .select({ upload: mediaUploads })
     .from(mediaUploads)
@@ -765,9 +771,6 @@ export async function completeUploadForAtlas(
   return { body: { asset, completed: true }, status: 201 as const };
 }
 
-const UPLOAD_ID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * #769: the native client's resume/cancel reconciliation reads this before it
  * signs another part or completes. Only identity, geometry and the real asset
@@ -775,9 +778,7 @@ const UPLOAD_ID_PATTERN =
  * an id this Atlas does not own answers exactly like an id that never existed.
  */
 export async function readUploadStatusForAtlas(atlasId: string, uploadId: string) {
-  const upload = UPLOAD_ID_PATTERN.test(uploadId)
-    ? await findUpload(uploadId, atlasId)
-    : undefined;
+  const upload = await findUpload(uploadId, atlasId);
   if (!upload) return { body: { error: "UPLOAD_NOT_FOUND" }, status: 404 as const };
   return {
     body: {

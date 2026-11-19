@@ -496,6 +496,22 @@ describe("dedupe, replay and recovery", () => {
     expect(await response.json()).toEqual({ error: "UPLOAD_NOT_FOUND" });
   });
 
+  it("answers a malformed upload id with upload-not-found on every upload route", async () => {
+    for (const [method, path] of [
+      ["POST", "/api/uploads/not-an-upload/parts/1"],
+      ["POST", "/api/uploads/not-an-upload/complete"],
+      ["DELETE", "/api/uploads/not-an-upload"],
+    ] as const) {
+      const response = await app.request(`${TEST_ORIGIN}${path}`, {
+        method,
+        headers: authHeaders(identity.cookie),
+        body: method === "POST" ? "{}" : undefined,
+      });
+      expect(response.status, `${method} ${path}`).toBe(404);
+      expect(await response.json()).toEqual({ error: "UPLOAD_NOT_FOUND" });
+    }
+  });
+
   it("never rewrites the evidence of an asset the same storage key already named", async () => {
     // The lost-response case where the object landed and the asset was created
     // by an earlier attempt: finalization re-finds it by storage key rather
