@@ -341,8 +341,8 @@
 .artwork-detail-copy a {
   color: rgba(226, 235, 230, 0.72);
   font-size: 9px;
-  text-decoration: none;
-  border-bottom: 1px solid rgba(200, 255, 61, 0.3);
+  text-decoration: underline 1px rgba(200, 255, 61, 0.3);
+  text-underline-offset: 3px;
 }
 
 .artwork-detail-copy a:focus-visible {
