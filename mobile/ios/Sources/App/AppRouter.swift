@@ -262,6 +262,33 @@ final class AppRouter: ObservableObject {
         }
     }
 
+    /// A Journey the owner just created, edited or restored: the globe shows it
+    /// at once (new scene revision) and it becomes the selection. The following
+    /// refresh replaces this local copy with the authoritative Atlas.
+    func apply(saved journey: AtlasJourney) {
+        guard access == .owner, installed, path.isEmpty else { return }
+        if let index = journeys.firstIndex(where: { $0.id == journey.id }),
+           journeys[index].startedOn == journey.startedOn {
+            journeys[index] = journey
+        } else {
+            // Server order is startedOn ascending, then creation.
+            var next = journeys.filter { $0.id != journey.id }
+            next.insert(journey, at: next.firstIndex(where: { $0.startedOn > journey.startedOn }) ?? next.endIndex)
+            journeys = next
+        }
+        revision += 1
+        select(journeyId: journey.id)
+    }
+
+    /// A Journey the owner just deleted leaves the globe before the refresh confirms it.
+    func remove(journeyId: String) {
+        guard access == .owner, installed, path.isEmpty, journeys.contains(where: { $0.id == journeyId }) else { return }
+        journeys.removeAll { $0.id == journeyId }
+        if selection?.journeyId == journeyId { selection = nil }
+        if preview?.journeyId == journeyId { preview = nil }
+        revision += 1
+    }
+
     func returnToAtlas() { path = []; revision += 1; onInvalidation?() }
 
     /// NavigationStack writes here only for system pops. Story leaves through

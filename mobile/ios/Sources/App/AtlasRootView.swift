@@ -12,6 +12,12 @@ struct AtlasRootView: View {
     @State private var sceneRecoveryRequired = false
     @State private var settingsPresented = false
     @State private var pendingSettingsAction: SettingsAction?
+    @State private var composer: ComposerTarget?
+    /// The Journey just deleted, while its undo is still offered.
+    @State private var deletedJourney: AtlasJourney?
+    @State private var undoFailure: String?
+    /// The synthetic Atlas's in-memory store (XCUITest); nil uses the live owner API.
+    @State private var fixtureStore: (any JourneyStore)?
     @StateObject private var covers = JourneyCoverStore()
     @Namespace private var storyNamespace
 
@@ -39,7 +45,8 @@ struct AtlasRootView: View {
                         AtlasStalledView(guest: router.access == .guest, retry: restartScene, signOut: signOut)
                     }
                     AtlasChrome(router: router, session: session, covers: covers, storyNamespace: storyNamespace,
-                                installed: router.installed) { settingsPresented = true }
+                                installed: router.installed, onAccount: { settingsPresented = true },
+                                onCompose: { composer = $0 })
                 } else if !launching {
                     #if DEBUG
                     WelcomeView(signIn: signIn, pasteShare: pasteShare, debugOrigin: $session.originText)
@@ -48,6 +55,20 @@ struct AtlasRootView: View {
                     #endif
                 }
                 if loading { AtlasLoadingView() }
+            }
+            .overlay(alignment: .top) {
+                // Below the top bar, clear of the Journey card at the bottom.
+                if let deletedJourney, router.path.isEmpty {
+                    UndoDeleteBar(title: deletedJourney.title) { undoDelete(deletedJourney) }
+                        .padding(.horizontal, NightFlight.cardInset)
+                        .padding(.top, NightFlight.hitTarget + NightFlight.grid(4))
+                        .transition(.opacity)
+                }
+            }
+            .task(id: deletedJourney?.id) {
+                guard deletedJourney != nil else { return }
+                do { try await Task.sleep(for: .seconds(8)) } catch { return }
+                deletedJourney = nil
             }
             .navigationTitle(router.snapshot.access == .guest ? "分享图谱" : "图谱")
             .navigationBarTitleDisplayMode(.inline)
@@ -95,6 +116,12 @@ struct AtlasRootView: View {
                 settingsPresented = false
             }
         }
+        .sheet(item: $composer) { target in
+            JourneyComposerView(target: target, store: journeyStore, onSaved: saved, onDeleted: deleted)
+        }
+        .alert("撤销失败", isPresented: Binding(get: { undoFailure != nil }, set: { if !$0 { undoFailure = nil } })) {
+            Button("关闭", role: .cancel) { undoFailure = nil }
+        } message: { Text(undoFailure ?? "") }
         .sheet(isPresented: $session.loginPresented, onDismiss: { connectOwner() }) {
             if let origin = session.origin {
                 NativeSignInView(session: session, origin: origin)
@@ -159,6 +186,7 @@ struct AtlasRootView: View {
                     }
                     let access: AtlasAccess = ProcessInfo.processInfo.arguments.contains("-atlas-guest-fixture") ? .guest : .owner
                     router.install(fixtureJourneys, identity: "synthetic-ci", access: access, earthExperience: "default")
+                    fixtureStore = FixtureJourneyStore(journeys: fixtureJourneys)
                     connected = true
                     if ProcessInfo.processInfo.arguments.contains("-atlas-stalled-probe") {
                         // Test-only: connected without an installed Atlas, the former dead end.
@@ -246,6 +274,7 @@ struct AtlasRootView: View {
     private func leaveAtlas(_ end: () -> Void) {
         end()
         fixtureMode = false
+        fixtureStore = nil; composer = nil; deletedJourney = nil
         covers.reset()
         router.clear()
         sceneRecoveryRequired = false
@@ -256,7 +285,7 @@ struct AtlasRootView: View {
     private func connectOwner() {
         do {
             // A real owner session ends any synthetic fixture: refresh() must run.
-            try session.configureOwner(); fixtureMode = false
+            try session.configureOwner(); fixtureMode = false; fixtureStore = nil
             router.clear(); connected = true; sceneIdentity = UUID()
             refresh()
         } catch { router.error = error.localizedDescription }
@@ -272,6 +301,56 @@ struct AtlasRootView: View {
     private func refresh() {
         guard !fixtureMode else { return }
         Task { await session.refresh(router) }
+    }
+
+    private var journeyStore: any JourneyStore { fixtureStore ?? LiveJourneyStore(session: session) }
+
+    /// The globe shows the saved Journey at once; the refresh then installs the server's Atlas.
+    private func saved(_ journey: AtlasJourney) {
+        deletedJourney = nil
+        router.apply(saved: journey)
+        refresh()
+    }
+
+    private func deleted(_ journey: AtlasJourney) {
+        router.remove(journeyId: journey.id)
+        deletedJourney = journey
+        refresh()
+    }
+
+    private func undoDelete(_ journey: AtlasJourney) {
+        let store = journeyStore
+        Task {
+            do {
+                let restored = try await store.restore(journey.id)
+                saved(restored)
+            } catch {
+                undoFailure = error.localizedDescription
+            }
+        }
+    }
+}
+
+/// Deleting a Journey offers one undo for a few seconds.
+private struct UndoDeleteBar: View {
+    let title: String
+    let undo: () -> Void
+    var body: some View {
+        HStack(spacing: NightFlight.grid(3)) {
+            Text("已删除「\(title)」").foregroundStyle(NightFlight.ink).lineLimit(2)
+            Spacer(minLength: NightFlight.grid(2))
+            Button("撤销", action: undo)
+                .font(.headline)
+                .foregroundStyle(NightFlight.accent)
+                .frame(minWidth: NightFlight.hitTarget, minHeight: NightFlight.hitTarget)
+                .accessibilityIdentifier("atlas.undo-delete")
+        }
+        .padding(.horizontal, NightFlight.cardPadding)
+        .padding(.vertical, NightFlight.grid(2))
+        .frame(maxWidth: 560)
+        .nightFlightSurface(radius: NightFlight.radiusLarge)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("atlas.deleted")
     }
 }
 

@@ -81,6 +81,21 @@ Navigation reconstruction re-resolves saved IDs against freshly authorized data;
 guest navigation and credentials are never saved. WK content process recovery
 rebuilds the scene from the native snapshot, with two bounded automatic retries.
 
+## Journey composer (owner only)
+
+`Sources/App/JourneyComposerView.swift` creates and edits a Journey and its
+Route Points in a native sheet: from the empty Atlas, the top bar's plus, or
+the card's pencil. Place search and reverse lookup use `/api/locations`; a
+MapKit map places a point by its centre. `Sources/App/JourneyComposer.swift`
+builds the `POST /api/journeys` / `PATCH /api/journeys/:id` body with the web
+composer's validation: edits echo `revision`, point ids, `occurredAt` and the
+light effect, and omit per-point extras so the server keeps them. A stale save
+(409 `JOURNEY_ROUTE_CHANGED`) is never retried: the member reloads the newer
+Journey or merges their edits into it and saves again. Delete offers an undo
+through `POST /api/journeys/:id/restore`. A saved Journey reaches the globe at
+once through a new scene revision, then the normal refresh installs the
+server's Atlas. Shares never show these entries.
+
 ## Native Story and playback
 
 The application links the local StartripsMedia package. StoryDestination constructs the viewer using the current AtlasSession and AppRouter selection. See [Native media integration](NativeMedia/INTEGRATION.md) for the owner/guest contract, background transfers and native test targets.
