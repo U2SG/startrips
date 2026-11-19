@@ -180,6 +180,31 @@ final class JourneyComposerTests: XCTestCase {
         XCTAssertEqual(JourneyDraft.merge(base: base, mine: base, theirs: renamed), renamed)
     }
 
+    func testMergeAboveTheRouteLimitKeepsEveryPointAndBlocksSave() {
+        var base = JourneyDraft(startedOn: "2025-03-01")
+        base.title = "长路线"
+        base.revision = 5
+        base.points = (0..<63).map {
+            RouteDraftPoint(persistedId: "00000000-0000-4000-8000-\(String(format: "%012d", $0))",
+                            latitude: 1, longitude: Double($0), label: "点\($0)", isStop: false)
+        }
+        var theirs = base
+        theirs.revision = 6
+        theirs.points.append(RouteDraftPoint(persistedId: "00000000-0000-4000-8000-999999999999",
+                                             latitude: 2, longitude: 2, label: "别处新增", isStop: true))
+        var mine = base
+        mine.points.append(RouteDraftPoint(latitude: 3, longitude: 3, label: "我的新增", isStop: true))
+
+        let merged = JourneyDraft.merge(base: base, mine: mine, theirs: theirs)
+        XCTAssertEqual(merged.points.count, 65, "the owner's added point is never dropped")
+        XCTAssertEqual(merged.points.suffix(2).map(\.label), ["别处新增", "我的新增"])
+        // Save refuses with the route limit until the owner removes a point.
+        XCTAssertEqual(merged.validationErrors, ["路线必须包含 1 到 64 个点"])
+        var trimmed = merged
+        trimmed.points.remove(at: 0)
+        XCTAssertEqual(trimmed.validationErrors, [])
+    }
+
     func testSearchPathEncodesTheQueryAndFocus() {
         XCTAssertEqual(LiveJourneyStore.searchPath("京都 C++", near: (35.5, 135.25)),
                        "/api/locations/search?q=%E4%BA%AC%E9%83%BD%20C%2B%2B&lat=35.5&lon=135.25")

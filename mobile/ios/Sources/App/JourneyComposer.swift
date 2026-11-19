@@ -164,8 +164,9 @@ struct JourneyDraft: Equatable {
                 let live = Set(theirs.points.compactMap(\.persistedId))
                 result.points = mine.points.filter { $0.persistedId.map(live.contains) ?? true }
             } else {
-                let added = mine.points.filter { $0.persistedId == nil }
-                result.points = Array((theirs.points + added).prefix(maxRoutePoints))
+                // Never truncated: above the route limit, validation blocks Save
+                // until the member removes points themselves.
+                result.points = theirs.points + mine.points.filter { $0.persistedId == nil }
             }
         }
         result.revision = theirs.revision

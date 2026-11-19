@@ -28,6 +28,8 @@ struct JourneyComposerView: View {
     @State private var editing: PointEditing?
     @State private var saving = false
     @State private var message: String?
+    /// Counts refused saves, so the same message scrolls back into view each time.
+    @State private var refusals = 0
     @State private var latest: JourneyDraft?
     @State private var confirmDiscard = false
     @State private var confirmDelete = false
@@ -49,10 +51,21 @@ struct JourneyComposerView: View {
         return nil
     }
     private var dirty: Bool { draft != base }
+    private static let errorRow = "composer.error-row"
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             Form {
+                // First row, scrolled into view when Save is refused, however long the route is.
+                if let message {
+                    Section {
+                        Text(message)
+                            .foregroundStyle(Color(hex: 0xFF9F8F))
+                            .accessibilityIdentifier("composer.error")
+                    }
+                    .id(Self.errorRow)
+                }
                 Section {
                     TextField("旅程标题", text: $draft.title)
                         .font(NightFlight.serif(.title3))
@@ -97,13 +110,6 @@ struct JourneyComposerView: View {
                         .font(NightFlight.serif(.body))
                         .accessibilityIdentifier("composer.note")
                 }
-                if let message {
-                    Section {
-                        Text(message)
-                            .foregroundStyle(Color(hex: 0xFF9F8F))
-                            .accessibilityIdentifier("composer.error")
-                    }
-                }
                 if journey != nil {
                     Section {
                         Button("删除旅程", role: .destructive) { confirmDelete = true }
@@ -112,6 +118,10 @@ struct JourneyComposerView: View {
                             .accessibilityIdentifier("composer.delete")
                     }
                 }
+            }
+            .onChange(of: refusals) { _, _ in
+                withAnimation { proxy.scrollTo(Self.errorRow, anchor: .top) }
+            }
             }
             .scrollContentBackground(.hidden)
             .scrollDismissesKeyboard(.interactively)
@@ -249,7 +259,7 @@ struct JourneyComposerView: View {
     // MARK: Actions
 
     private func save() async {
-        if let error = draft.validationErrors.first { message = error; return }
+        if let error = draft.validationErrors.first { refuse(error); return }
         message = nil; saving = true
         defer { saving = false }
         do {
@@ -261,20 +271,25 @@ struct JourneyComposerView: View {
         } catch JourneyWriteFailure.routeChanged {
             await conflict()
         } catch {
-            message = error.localizedDescription
+            refuse(error.localizedDescription)
         }
     }
 
+    private func refuse(_ text: String) {
+        message = text
+        refusals += 1
+    }
+
     private func conflict() async {
-        guard let journey else { message = JourneyWriteFailure.invalid.localizedDescription; return }
+        guard let journey else { refuse(JourneyWriteFailure.invalid.localizedDescription); return }
         do {
             let fresh = JourneyDraft(try await store.load(journey.id))
             // Same revision: nothing newer exists, the route itself was refused
             // (a moved or demoted Stop that other points still belong to).
-            guard fresh.revision != base.revision else { message = "路线点的停留归属需要重新确认"; return }
+            guard fresh.revision != base.revision else { refuse("路线点的停留归属需要重新确认"); return }
             latest = fresh
         } catch {
-            message = error.localizedDescription
+            refuse(error.localizedDescription)
         }
     }
 
@@ -295,7 +310,7 @@ struct JourneyComposerView: View {
             base = draft
             dismiss()
         } catch {
-            message = error.localizedDescription
+            refuse(error.localizedDescription)
         }
     }
 }
