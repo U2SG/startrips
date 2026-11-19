@@ -24,6 +24,7 @@ import { beginAssetPreview, completeAssetPreview } from "../services/media-previ
 import {
   abortUploadForAtlas,
   completeUploadForAtlas,
+  readUploadStatusForAtlas,
   signUploadPartForAtlas,
   startUploadForAtlas,
 } from "../services/multipart-uploads";
@@ -65,6 +66,12 @@ uploadRoutes.post("/:id/complete", async (context) => {
     ? { ...result.body, asset: toOwnerMediaAsset(result.body.asset) }
     : result.body;
   return context.json(body, result.status);
+});
+
+uploadRoutes.get("/:id/status", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "create");
+  const result = await readUploadStatusForAtlas(atlas.id, context.req.param("id"));
+  return context.json(result.body, result.status);
 });
 
 uploadRoutes.delete("/:id", async (context) => {
