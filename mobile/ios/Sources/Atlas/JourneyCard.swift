@@ -55,6 +55,8 @@ struct JourneyCard: View {
     let onPeekHeight: (CGFloat) -> Void
     /// Owner only: opens this Journey in the native composer.
     var onEdit: (() -> Void)? = nil
+    /// Owner only: opens this Journey's share links.
+    var onShare: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -207,6 +209,19 @@ struct JourneyCard: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("编辑旅程")
                     .accessibilityIdentifier("atlas.card.edit")
+                }
+                if let onShare {
+                    Button(action: onShare) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.headline)
+                            .foregroundStyle(NightFlight.ink)
+                            .frame(width: 52, height: 52)
+                            .nightFlightSurface(Circle())
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("分享旅程")
+                    .accessibilityIdentifier("atlas.card.share")
                 }
             }
             if detent == .large {
