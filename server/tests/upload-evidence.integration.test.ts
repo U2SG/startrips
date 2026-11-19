@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createEmailVerificationToken } from "better-auth/api";
 import { eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -785,6 +786,94 @@ describe("the evidence stays asset-owned and owner-only", () => {
       "139.691711",
     ]) {
       expect(body).not.toContain(absent);
+    }
+  });
+});
+
+/** The sample the iOS `UploadStatus` decoder is tested against. */
+const NATIVE_UPLOAD_STATUS = JSON.parse(readFileSync(
+  new URL("../../mobile/ios/NativeMedia/Tests/Fixtures/upload-status.json", import.meta.url),
+  "utf8",
+)) as Record<string, unknown>;
+
+async function readStatus(uploadId: string, headers: Record<string, string>) {
+  const response = await app.request(`${TEST_ORIGIN}/api/uploads/${uploadId}/status`, { headers });
+  return { status: response.status, text: await response.text() };
+}
+
+describe("#769 upload status for native resume", () => {
+  it("answers an initiated upload in exactly the native fixture's shape", async () => {
+    const upload = await startedUpload();
+    const response = await readStatus(upload.id, authHeaders(identity.cookie));
+
+    expect(response.status).toBe(200);
+    const body = JSON.parse(response.text) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(Object.keys(NATIVE_UPLOAD_STATUS).sort());
+    expect(body).toEqual({
+      ...NATIVE_UPLOAD_STATUS,
+      uploadId: upload.id,
+      status: "initiated",
+      assetId: null,
+    });
+    expect(response.text).not.toContain(upload.storageKey);
+    expect(response.text).not.toContain(upload.providerUploadId);
+  });
+
+  it("reports the real asset id once completed, and null after that asset is deleted", async () => {
+    const upload = await startedUpload();
+    const asset = await finalizeUpload(upload, contentHash("status-completed"));
+
+    const completed = await readStatus(upload.id, authHeaders(identity.cookie));
+    expect(completed.status).toBe(200);
+    expect(JSON.parse(completed.text)).toMatchObject({
+      uploadId: upload.id,
+      status: "completed",
+      assetId: asset.id,
+    });
+
+    await db.delete(mediaAssets).where(eq(mediaAssets.id, asset.id));
+    const removed = await readStatus(upload.id, authHeaders(identity.cookie));
+    expect(JSON.parse(removed.text)).toMatchObject({ status: "completed", assetId: null });
+  });
+
+  it("passes through the server-owned reconciliation states unchanged", async () => {
+    for (const state of ["finalizing", "completion_unknown", "reconciling", "aborted"]) {
+      const upload = await startedUpload({ status: state });
+      const response = await readStatus(upload.id, authHeaders(identity.cookie));
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.text)).toMatchObject({ status: state, assetId: null });
+    }
+  });
+
+  it("answers another Atlas's upload exactly like one that never existed", async () => {
+    const upload = await startedUpload();
+    const unknown = await readStatus(randomUUID(), authHeaders(identity.cookie));
+    const foreign = await readStatus(upload.id, authHeaders(outsiderIdentity.cookie));
+    const malformed = await readStatus("not-an-upload", authHeaders(identity.cookie));
+
+    for (const response of [unknown, foreign, malformed]) {
+      expect(response.status).toBe(404);
+      expect(JSON.parse(response.text)).toEqual({ error: "UPLOAD_NOT_FOUND" });
+    }
+  });
+
+  it("refuses a guest share bearer and an anonymous caller", async () => {
+    const upload = await startedUpload();
+    const created = await app.request(`${TEST_ORIGIN}/api/shares`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyIds: [journeyId],
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      }),
+    });
+    expect(created.status).toBe(201);
+    const { token } = await created.json() as { token: string };
+
+    for (const headers of [{ authorization: `Bearer ${token}` }, authHeaders()]) {
+      const response = await readStatus(upload.id, headers);
+      expect(response.status).toBe(401);
+      expect(response.text).not.toContain(upload.id);
     }
   });
 });

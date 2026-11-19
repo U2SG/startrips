@@ -765,6 +765,32 @@ export async function completeUploadForAtlas(
   return { body: { asset, completed: true }, status: 201 as const };
 }
 
+const UPLOAD_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * #769: the native client's resume/cancel reconciliation reads this before it
+ * signs another part or completes. Only identity, geometry and the real asset
+ * id leave the server; storage keys and provider upload ids stay internal, and
+ * an id this Atlas does not own answers exactly like an id that never existed.
+ */
+export async function readUploadStatusForAtlas(atlasId: string, uploadId: string) {
+  const upload = UPLOAD_ID_PATTERN.test(uploadId)
+    ? await findUpload(uploadId, atlasId)
+    : undefined;
+  if (!upload) return { body: { error: "UPLOAD_NOT_FOUND" }, status: 404 as const };
+  return {
+    body: {
+      uploadId: upload.id,
+      status: upload.status,
+      partSize: upload.partSize,
+      partCount: upload.partCount,
+      assetId: upload.mediaAssetId,
+    },
+    status: 200 as const,
+  };
+}
+
 export async function abortUploadForAtlas(
   atlasId: string,
   uploadId: string,
