@@ -106,7 +106,7 @@ public struct RouteBatchJournalStore {
         guard stage == .idle, let journal = try? store.load(journeyID) else { return }
         draft = journal.draft
         switch journal.phase {
-        case .uploading: stage = .interrupted(MediaFailure.uploadPending.localizedDescription)
+        case .uploading: stage = .interrupted("照片上传未完成。")
         case .applying, .applied: Task { await reconcile(rejected: false) }
         }
     }
