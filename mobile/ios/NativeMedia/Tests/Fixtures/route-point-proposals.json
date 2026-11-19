@@ -1,0 +1,662 @@
+{
+  "algorithmVersion": "route-point-proposal-v1",
+  "cases": [
+    {
+      "name": "new clusters and every unplaced reason",
+      "journey": {
+        "id": "journey-kanto",
+        "revision": 4,
+        "startedOn": "2026-05-01",
+        "endedOn": "2026-05-05",
+        "routePoints": [
+          {
+            "id": "point-tokyo",
+            "latitude": 35.6812,
+            "longitude": 139.7671,
+            "occurredAt": "2026-05-01T00:00:00.000Z"
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "id": "photo-a",
+          "signal": {
+            "latitude": 35.3192,
+            "longitude": 139.5467,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 20,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-05-03T10:00:00+09:00",
+            "capturedLocal": "2026-05-03T10:00:00",
+            "offsetMinutes": 540
+          }
+        },
+        {
+          "id": "photo-b",
+          "signal": {
+            "latitude": 35.323,
+            "longitude": 139.55,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 10,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-05-03T11:00:00+09:00",
+            "capturedLocal": "2026-05-03T11:00:00",
+            "offsetMinutes": 540
+          }
+        },
+        {
+          "id": "photo-no-gps",
+          "signal": {
+            "spatialSource": "unknown",
+            "spatialGranularity": "unknown",
+            "accuracyMeters": null,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-05-03T12:00:00+09:00",
+            "capturedLocal": "2026-05-03T12:00:00",
+            "offsetMinutes": 540
+          }
+        },
+        {
+          "id": "video-no-signal",
+          "signal": null
+        },
+        {
+          "id": "photo-accuracy-unknown",
+          "signal": {
+            "latitude": 35.3192,
+            "longitude": 139.5467,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": null,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-05-03T10:30:00+09:00",
+            "capturedLocal": "2026-05-03T10:30:00",
+            "offsetMinutes": 540
+          }
+        },
+        {
+          "id": "photo-coarse",
+          "signal": {
+            "latitude": 35.3192,
+            "longitude": 139.5467,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 800,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-05-03T10:40:00+09:00",
+            "capturedLocal": "2026-05-03T10:40:00",
+            "offsetMinutes": 540
+          }
+        },
+        {
+          "id": "photo-no-time",
+          "signal": {
+            "latitude": 35.3192,
+            "longitude": 139.5467,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 15,
+            "captureTimeSource": "unknown",
+            "timezoneState": "unknown",
+            "offsetMinutes": null
+          }
+        },
+        {
+          "id": "photo-local-only",
+          "signal": {
+            "latitude": 35.2324,
+            "longitude": 139.1069,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 8,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "local-only",
+            "capturedLocal": "2026-05-04T09:15:00",
+            "offsetMinutes": null
+          }
+        }
+      ],
+      "expected": {
+        "matchExisting": [],
+        "suggestNew": [
+          {
+            "files": [
+              "photo-a",
+              "photo-b"
+            ],
+            "representative": {
+              "file": "photo-b",
+              "latitude": 35.323,
+              "longitude": 139.55
+            },
+            "basis": {
+              "reason": "spatiotemporal-cluster",
+              "evidence": [
+                "coordinate:exif",
+                "time:absolute"
+              ],
+              "uncertainty": []
+            }
+          },
+          {
+            "files": [
+              "photo-local-only"
+            ],
+            "representative": {
+              "file": "photo-local-only",
+              "latitude": 35.2324,
+              "longitude": 139.1069
+            },
+            "basis": {
+              "reason": "single-observation-candidate",
+              "evidence": [
+                "coordinate:exif",
+                "time:local-only"
+              ],
+              "uncertainty": [
+                "local-time-no-offset",
+                "single-observation-candidate"
+              ]
+            }
+          }
+        ],
+        "pendingConfirmation": [
+          {
+            "files": [
+              "photo-accuracy-unknown"
+            ],
+            "basis": {
+              "reason": "accuracy-unknown",
+              "evidence": [
+                "coordinate:exif",
+                "time:absolute"
+              ],
+              "uncertainty": [
+                "accuracy-unknown"
+              ]
+            }
+          },
+          {
+            "files": [
+              "photo-coarse"
+            ],
+            "basis": {
+              "reason": "accuracy-too-coarse",
+              "evidence": [
+                "coordinate:exif",
+                "time:absolute"
+              ],
+              "uncertainty": [
+                "accuracy-too-coarse"
+              ]
+            }
+          },
+          {
+            "files": [
+              "photo-no-gps"
+            ],
+            "basis": {
+              "reason": "missing-coordinate-evidence",
+              "evidence": [
+                "time:absolute"
+              ],
+              "uncertainty": [
+                "accuracy-unknown"
+              ]
+            }
+          },
+          {
+            "files": [
+              "video-no-signal"
+            ],
+            "basis": {
+              "reason": "missing-coordinate-evidence",
+              "evidence": [],
+              "uncertainty": [
+                "capture-time-unknown",
+                "accuracy-unknown"
+              ]
+            }
+          },
+          {
+            "files": [
+              "photo-no-time"
+            ],
+            "basis": {
+              "reason": "missing-time-evidence",
+              "evidence": [
+                "coordinate:exif"
+              ],
+              "uncertainty": [
+                "capture-time-unknown"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "existing matches and a GPS/time conflict",
+      "journey": {
+        "id": "journey-kansai",
+        "revision": 7,
+        "startedOn": "2026-05-01",
+        "endedOn": "2026-05-04",
+        "routePoints": [
+          {
+            "id": "point-kyoto",
+            "latitude": 35.0116,
+            "longitude": 135.7681,
+            "occurredAt": "2026-05-01T02:00:00.000Z"
+          },
+          {
+            "id": "point-nara",
+            "latitude": 34.6851,
+            "longitude": 135.8048,
+            "occurredAt": "2026-05-03T03:00:00.000Z"
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "id": "kyoto-photo",
+          "signal": {
+            "latitude": 35.014,
+            "longitude": 135.77,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 6,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-05-01T12:00:00+09:00",
+            "capturedLocal": "2026-05-01T12:00:00",
+            "offsetMinutes": 540
+          }
+        },
+        {
+          "id": "nara-photo",
+          "signal": {
+            "latitude": 34.686,
+            "longitude": 135.803,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 12,
+            "captureTimeSource": "gps",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-05-03T03:30:00.000Z",
+            "capturedLocal": "2026-05-03T03:30:00",
+            "offsetMinutes": 0
+          }
+        },
+        {
+          "id": "conflict-photo",
+          "signal": {
+            "latitude": 35.012,
+            "longitude": 135.769,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 6,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-05-03T11:00:00+09:00",
+            "capturedLocal": "2026-05-03T11:00:00",
+            "offsetMinutes": 540
+          }
+        }
+      ],
+      "expected": {
+        "matchExisting": [
+          {
+            "routePointId": "point-kyoto",
+            "files": [
+              "kyoto-photo"
+            ],
+            "basis": {
+              "reason": "existing-route-point-evidence",
+              "evidence": [
+                "coordinate:exif",
+                "time:absolute",
+                "placement:gps",
+                "placement:time",
+                "placement:journey-date",
+                "placement:current-context"
+              ],
+              "uncertainty": []
+            }
+          },
+          {
+            "routePointId": "point-nara",
+            "files": [
+              "nara-photo"
+            ],
+            "basis": {
+              "reason": "existing-route-point-evidence",
+              "evidence": [
+                "coordinate:exif",
+                "time:absolute",
+                "placement:gps",
+                "placement:time",
+                "placement:journey-date",
+                "placement:current-context"
+              ],
+              "uncertainty": []
+            }
+          }
+        ],
+        "suggestNew": [],
+        "pendingConfirmation": [
+          {
+            "files": [
+              "conflict-photo"
+            ],
+            "basis": {
+              "reason": "conflicting-route-evidence",
+              "evidence": [
+                "coordinate:exif",
+                "time:absolute"
+              ],
+              "uncertainty": [
+                "gps-time-conflict"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "implausible speed and ambiguous existing route",
+      "journey": {
+        "id": "journey-paris",
+        "revision": 2,
+        "startedOn": "2026-06-10",
+        "endedOn": null,
+        "routePoints": [
+          {
+            "id": "point-west",
+            "latitude": 48.8566,
+            "longitude": 2.3522,
+            "occurredAt": null
+          },
+          {
+            "id": "point-east",
+            "latitude": 48.8566,
+            "longitude": 2.4,
+            "occurredAt": null
+          }
+        ]
+      },
+      "inputs": [
+        {
+          "id": "between-points",
+          "signal": {
+            "latitude": 48.8566,
+            "longitude": 2.3761,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 5,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-06-10T10:00:00+02:00",
+            "capturedLocal": "2026-06-10T10:00:00",
+            "offsetMinutes": 120
+          }
+        },
+        {
+          "id": "tokyo-jump",
+          "signal": {
+            "latitude": 35.6812,
+            "longitude": 139.7671,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 5,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-06-10T18:00:00+09:00",
+            "capturedLocal": "2026-06-10T18:00:00",
+            "offsetMinutes": 540
+          }
+        },
+        {
+          "id": "paris-before-jump",
+          "signal": {
+            "latitude": 48.8738,
+            "longitude": 2.295,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 5,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-06-10T10:30:00+02:00",
+            "capturedLocal": "2026-06-10T10:30:00",
+            "offsetMinutes": 120
+          }
+        }
+      ],
+      "expected": {
+        "matchExisting": [],
+        "suggestNew": [],
+        "pendingConfirmation": [
+          {
+            "files": [
+              "between-points"
+            ],
+            "basis": {
+              "reason": "ambiguous-existing-route",
+              "evidence": [
+                "coordinate:exif",
+                "time:absolute"
+              ],
+              "uncertainty": []
+            }
+          },
+          {
+            "files": [
+              "paris-before-jump"
+            ],
+            "basis": {
+              "reason": "implausible-speed",
+              "evidence": [
+                "coordinate:exif",
+                "time:absolute"
+              ],
+              "uncertainty": [
+                "speed-conflict"
+              ]
+            }
+          },
+          {
+            "files": [
+              "tokyo-jump"
+            ],
+            "basis": {
+              "reason": "implausible-speed",
+              "evidence": [
+                "coordinate:exif",
+                "time:absolute"
+              ],
+              "uncertainty": [
+                "speed-conflict"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "cluster diameter and twelve hour window",
+      "journey": {
+        "id": "journey-coast",
+        "revision": 1,
+        "startedOn": "2026-07-01",
+        "endedOn": "2026-07-03",
+        "routePoints": []
+      },
+      "inputs": [
+        {
+          "id": "walk-1",
+          "signal": {
+            "latitude": 43.7,
+            "longitude": 7.26,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 9,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-07-01T09:00:00+02:00",
+            "capturedLocal": "2026-07-01T09:00:00",
+            "offsetMinutes": 120
+          }
+        },
+        {
+          "id": "walk-2",
+          "signal": {
+            "latitude": 43.7,
+            "longitude": 7.2786,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 9,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-07-01T09:30:00+02:00",
+            "capturedLocal": "2026-07-01T09:30:00",
+            "offsetMinutes": 120
+          }
+        },
+        {
+          "id": "walk-3",
+          "signal": {
+            "latitude": 43.7,
+            "longitude": 7.2972,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 4,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-07-01T10:00:00+02:00",
+            "capturedLocal": "2026-07-01T10:00:00",
+            "offsetMinutes": 120
+          }
+        },
+        {
+          "id": "walk-4",
+          "signal": {
+            "latitude": 43.7,
+            "longitude": 7.3158,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 9,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-07-01T10:30:00+02:00",
+            "capturedLocal": "2026-07-01T10:30:00",
+            "offsetMinutes": 120
+          }
+        },
+        {
+          "id": "walk-5",
+          "signal": {
+            "latitude": 43.7,
+            "longitude": 7.3344,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 9,
+            "captureTimeSource": "exif-original",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-07-01T11:00:00+02:00",
+            "capturedLocal": "2026-07-01T11:00:00",
+            "offsetMinutes": 120
+          }
+        },
+        {
+          "id": "next-morning",
+          "signal": {
+            "latitude": 43.7,
+            "longitude": 7.26,
+            "spatialSource": "exif",
+            "spatialGranularity": "coordinate",
+            "accuracyMeters": 9,
+            "captureTimeSource": "gps",
+            "timezoneState": "offset-known",
+            "capturedAt": "2026-07-02T06:00:00.000Z",
+            "capturedLocal": "2026-07-02T06:00:00",
+            "offsetMinutes": 0
+          }
+        }
+      ],
+      "expected": {
+        "matchExisting": [],
+        "suggestNew": [
+          {
+            "files": [
+              "walk-1",
+              "walk-2",
+              "walk-3",
+              "walk-4"
+            ],
+            "representative": {
+              "file": "walk-3",
+              "latitude": 43.7,
+              "longitude": 7.2972
+            },
+            "basis": {
+              "reason": "spatiotemporal-cluster",
+              "evidence": [
+                "coordinate:exif",
+                "time:absolute"
+              ],
+              "uncertainty": []
+            }
+          },
+          {
+            "files": [
+              "walk-5"
+            ],
+            "representative": {
+              "file": "walk-5",
+              "latitude": 43.7,
+              "longitude": 7.3344
+            },
+            "basis": {
+              "reason": "single-observation-candidate",
+              "evidence": [
+                "coordinate:exif",
+                "time:absolute"
+              ],
+              "uncertainty": [
+                "single-observation-candidate"
+              ]
+            }
+          },
+          {
+            "files": [
+              "next-morning"
+            ],
+            "representative": {
+              "file": "next-morning",
+              "latitude": 43.7,
+              "longitude": 7.26
+            },
+            "basis": {
+              "reason": "single-observation-candidate",
+              "evidence": [
+                "coordinate:exif",
+                "time:absolute"
+              ],
+              "uncertainty": [
+                "single-observation-candidate"
+              ]
+            }
+          }
+        ],
+        "pendingConfirmation": []
+      }
+    }
+  ]
+}

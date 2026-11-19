@@ -32,6 +32,8 @@ public struct ImportRecord: Codable, Equatable, Identifiable, Sendable {
     public var assetId: String?
     public var cancelled = false
     public var aborted = false
+    /// Normalized capture evidence sent once with `/api/uploads/start`.
+    public var recordedEvidence: RecordedEvidence? = nil
 }
 
 @MainActor public protocol PartUploading: AnyObject {
@@ -55,16 +57,23 @@ public enum ImportCancellation: Equatable { case cancelled, alreadyCompleted(Str
         var values = URLResourceValues(); values.isExcludedFromBackup = true
         var destination = directory; try destination.setResourceValues(values)
     }
-    public func stage(file: URL, fileName: String, mimeType: String, journeyId: String, routePointId: String?) throws -> ImportRecord {
+    public func stage(file: URL, fileName: String, mimeType: String, journeyId: String, routePointId: String?,
+                      recordedEvidence: RecordedEvidence? = nil) throws -> ImportRecord {
         guard session.access == .owner else { throw MediaFailure.readOnly }
         let id = UUID(), target = directory.appendingPathComponent(UUID().uuidString + ".source")
         try FileManager.default.copyItem(at: file, to: target)
         let bytes = (try FileManager.default.attributesOfItem(atPath: target.path)[.size] as? NSNumber)?.int64Value ?? 0
         guard bytes > 0 else { try? FileManager.default.removeItem(at: target); throw MediaFailure.invalidUpload }
-        let record = ImportRecord(id: id, scopeID: session.scopeID, journeyId: journeyId, routePointId: routePointId,
+        var record = ImportRecord(id: id, scopeID: session.scopeID, journeyId: journeyId, routePointId: routePointId,
                                   fileName: fileName, mimeType: mimeType, bytes: bytes, file: target)
+        record.recordedEvidence = recordedEvidence
         try save(record)
         return record
+    }
+    /// The saved journal entry, or nil once it has been removed.
+    public func record(_ id: UUID) throws -> ImportRecord? {
+        guard FileManager.default.fileExists(atPath: directory.appendingPathComponent(id.uuidString + ".json").path) else { return nil }
+        return try read(id)
     }
     public func pending() throws -> [ImportRecord] {
         try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
@@ -114,10 +123,14 @@ public enum ImportCancellation: Equatable { case cancelled, alreadyCompleted(Str
             guard !record.startAttempted else { throw MediaFailure.uploadStartUnknown }
             record.startAttempted = true; try save(record)
             struct Started: Decodable { let uploadId: String; let partSize: Int; let partCount: Int }
-            let body = try JSONSerialization.data(withJSONObject: [
+            var start: [String: Any] = [
                 "journeyId": record.journeyId, "routePointId": record.routePointId as Any? ?? NSNull(),
                 "fileName": record.fileName, "mimeType": record.mimeType, "bytes": record.bytes
-            ])
+            ]
+            if let evidence = record.recordedEvidence {
+                start["recordedEvidence"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(evidence))
+            }
+            let body = try JSONSerialization.data(withJSONObject: start)
             let result = try JSONDecoder().decode(Started.self, from: await session.write("/api/uploads/start", body: body))
             record.uploadId = result.uploadId; record.partSize = result.partSize; record.partCount = result.partCount
             // Persist the remote identity even if cancellation arrived during start.
