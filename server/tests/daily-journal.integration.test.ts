@@ -179,12 +179,17 @@ describe("private daily journal API and PostgreSQL", () => {
       const before = await (await request()).json();
       const response = await request("/suggest", "POST", owner.cookie, { chapters });
       expect(response.status).toBe(200);
-      expect(upstream).toHaveBeenCalledTimes(1);
-      expect(upstream.mock.calls[0][0]).toBe("https://model.example.test/v1/chat/completions");
-      const body = JSON.parse(upstream.mock.calls[0][1]!.body as string);
-      expect(body.model).toBe("mock-model");
-      expect(body.response_format.json_schema.strict).toBe(true);
-      expect(body).not.toHaveProperty("document");
+      expect(upstream).toHaveBeenCalledTimes(2);
+      for (const [url, init] of upstream.mock.calls) {
+        expect(url).toBe("https://model.example.test/v1/chat/completions");
+        const body = JSON.parse(init!.body as string);
+        expect(body.model).toBe("mock-model");
+        expect(body.response_format.json_schema.strict).toBe(true);
+        expect(body).not.toHaveProperty("document");
+      }
+      expect((await response.json()).suggestions).toEqual(chapters.flatMap(chapter =>
+        chapter.events.map(event => ({ eventId: event.id, text: event.source, questions: [], background: "" })),
+      ));
       expect(await (await request()).json()).toEqual(before);
     } finally { upstream.mockRestore(); Object.assign(serverConfig, prior); }
   });

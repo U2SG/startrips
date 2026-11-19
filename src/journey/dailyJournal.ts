@@ -126,11 +126,11 @@ export function journalNarrativeText(event: Pick<JournalEvent, "text" | "source"
   if (event.edited) return event.text;
   const source = event.source.trim();
   const text = event.text.trim() || source;
-  if (journalFirstPerson.test(source)) return source;
   const wake = text.match(journalWakeSummary);
   if (wake) {
+    if (journalFirstPerson.test(source)) return source;
     const [, approximateBefore, time, approximateAfter] = wake;
-    return `我${approximateBefore || approximateAfter ? "大约" : ""}在 ${time} 醒来。`;
+    return `${approximateBefore || approximateAfter ? "大约 " : ""}${time} 醒来。`;
   }
   // Remove anonymous reporting verbs. Named speakers and direct quotes are prose.
   return text.replace(journalReportedLead, "$1");
