@@ -50,8 +50,8 @@ final class RequestDisciplineTests: XCTestCase {
     override func setUp() async throws { CountingServer.reset(); AtlasSession.testProtocolClasses = [CountingServer.self] }
     override func tearDown() async throws { AtlasSession.testProtocolClasses = [] }
 
-    private func signedIn() async throws -> (AtlasSession, String) {
-        let session = AtlasSession()
+    private func signedIn(verificationNow: @escaping () -> Date = Date.init) async throws -> (AtlasSession, String) {
+        let session = AtlasSession(verificationNow: verificationNow)
         try session.configureTestOrigin(origin)
         try session.configureOwner()
         session.loginPresented = true
@@ -70,11 +70,11 @@ final class RequestDisciplineTests: XCTestCase {
         for cookie in await store.allCookies() { await store.deleteCookie(cookie) }
     }
 
-    /// Stream playback reads ~30 pictures a minute. Before: each display read cost three
-    /// get-session calls (revalidate, the scoped request, revalidate) plus one more after
-    /// the download: 4 x 30 = 120 a minute, over the 100/min auth limit. Now: one.
+    /// Reads within one verification window share a session check, including the
+    /// revalidation StoryModel performs after each download.
     func testThirtyPictureReadsCostOneSessionCheck() async throws {
-        let (session, scope) = try await signedIn()
+        var clock = Date(timeIntervalSince1970: 0)
+        let (session, scope) = try await signedIn { clock }
         let media = session.mediaScope(scope: scope, access: .owner)
         for index in 0..<30 {
             let read = try await media.mediaDisplay("asset-\(index)")
@@ -83,6 +83,16 @@ final class RequestDisciplineTests: XCTestCase {
         }
         XCTAssertEqual(CountingServer.count("/read-url"), 30)
         XCTAssertEqual(CountingServer.count("/api/auth/get-session"), 1)
+
+        clock = clock.addingTimeInterval(19)
+        try await media.revalidate()
+        XCTAssertEqual(CountingServer.count("/api/auth/get-session"), 1)
+
+        clock = clock.addingTimeInterval(1)
+        _ = try await media.mediaDisplay("asset-after-expiry")
+        try await media.revalidate()
+        XCTAssertEqual(CountingServer.count("/read-url"), 31)
+        XCTAssertEqual(CountingServer.count("/api/auth/get-session"), 2)
         await cleanUp(session)
     }
 

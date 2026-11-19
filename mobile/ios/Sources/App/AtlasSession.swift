@@ -42,12 +42,16 @@ final class AtlasSession: ObservableObject {
     private(set) var generation = UUID()
     private var refreshID = UUID()
     /// One get-session per short window instead of one per media request (auth rate limit).
-    let verification = VerificationCache()
+    let verification: VerificationCache
     #if DEBUG
     /// Unit tests count requests through a stub URLProtocol; never set in the app.
     static var testProtocolClasses: [AnyClass] = []
     #endif
     @Published private(set) var cookieStore = WKWebsiteDataStore.nonPersistent()
+
+    init(verificationNow: @escaping () -> Date = Date.init) {
+        verification = VerificationCache(now: verificationNow)
+    }
 
     #if DEBUG
     // Unit tests opt into a synthetic HTTPS site on this session instance only.
