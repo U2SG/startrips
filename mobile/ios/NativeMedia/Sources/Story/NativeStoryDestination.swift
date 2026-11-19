@@ -2,21 +2,30 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
+/// The app owns the bundled WebKit renderer and its lifetime.
+public typealias Story3DBookBuilder = @MainActor (StoryModel, @escaping () -> Void) -> AnyView
+
 /// Mounted by FeatureDestinations.story; it owns media presentation, never navigation.
 public struct NativeStoryDestination: View {
     @ObservedObject private var model: StoryModel
     private let importer: PhotosImportModel?
     private let exporter: FilmExportModel?
     private let moveModel: MediaMoveModel?
+    private let book3D: Story3DBookBuilder?
     @State private var toolsPresented = false
     @StateObject private var book = StoryBookState()
     @AppStorage(StoryPresentationStyle.defaultsKey) private var storedStyle = StoryPresentationStyle.classic.rawValue
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    public init(model: StoryModel, importer: PhotosImportModel? = nil, exporter: FilmExportModel? = nil, moveModel: MediaMoveModel? = nil) {
-        self.model = model; self.importer = importer; self.exporter = exporter; self.moveModel = moveModel
+    public init(model: StoryModel, importer: PhotosImportModel? = nil, exporter: FilmExportModel? = nil,
+                moveModel: MediaMoveModel? = nil, book3D: Story3DBookBuilder? = nil) {
+        self.model = model; self.importer = importer; self.exporter = exporter; self.moveModel = moveModel; self.book3D = book3D
     }
-    private var style: StoryPresentationStyle { StoryPresentationStyle(stored: storedStyle) }
+    private var style: StoryPresentationStyle {
+        let preference = StoryPresentationStyle(stored: storedStyle)
+        return preference == .book3D && book3D == nil ? .book : preference
+    }
+    private var shows3DBook: Bool { style == .book3D && model.playback == nil }
     private var pagesBook: Bool { model.playback == nil && style == .book }
     public var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +38,7 @@ public struct NativeStoryDestination: View {
         .foregroundStyle(StoryTheme.ink).tint(StoryTheme.ink)
         .background(StoryTheme.background.ignoresSafeArea())
         .onAppear {
+            model.setReading3DBook(shows3DBook)
             model.appear()
             #if DEBUG
             // Screenshot probe only: start playback without a tap.
@@ -52,6 +62,7 @@ public struct NativeStoryDestination: View {
         .onDisappear { model.disappear() }
         .onChange(of: scenePhase) { phase in if phase != .active { model.setPaused(true) } }
         .onChange(of: storedStyle) { _ in model.cancelPaging() }
+        .onChange(of: shows3DBook) { reading in model.setReading3DBook(reading) }
         .sheet(isPresented: $toolsPresented) {
             NavigationStack {
                 ScrollView {
@@ -79,7 +90,7 @@ public struct NativeStoryDestination: View {
             HStack(spacing: 0) {
                 Menu {
                 Picker(selection: $storedStyle) {
-                    ForEach(StoryPresentationStyle.allCases) { option in
+                    ForEach(StoryPresentationStyle.allCases.filter { $0 != .book3D || book3D != nil }) { option in
                         Label(option.label, systemImage: option.symbol).tag(option.rawValue)
                     }
                 } label: { EmptyView() }.pickerStyle(.inline).labelsHidden()
@@ -105,6 +116,10 @@ public struct NativeStoryDestination: View {
             switch style {
             case .book:
                 StoryBook(model: model, state: book, reduceMotion: reduceMotion).id(model.pageGeneration)
+            case .book3D:
+                if let book3D {
+                    book3D(model, { storedStyle = StoryPresentationStyle.book.rawValue }).id(model.pageGeneration)
+                }
             case .stream:
                 StoryStream(model: model)
             case .classic, .noteOverlay:
@@ -124,7 +139,8 @@ public struct NativeStoryDestination: View {
     /// Five equal slots: previous, an auxiliary, play, an auxiliary, next. Empty
     /// slots keep their width, so play always sits on the screen axis.
     private var controls: some View {
-        let pages = style != .stream || model.playback != nil
+        // The 3D book turns its own pages, so its slots stay empty.
+        let pages = !shows3DBook && (style != .stream || model.playback != nil)
         let tools = model.session.access == .owner && (importer != nil || exporter != nil || moveModel != nil)
         return HStack(spacing: 0) {
             slot {

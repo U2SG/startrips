@@ -196,6 +196,20 @@ final class StoryPlaybackTests: XCTestCase {
         XCTAssertFalse(model.paused)
         XCTAssertEqual(model.playback?.paused, false)
     }
+    @MainActor func testReadingTheJourneyNoteIn3DBookMovesCursorOffTheRoutePoint() throws {
+        let journey = try MediaFixtures.journey(), intent = MediaFixtures.intent()
+        let session = ScopedMediaSession(scopeID: "owner", access: .owner,
+            read: { _ in throw MediaFailure.unavailable }, request: { _, _, _ in Data() }, revalidate: {})
+        let model = try StoryModel(journey: journey, intent: intent, session: session, ownership: PlaybackOwnership(),
+            currentIntent: { intent }, latestJourney: { journey }, onReturn: { _ in })
+        defer { model.disappear() }
+        model.setReading3DBook(true)
+        XCTAssertEqual(model.committedRoutePointID, "point-one")
+        // The bridge reports the Journey note page with neither a point nor an asset.
+        model.follow3DBookPage(routePointID: nil, assetID: nil, isCover: false)
+        XCTAssertEqual(model.cursor.current?.role, .journeyCover)
+        XCTAssertNil(model.committedRoutePointID)
+    }
     func testClockTicksAreNotViewChangesButBeatsPausesAndTempoAre() throws {
         let journey = try MediaFixtures.journey()
         let clock = PlaybackClock(beats: JourneyPlaybackPlan.build(journey))

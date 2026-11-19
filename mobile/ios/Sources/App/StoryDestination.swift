@@ -11,7 +11,11 @@ struct StoryDestination: View {
     var body: some View {
         Group {
             if let feature {
-                NativeMediaFeature(model: feature)
+                NativeMediaFeature(model: feature) { model, useFlatBook in
+                    let journey = router.journeys.first { $0.id == target.journeyId }
+                    return AnyView(StoryBook3DView(model: model, startedOn: journey?.startedOn ?? "",
+                                                   endedOn: journey?.endedOn, useFlatBook: useFlatBook))
+                }
             } else if let failure {
                 VStack {
                     Text(failure)
