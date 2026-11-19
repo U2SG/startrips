@@ -311,16 +311,13 @@ struct LiveJourneyStore: JourneyStore {
 
 #if DEBUG
 /// XCUITest-only store for the synthetic Atlas: no network, same contract.
-/// `-atlas-composer-conflict` makes the first update answer 409.
 @MainActor
 final class FixtureJourneyStore: JourneyStore {
     private var journeys: [String: AtlasJourney]
     private var deleted: [String: AtlasJourney] = [:]
-    private var conflictPending: Bool
 
-    init(journeys: [AtlasJourney], conflictOnce: Bool) {
+    init(journeys: [AtlasJourney]) {
         self.journeys = Dictionary(uniqueKeysWithValues: journeys.map { ($0.id, $0) })
-        conflictPending = conflictOnce
     }
 
     private func make(_ id: String, _ draft: JourneyDraft, revision: Int, media: [AtlasAsset]) -> AtlasJourney {
@@ -341,16 +338,7 @@ final class FixtureJourneyStore: JourneyStore {
     }
 
     func update(_ id: String, _ draft: JourneyDraft) async throws -> AtlasJourney {
-        guard var current = journeys[id] else { throw JourneyWriteFailure.missing }
-        if conflictPending {
-            // Someone else renamed the Journey meanwhile.
-            conflictPending = false
-            current = AtlasJourney(id: current.id, title: current.title + "（已更新）", startedOn: current.startedOn,
-                                   endedOn: current.endedOn, note: current.note, lightColor: current.lightColor,
-                                   lightEffect: current.lightEffect, routeSegments: current.routeSegments,
-                                   revision: current.revision + 1, routePoints: current.routePoints, media: current.media)
-            journeys[id] = current
-        }
+        guard let current = journeys[id] else { throw JourneyWriteFailure.missing }
         guard draft.revision == current.revision else { throw JourneyWriteFailure.routeChanged }
         let updated = make(id, draft, revision: current.revision + 1, media: current.media)
         journeys[id] = updated

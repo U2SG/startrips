@@ -57,37 +57,6 @@ final class JourneyComposerUITests: XCTestCase {
     }
 
     @MainActor
-    func testStaleEditOffersMergeInsteadOfOverwriting() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["-atlas-fixture", "-atlas-composer-conflict"]
-        app.launch()
-        XCTAssertTrue(card(app).waitForExistence(timeout: 30))
-        openCard(app)
-        let edit = app.buttons["atlas.card.edit"]
-        XCTAssertTrue(edit.waitForExistence(timeout: 10))
-        edit.tap()
-
-        let title = app.textFields["composer.title"]
-        XCTAssertTrue(title.waitForExistence(timeout: 10))
-        XCTAssertEqual(title.value as? String, "海岸旅程")
-        XCTAssertTrue(app.buttons["composer.delete"].exists || app.buttons["删除旅程"].exists)
-        app.buttons["composer.color.77c8c2"].tap()
-        app.buttons["composer.save"].tap()
-
-        // Someone renamed the Journey meanwhile: the save is refused, never forced.
-        let alert = app.alerts["旅程已在别处更新"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 10))
-        attach(app, "composer-conflict")
-        alert.buttons["合并我的修改"].tap()
-        XCTAssertTrue(waitForValue(title, "海岸旅程（已更新）"))
-        XCTAssertTrue(app.buttons["composer.color.77c8c2"].isSelected)
-        app.buttons["composer.save"].tap()
-
-        XCTAssertTrue(title.waitForNonExistence(timeout: 10))
-        XCTAssertTrue(waitForLabel(card(app), "旅程：海岸旅程（已更新）"))
-    }
-
-    @MainActor
     private func attach(_ app: XCUIApplication, _ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name

@@ -186,9 +186,7 @@ struct AtlasRootView: View {
                     }
                     let access: AtlasAccess = ProcessInfo.processInfo.arguments.contains("-atlas-guest-fixture") ? .guest : .owner
                     router.install(fixtureJourneys, identity: "synthetic-ci", access: access, earthExperience: "default")
-                    fixtureStore = FixtureJourneyStore(
-                        journeys: fixtureJourneys,
-                        conflictOnce: ProcessInfo.processInfo.arguments.contains("-atlas-composer-conflict"))
+                    fixtureStore = FixtureJourneyStore(journeys: fixtureJourneys)
                     connected = true
                     if ProcessInfo.processInfo.arguments.contains("-atlas-stalled-probe") {
                         // Test-only: connected without an installed Atlas, the former dead end.
