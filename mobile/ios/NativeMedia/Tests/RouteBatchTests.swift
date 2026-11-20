@@ -71,11 +71,14 @@ private struct ParityFixture: Decodable {
     }
     func undo(_ operationID: String, journeyID: String) async throws -> RouteBatchOperation {
         calls.append("undo:" + operationID)
-        if let undoError { readResult = .success(RouteBatchOperation(operationId: operationID, status: "undone",
-                                                                      undo: .init(eligible: false, expiresAt: nil, reason: "undone")))
-            throw undoError }
-        return RouteBatchOperation(operationId: operationID, status: "undone", undo: .init(eligible: false, expiresAt: nil, reason: "undone"))
+        let result = RouteBatchOperation(operationId: operationID, status: undoStatus,
+                                         undo: .init(eligible: false, expiresAt: nil, reason: "already-resolved"),
+                                         outcome: .init(status: undoStatus == "undone" ? "undone" : "partial", conflicts: undoConflicts))
+        if let undoError { readResult = .success(result); throw undoError }
+        return result
     }
+    var undoStatus = "undone"
+    var undoConflicts: [RouteBatchOperation.Conflict] = []
 }
 
 final class RouteBatchTests: XCTestCase {
@@ -373,6 +376,18 @@ final class RouteBatchTests: XCTestCase {
         try await waitUntil { if case .unknown = relaunched.stage { return true }; return false }
         XCTAssertEqual(backend.calls.filter { $0 == "apply" }.count, 1, "A lost response is never a replay permit")
         XCTAssertNotNil(try store.load("journey-kansai"), "The unknown batch stays recorded")
+
+        // Dismissing an unknown result keeps the operation for the next open, which only reads.
+        relaunched.finish()
+        XCTAssertFalse(relaunched.presented)
+        XCTAssertNotNil(try store.load("journey-kansai"))
+        backend.readResult = .success(RouteBatchOperation(operationId: "", status: "applied",
+                                                          undo: .init(eligible: true, expiresAt: nil, reason: nil)))
+        let reopened = RoutePointBatchModel(journeyID: "journey-kansai", backend: backend, store: store) {}
+        reopened.restore()
+        try await waitUntil { reopened.stage == .applied }
+        XCTAssertEqual(reopened.operation?.undo.eligible, true)
+        XCTAssertEqual(backend.calls.filter { $0 == "apply" }.count, 1)
     }
 
     @MainActor func testRejectedApplyReleasesTheBatchWithPhotosKept() async throws {
@@ -414,6 +429,44 @@ final class RouteBatchTests: XCTestCase {
         XCTAssertEqual(backend.calls, ["read:" + operationId, "undo:" + operationId, "read:" + operationId])
         guard case .done = model.stage else { return XCTFail("\(model.stage)") }
         XCTAssertNil(try store.load("journey-kansai"))
+    }
+
+    @MainActor func testPartialUndoIsShownWithItsConflictsAndKeepsTheJournal() async throws {
+        let root = try directory()
+        let (model, backend, store) = try await self.model(case: 1, root: root)
+        await model.confirm()
+        backend.undoStatus = "partially-undone"
+        backend.undoConflicts = [.init(kind: "media-changed", id: "asset-kyoto-photo"),
+                                 .init(kind: "route-point-referenced", id: "p1"), .init(kind: "route-point-referenced", id: "p2")]
+        await model.undo()
+        XCTAssertEqual(model.stage, .partiallyUndone, "A partial undo is never reported as undone")
+        XCTAssertEqual(RouteBatchConflictSummary.lines(model.operation?.outcome?.conflicts ?? []),
+                       ["1 张照片已在别处改动", "2 个途径点仍有其他照片"])
+        XCTAssertNotNil(try store.load("journey-kansai"))
+
+        // Reopening reads the same partial outcome again.
+        backend.readResult = .success(RouteBatchOperation(operationId: "", status: "partially-undone",
+            undo: .init(eligible: false, expiresAt: nil, reason: "already-resolved"),
+            outcome: .init(status: "partial", conflicts: backend.undoConflicts)))
+        let reopened = RoutePointBatchModel(journeyID: "journey-kansai", backend: backend, store: store) {}
+        reopened.restore()
+        try await waitUntil { reopened.stage == .partiallyUndone }
+        reopened.finish()
+        XCTAssertNil(try store.load("journey-kansai"), "Closing a known outcome releases it")
+    }
+
+    func testOperationDecodesServerOutcomeWithAndWithoutConflicts() throws {
+        let applied = try JSONDecoder().decode(RouteBatchOperation.self, from: Data(#"""
+        {"operationId":"route-batch:x","status":"applied","baseRevision":3,"appliedRevision":4,"receipt":null,
+         "outcome":{"status":"applied","mounted":true},"undo":{"eligible":true,"expiresAt":"2026-11-21T00:00:00.000Z","reason":null}}
+        """#.utf8))
+        XCTAssertNil(applied.outcome?.conflicts)
+        let partial = try JSONDecoder().decode(RouteBatchOperation.self, from: Data(#"""
+        {"operationId":"route-batch:x","status":"partially-undone","outcome":{"status":"partial","restoredAssetIds":[],
+         "removedRoutePointIds":[],"conflicts":[{"kind":"route-point-missing","id":"p"}],"revision":5},
+         "undo":{"eligible":false,"expiresAt":null,"reason":"already-resolved"}}
+        """#.utf8))
+        XCTAssertEqual(RouteBatchConflictSummary.lines(partial.outcome?.conflicts ?? []), ["1 个途径点已不存在"])
     }
 
     @MainActor func testIneligibleUndoIsNotSent() async throws {

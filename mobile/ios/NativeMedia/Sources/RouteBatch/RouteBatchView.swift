@@ -52,7 +52,7 @@ struct RouteBatchSheet: View {
                     .fontWeight(.semibold)
                     .disabled(model.busy || model.draft?.isComplete != true)
                     .accessibilityIdentifier("route-batch.confirm")
-            case .applied, .done, .unknown, .interrupted:
+            case .applied, .partiallyUndone, .done, .unknown, .interrupted:
                 Button("完成") { model.finish() }.fontWeight(.semibold).accessibilityIdentifier("route-batch.finish")
             default: EmptyView()
             }
@@ -80,6 +80,15 @@ struct RouteBatchSheet: View {
                 }
                 if let message = model.message { Text(message).font(.callout) }
             }.padding(StoryTheme.grid(6))
+        case .partiallyUndone:
+            VStack(spacing: StoryTheme.grid(4)) {
+                Image(systemName: "exclamationmark.circle").font(.largeTitle).foregroundStyle(StoryTheme.accent)
+                    .accessibilityHidden(true)
+                Text("部分未撤销").font(StoryTheme.serif(.title3))
+                ForEach(RouteBatchConflictSummary.lines(model.operation?.outcome?.conflicts ?? []), id: \.self) { line in
+                    Text(line)
+                }
+            }.padding(StoryTheme.grid(6)).accessibilityElement(children: .combine)
         case .interrupted(let text), .unknown(let text), .done(let text):
             VStack(spacing: StoryTheme.grid(4)) {
                 Text(text).multilineTextAlignment(.center)

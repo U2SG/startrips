@@ -11,9 +11,38 @@ public struct RouteBatchOperation: Codable, Equatable, Sendable {
         public var expiresAt: String?
         public var reason: String?
     }
+    /// What an undo could not restore; `kind` is `media-changed`,
+    /// `route-point-missing` or `route-point-referenced`.
+    public struct Conflict: Codable, Equatable, Sendable {
+        public var kind: String
+        public var id: String
+    }
+    public struct Outcome: Codable, Equatable, Sendable {
+        public var status: String?
+        public var conflicts: [Conflict]?
+    }
     public var operationId: String
     public var status: String
     public var undo: Undo
+    public var outcome: Outcome? = nil
+
+    var fullyUndone: Bool { status == "undone" }
+    var partiallyUndone: Bool { status == "partially-undone" }
+}
+
+/// What a partial undo left in place, one line per kind with its count.
+enum RouteBatchConflictSummary {
+    static func lines(_ conflicts: [RouteBatchOperation.Conflict]) -> [String] {
+        let names = [("media-changed", "张照片已在别处改动"), ("route-point-missing", "个途径点已不存在"),
+                     ("route-point-referenced", "个途径点仍有其他照片")]
+        var lines = names.compactMap { kind, name -> String? in
+            let count = conflicts.filter { $0.kind == kind }.count
+            return count > 0 ? "\(count) \(name)" : nil
+        }
+        let other = conflicts.filter { conflict in !names.contains { $0.0 == conflict.kind } }.count
+        if other > 0 { lines.append("\(other) 项未撤销") }
+        return lines
+    }
 }
 
 /// One picked file waiting for review: a private temporary copy plus its signal.
@@ -82,6 +111,8 @@ public struct RouteBatchJournalStore {
 @MainActor public final class RoutePointBatchModel: ObservableObject {
     public enum Stage: Equatable {
         case idle, reading, review, uploading(Double), interrupted(String), applying, applied, unknown(String), done(String)
+        /// The server kept part of the batch; `operation.outcome.conflicts` names what.
+        case partiallyUndone
     }
     @Published public private(set) var stage: Stage = .idle
     @Published public private(set) var draft: RouteBatchDraft?
@@ -268,14 +299,7 @@ public struct RouteBatchJournalStore {
         stage = .applying
         do {
             let current = try await backend.read(journal.operationId, journeyID: journeyID)
-            operation = current
-            if current.status == "undone" || current.status == "partially-undone" {
-                try? store.remove(journeyID); stage = .done("已撤销。")
-            } else {
-                var applied = journal; applied.phase = .applied
-                try? store.save(applied)
-                stage = .applied
-            }
+            settle(current, journal: journal)
             try? await onChanged()
         } catch MediaFailure.http(404) where rejected {
             try? store.remove(journeyID)
@@ -305,11 +329,10 @@ public struct RouteBatchJournalStore {
                 // Check the same operation; never send a second undo blindly.
                 outcome = try await backend.read(current.operationId, journeyID: journeyID)
             }
-            self.operation = outcome
-            if outcome.status == "undone" || outcome.status == "partially-undone" {
-                try? store.remove(journeyID)
-                stage = .done("已撤销。")
+            if outcome.fullyUndone || outcome.partiallyUndone, let journal = try? store.load(journeyID) {
+                settle(outcome, journal: journal)
             } else {
+                self.operation = outcome
                 message = "撤销结果暂时无法确认。"
             }
             try? await onChanged()
@@ -318,11 +341,27 @@ public struct RouteBatchJournalStore {
         }
     }
 
-    /// Closes a settled batch. Uploaded photos always stay in the Journey.
+    /// Records a known server outcome. Only a complete undo releases the
+    /// journal; a partial undo keeps it so reopening shows what remains.
+    private func settle(_ current: RouteBatchOperation, journal: RouteBatchJournal) {
+        operation = current
+        if current.fullyUndone {
+            try? store.remove(journeyID)
+            stage = .done("已撤销。")
+            return
+        }
+        var applied = journal; applied.phase = .applied
+        try? store.save(applied)
+        stage = current.partiallyUndone ? .partiallyUndone : .applied
+    }
+
+    /// Closes the sheet. A batch whose result is unknown keeps its journal,
+    /// so the next open reconciles by reading its status, never by resending.
     public func finish() {
         guard !busy else { return }
+        if case .unknown = stage { presented = false; return }
         switch stage {
-        case .applied, .unknown, .interrupted, .done: try? store.remove(journeyID)
+        case .applied, .partiallyUndone, .interrupted, .done: try? store.remove(journeyID)
         default: break
         }
         discardFiles(); draft = nil; journey = nil; operation = nil; message = nil
