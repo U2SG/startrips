@@ -564,8 +564,9 @@ jobs:
     needs: quick-checks
     if: needs.quick-checks.outputs.ledger_only_final != 'true' && needs.quick-checks.outputs.soc_client_only != 'true' && needs.quick-checks.outputs.ios == 'true'
     runs-on: macos-15
-    # One fresh-process retry is bounded per test in mobile/ios/ci-test.sh.
-    timeout-minutes: 45
+    # One fresh-process retry is bounded per test in mobile/ios/ci-test.sh; a
+    # clean run takes 18-40 min, so one flaky retry must still fit.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
