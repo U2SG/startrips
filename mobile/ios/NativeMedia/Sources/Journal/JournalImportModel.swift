@@ -49,9 +49,15 @@ import Foundation
         self.pollInterval = pollInterval; self.journalChanged = journalChanged; self.journeyChanged = journeyChanged
     }
 
-    private var journalPath: String { "/api/journeys/\(component(journeyID))/journal" }
+    /// Ids are UUIDs or `[A-Za-z0-9_-]`; anything else is escaped.
+    private nonisolated static let idCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+    private nonisolated static func pathID(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: idCharacters) ?? ""
+    }
+    private func pathID(_ value: String) -> String { Self.pathID(value) }
+    private var journalPath: String { "/api/journeys/\(pathID(journeyID))/journal" }
     private static let root = "/api/intents/journal-import"
-    private static func jobPath(_ id: String, _ suffix: String = "") -> String { "\(root)/jobs/\(component(id))\(suffix)" }
+    private static func jobPath(_ id: String, _ suffix: String = "") -> String { "\(root)/jobs/\(pathID(id))\(suffix)" }
 
     public var newChapters: [JournalChapter] {
         guard let draft else { return [] }
@@ -338,7 +344,7 @@ import Foundation
             defer { self.busy = false }
             do {
                 let body = try JSONSerialization.data(withJSONObject: ["baseRevision": saved.revision, "confirmEdited": confirmEdited])
-                let path = self.journalPath + "/imports/\(component(latest.id))/undo"
+                let path = self.journalPath + "/imports/\(pathID(latest.id))/undo"
                 let journal = try JSONDecoder().decode(DailyJournal.Envelope.self, from: await self.backend.send(path, method: "POST", body: body)).journal
                 self.saved = journal
                 if self.stage == .saved { self.stage = .compose }
