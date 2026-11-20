@@ -83,6 +83,8 @@ import Foundation
     public func restore() {
         guard stage == .compose, task == nil, let record = store.load(journeyID) else { return }
         source = record.source
+        // Leave compose first: a second start would replace the persisted request id.
+        stage = .running(nil)
         run { model, version in await model.submitAndObserve(record, version: version) }
     }
 

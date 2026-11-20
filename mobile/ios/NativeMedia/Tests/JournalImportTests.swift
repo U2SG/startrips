@@ -254,6 +254,24 @@ final class JournalImportTests: XCTestCase {
         XCTAssertNil(JournalImportRecordStore(directory: directory).load(journeyID))
     }
 
+    @MainActor func testRestoringAnUnansweredSubmissionCannotStartAnother() async throws {
+        let server = FakeServer()
+        let model = model(server)
+        let id = "66666666-6666-4666-8666-666666666666"
+        try JournalImportRecordStore(directory: directory).save(JournalImportRecord(
+            journeyId: journeyID, requestId: id, source: "原文", fallbackDate: "2026-05-01",
+            provider: .init(baseUrl: "https://model.example", model: "journal-model"), submitted: false))
+        server.reply("POST", root + "/jobs", .failure(MediaFailure.http(502)))
+        model.restore()
+        XCTAssertNotEqual(model.stage, .compose)
+        XCTAssertFalse(model.canStart)
+        model.start()
+        try await waitUntil { model.stage == .interrupted(stopping: false) }
+        XCTAssertEqual(server.count("POST", root + "/jobs"), 1)
+        XCTAssertEqual(server.json("POST", root + "/jobs")?["requestId"] as? String, id)
+        XCTAssertEqual(JournalImportRecordStore(directory: directory).load(journeyID)?.requestId, id)
+    }
+
     @MainActor func testRejectedSubmissionKeepsTheSourceAndForgetsTheJob() async throws {
         let server = FakeServer()
         let model = model(server)
