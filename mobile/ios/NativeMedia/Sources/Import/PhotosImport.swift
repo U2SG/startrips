@@ -4,7 +4,7 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-private struct PickedMediaFile: Transferable {
+struct PickedMediaFile: Transferable {
     let url: URL
     let type: UTType
     static var transferRepresentation: some TransferRepresentation {
@@ -29,6 +29,8 @@ private struct PickedMediaFile: Transferable {
     private let journeyID: String
     let pointForBatch: () -> String?
     private let onImported: ([String]) async throws -> Void
+    /// Several picked photos go to Route Point review instead of a plain import.
+    public var routeBatch: RoutePointBatchModel?
     public init(importer: MultipartImporter, journeyID: String, routePointID: String?,
                 currentPointID: (() -> String?)? = nil, onImported: @escaping ([String]) async throws -> Void) {
         self.importer = importer; self.journeyID = journeyID; self.onImported = onImported
@@ -124,13 +126,19 @@ public struct PhotosImportButton: View {
                 ProgressView("正在读取或上传素材", value: model.progress)
                 Button("取消导入") { model.cancel() }.frame(minHeight: 44)
             } else {
-                PhotosPicker(selection: $selection, maxSelectionCount: 100, matching: .any(of: [.images, .videos]), preferredItemEncoding: .current) {
+                // `photoLibrary` only exposes item identifiers; it never asks for library access.
+                PhotosPicker(selection: $selection, maxSelectionCount: 100, matching: .any(of: [.images, .videos]),
+                             preferredItemEncoding: .current, photoLibrary: .shared()) {
                     Label("添加照片或视频", systemImage: "photo.on.rectangle.angled")
                 }.frame(minHeight: 44).accessibilityIdentifier("story.import")
                 Button("恢复上传") { model.recover() }.frame(minHeight: 44)
                 Button("取消未完成导入") { model.cancelPending() }.frame(minHeight: 44)
             }
+            if let batch = model.routeBatch { RouteBatchEntry(model: batch) }
             if let failure = model.failure { Text(failure).font(.callout) }
-        }.onChange(of: selection) { items in model.importItems(items); selection = [] }
+        }.onChange(of: selection) { items in
+            if !(items.count > 1 && model.routeBatch?.pick(items) == true) { model.importItems(items) }
+            selection = []
+        }
     }
 }

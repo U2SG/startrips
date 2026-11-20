@@ -44,6 +44,16 @@ import UIKit
                 let fresh = try await readJourney()
                 try self.updated(fresh, fresh)
             }
+            let batch = RoutePointBatchModel(
+                journeyID: journey.id,
+                backend: LiveRouteBatchBackend(session: session, importer: transfer, journeyID: journey.id, readJourney: readJourney),
+                store: RouteBatchJournalStore(directory: directory.appendingPathComponent("route-batches"))) { [weak self] in
+                guard let self else { return }
+                let fresh = try await readJourney()
+                try self.updated(fresh, fresh)
+            }
+            importer?.routeBatch = batch
+            batch.restore()
             mover = MediaMoveModel(session: session, journey: journey) { [weak self] source, destination in
                 guard let self else { return }
                 do { try self.updated(source, destination) } catch { self.story.invalidate() }

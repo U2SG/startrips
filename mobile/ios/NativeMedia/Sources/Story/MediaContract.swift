@@ -9,6 +9,9 @@ public struct MediaJourney: Codable, Equatable, Sendable {
     public var coverMediaAssetId: String?
     public var routePoints: [MediaRoutePoint]
     public var media: [MediaAsset]
+    /// Read by the photo Route Point planner only.
+    public var startedOn: String? = nil
+    public var endedOn: String? = nil
     var soundtrack: MediaAsset? {
         media.filter { $0.routePointId == nil && $0.mimeType.hasPrefix("audio/") }.min { $0.sortOrder < $1.sortOrder }
     }
@@ -22,6 +25,7 @@ public struct MediaRoutePoint: Codable, Equatable, Sendable {
     public var isStop: Bool
     public var note: String?
     public var stayAnchorRoutePointId: String?
+    public var occurredAt: String? = nil
 }
 
 public struct MediaAsset: Codable, Equatable, Identifiable, Sendable {
