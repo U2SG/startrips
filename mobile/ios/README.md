@@ -96,6 +96,18 @@ through `POST /api/journeys/:id/restore`. A saved Journey reaches the globe at
 once through a new scene revision, then the normal refresh installs the
 server's Atlas. Shares never show these entries.
 
+## Share links (owner only)
+
+`Sources/App/JourneyShareView.swift` opens from the card's share button. The
+owner picks the web dialog's expiry (1, 7 or 30 days, or a custom instant within
+a year), optionally scopes the link to chosen media, and creates it with
+`POST /api/shares`; the link (`<origin>/share#<token>`) goes straight to the
+system share sheet. The raw token lives only in that sheet's view state and is
+never logged, persisted or listed. The sheet lists this Journey's active links
+from `GET /api/shares` and revokes one through `POST /api/shares/:id/revoke`
+after a confirmation. `Sources/App/JourneyShare.swift` holds the request,
+response and store code; every call goes through `AtlasSession.api`.
+
 ## Native Story and playback
 
 The application links the local StartripsMedia package. StoryDestination constructs the viewer using the current AtlasSession and AppRouter selection. See [Native media integration](NativeMedia/INTEGRATION.md) for the owner/guest contract, background transfers and native test targets.

@@ -13,6 +13,8 @@ struct AtlasChrome: View {
     let onAccount: () -> Void
     /// Owner only: opens the native Journey composer. Nil for a shared Atlas.
     var onCompose: ((ComposerTarget) -> Void)? = nil
+    /// Owner only: opens a Journey's share links. Nil for a shared Atlas.
+    var onShare: ((AtlasJourney) -> Void)? = nil
     @State private var detent: CardDetent = .peek
     @State private var dragOffset: CGFloat = 0
     @State private var peekHeight: CGFloat = 96
@@ -44,7 +46,8 @@ struct AtlasChrome: View {
                                     height: layout.cardHeight(detent, drag: dragOffset),
                                     mediumScrolls: layout.medium >= layout.large || typeSize.isAccessibilitySize,
                                     storyNamespace: storyNamespace, onPeekHeight: { peekHeight = $0 },
-                                    onEdit: compose.map { open -> () -> Void in { open(.edit(journey)) } })
+                                    onEdit: compose.map { open -> () -> Void in { open(.edit(journey)) } },
+                                    onShare: share.map { open -> () -> Void in { open(journey) } })
                             .padding(.horizontal, NightFlight.cardInset)
                         if detent == .peek && !ribbon.isEmpty {
                             TimeRibbon(router: router, model: ribbon)
@@ -149,6 +152,10 @@ struct AtlasChrome: View {
     /// The composer entry exists only for the owner of an installed Atlas.
     private var compose: ((ComposerTarget) -> Void)? {
         router.access == .owner ? onCompose : nil
+    }
+
+    private var share: ((AtlasJourney) -> Void)? {
+        router.access == .owner ? onShare : nil
     }
 
     private var empty: some View {
