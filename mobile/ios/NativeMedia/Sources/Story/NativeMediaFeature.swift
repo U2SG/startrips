@@ -9,6 +9,7 @@ import UIKit
     public let story: StoryModel
     public private(set) var importer: PhotosImportModel?
     public private(set) var mover: MediaMoveModel?
+    public private(set) var journalImport: JournalImportModel?
     @Published public private(set) var exporter: FilmExportModel?
     private let session: ScopedMediaSession
     private let directory: URL
@@ -54,6 +55,16 @@ import UIKit
             }
             importer?.routeBatch = batch
             batch.restore()
+            journalImport = JournalImportModel(
+                journeyID: journey.id, fallbackDate: journey.startedOn ?? Self.today(),
+                backend: LiveJournalImportBackend(session: session),
+                store: JournalImportRecordStore(directory: directory.appendingPathComponent("journal-imports")),
+                journalChanged: { [story] in story.reloadJournal() },
+                journeyChanged: { [weak self] in
+                    guard let self else { return }
+                    let fresh = try await readJourney()
+                    try self.updated(fresh, fresh)
+                })
             mover = MediaMoveModel(session: session, journey: journey) { [weak self] source, destination in
                 guard let self else { return }
                 do { try self.updated(source, destination) } catch { self.story.invalidate() }
@@ -70,7 +81,15 @@ import UIKit
             directory: directory.appendingPathComponent("exports"), expectedJourney: story.journey, currentJourney: readJourney,
             derivativeRead: derivativeRead, soundtrackRead: soundtrackRead)
     }
-    public func invalidate() { story.invalidate(); importer?.cancel(); exporter?.invalidate() }
+    public func invalidate() { story.invalidate(); importer?.cancel(); exporter?.invalidate(); journalImport?.detach() }
+    /// The device's calendar day, used only when the Journey has no start date.
+    static func today() -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: Date())
+    }
     private func updated(_ source: MediaJourney, _ destination: MediaJourney) throws {
         try updateJourney(source)
         refresh(source, destination)
@@ -115,6 +134,7 @@ public struct NativeMediaFeature: View {
         self.book3D = book3D
     }
     public var body: some View {
-        NativeStoryDestination(model: model.story, importer: model.importer, exporter: model.exporter, moveModel: model.mover, book3D: book3D)
+        NativeStoryDestination(model: model.story, importer: model.importer, exporter: model.exporter, moveModel: model.mover,
+                               journalImport: model.journalImport, book3D: book3D)
     }
 }

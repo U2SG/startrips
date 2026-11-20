@@ -11,6 +11,7 @@ public struct NativeStoryDestination: View {
     private let importer: PhotosImportModel?
     private let exporter: FilmExportModel?
     private let moveModel: MediaMoveModel?
+    private let journalImport: JournalImportModel?
     private let book3D: Story3DBookBuilder?
     @State private var toolsPresented = false
     @StateObject private var book = StoryBookState()
@@ -18,8 +19,9 @@ public struct NativeStoryDestination: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     public init(model: StoryModel, importer: PhotosImportModel? = nil, exporter: FilmExportModel? = nil,
-                moveModel: MediaMoveModel? = nil, book3D: Story3DBookBuilder? = nil) {
-        self.model = model; self.importer = importer; self.exporter = exporter; self.moveModel = moveModel; self.book3D = book3D
+                moveModel: MediaMoveModel? = nil, journalImport: JournalImportModel? = nil, book3D: Story3DBookBuilder? = nil) {
+        self.model = model; self.importer = importer; self.exporter = exporter; self.moveModel = moveModel
+        self.journalImport = journalImport; self.book3D = book3D
     }
     private var style: StoryPresentationStyle {
         let preference = StoryPresentationStyle(stored: storedStyle)
@@ -40,6 +42,7 @@ public struct NativeStoryDestination: View {
         .onAppear {
             model.setReading3DBook(shows3DBook)
             model.appear()
+            journalImport?.restore()
             #if DEBUG
             // Screenshot probe only: start playback without a tap.
             let arguments = ProcessInfo.processInfo.arguments
@@ -59,7 +62,7 @@ public struct NativeStoryDestination: View {
             }
             #endif
         }
-        .onDisappear { model.disappear() }
+        .onDisappear { model.disappear(); journalImport?.detach() }
         .onChange(of: scenePhase) { phase in if phase != .active { model.setPaused(true) } }
         .onChange(of: storedStyle) { _ in model.cancelPaging() }
         .onChange(of: shows3DBook) { reading in model.setReading3DBook(reading) }
@@ -69,6 +72,7 @@ public struct NativeStoryDestination: View {
                     VStack(spacing: StoryTheme.grid(6)) {
                         if model.session.access == .owner, let importer { PhotosImportButton(model: importer) }
                         if model.session.access == .owner, let moveModel { MediaMoveView(model: moveModel) }
+                        if model.session.access == .owner, let journalImport { JournalImportEntry(model: journalImport) }
                         if model.session.access == .owner, let exporter { FilmExportButton(model: exporter) }
                     }.padding(StoryTheme.grid(6))
                 }.navigationTitle("整理与导出")
@@ -141,7 +145,7 @@ public struct NativeStoryDestination: View {
     private var controls: some View {
         // The 3D book turns its own pages, so its slots stay empty.
         let pages = !shows3DBook && (style != .stream || model.playback != nil)
-        let tools = model.session.access == .owner && (importer != nil || exporter != nil || moveModel != nil)
+        let tools = model.session.access == .owner && (importer != nil || exporter != nil || moveModel != nil || journalImport != nil)
         return HStack(spacing: 0) {
             slot {
                 if pages { StoryIconButton(symbol: "chevron.left", label: "上一页", id: "story.previous", acting: { turn(-1) }) }
