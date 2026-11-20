@@ -243,6 +243,11 @@ import UIKit
             } catch { /* The journal is optional reading; never a Story failure. */ }
         }
     }
+    /// Reads the journal again after a native import saved or undid chapters.
+    public func reloadJournal() {
+        journalTask?.cancel(); journalTask = nil
+        loadJournal()
+    }
     public func beginPaging(_ index: Int) -> Int {
         foreground.setPaused(true)
         return cursor.propose(index)
