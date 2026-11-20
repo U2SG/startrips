@@ -142,6 +142,9 @@ struct CreatedShare: Identifiable {
     let id: String
     let link: URL
 
+    /// Nil once its grant is revoked, so the share sheet can never send a dead link.
+    func unlessRevoked(_ grantId: String) -> CreatedShare? { id == grantId ? nil : self }
+
     /// `<origin>/share#<token>`: the fragment never reaches a server, log or preview bot.
     static func link(origin: URL, token: String) throws -> URL {
         guard token.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil,

@@ -129,6 +129,12 @@ final class JourneyShareTests: XCTestCase {
         XCTAssertThrowsError(try CreatedShare.link(origin: origin, token: token + "/x"))
     }
 
+    func testRevokingTheCreatedLinkDropsItFromTheShareSheet() throws {
+        let created = CreatedShare(id: "grant-new", link: try CreatedShare.link(origin: origin, token: token))
+        XCTAssertNil(created.unlessRevoked("grant-new"), "a revoked link is never offered again")
+        XCTAssertEqual(created.unlessRevoked("grant-other")?.link, created.link, "revoking another link keeps this one")
+    }
+
     // MARK: Response handling
 
     func testActiveLinksAreThisJourneysUnexpiredUnrevokedNewestFirst() throws {

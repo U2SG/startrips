@@ -211,6 +211,9 @@ struct JourneyShareView: View {
         defer { revoking = false }
         do {
             try await store.revoke(grant.id)
+            // A revoked link can no longer be sent, whether or not the list reload below succeeds.
+            created = created?.unlessRevoked(grant.id)
+            activity = activity?.unlessRevoked(grant.id)
             await reload()
         } catch {
             message = "撤销失败，请重试。"
