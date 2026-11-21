@@ -35,6 +35,13 @@ final class AtlasSession: ObservableObject {
     // Set when the owner session is missing or expired; the shell returns to sign-in
     // instead of showing an Atlas error.
     @Published var signInRequired = false
+    // Set when a signed-in owner's active Organization has no Atlas yet (404
+    // ATLAS_NOT_FOUND); the shell reopens the sheet on its create-Atlas step.
+    @Published var atlasSetupRequired = false
+    /// The next sign-in sheet starts from the existing session instead of credentials.
+    var loginResumesSetup = false
+    /// The owner left the create-Atlas step; the shell returns to the welcome screen.
+    var atlasSetupCancelled = false
     private(set) var origin: URL?
     private(set) var guestToken: String?
     private(set) var activeIdentity: String?
@@ -305,20 +312,31 @@ final class AtlasSession: ObservableObject {
     /// rewrites the cached session). Returned first-party cookies go into the
     /// active profile; the generation must not change while it runs.
     func ownerAuthCall(_ path: String, method: String = "GET", body: Data? = nil) async throws -> Data {
+        guard path.hasPrefix("/api/auth/") else { throw SessionFailure.invalidOrigin }
+        let (data, status) = try await ownerResponse(path, method: method, body: body)
+        guard (200..<300).contains(status) else { throw SessionFailure.unavailable(status) }
+        return data
+    }
+
+    /// The same owner call for Better Auth and Atlas setup paths, returning the status
+    /// so callers can tell a missing Atlas (404 ATLAS_NOT_FOUND) from other refusals.
+    func ownerResponse(_ path: String, method: String = "GET", body: Data? = nil) async throws -> (Data, Int) {
         let ticket = generation
-        guard guestToken == nil, let origin, path.hasPrefix("/api/auth/"),
+        guard guestToken == nil, let origin, path.hasPrefix("/api/auth/") || path.hasPrefix("/api/atlases/"),
+              !path.contains(".."),
               let url = URL(string: path, relativeTo: origin)?.absoluteURL else { throw SessionFailure.invalidOrigin }
         // performResponse adds the first-party Origin header to every non-GET call.
         let headers = await credentials(for: url)
         let (data, response) = try await performResponse(url, method: method, body: body, headers: headers)
         guard ticket == generation else { throw MediaFailure.accessChanged }
-        guard (200..<300).contains(response.statusCode) else { throw SessionFailure.unavailable(response.statusCode) }
-        let store = cookieStore.httpCookieStore
-        for cookie in (try? OwnerSignIn.sessionCookies(response, origin: origin, requireToken: false)) ?? [] {
-            await store.setCookie(cookie)
+        if (200..<300).contains(response.statusCode) {
+            let store = cookieStore.httpCookieStore
+            for cookie in (try? OwnerSignIn.sessionCookies(response, origin: origin, requireToken: false)) ?? [] {
+                await store.setCookie(cookie)
+            }
         }
         guard ticket == generation else { throw MediaFailure.accessChanged }
-        return data
+        return (data, response.statusCode)
     }
 
     func read(_ path: String) async throws -> Data {
@@ -501,6 +519,8 @@ final class AtlasSession: ObservableObject {
             activeIdentity = nil; mediaJourneys = [:]
             router.clear()
             if !isGuest, case SessionFailure.unavailable(401) = error { signInRequired = true }
+            // Only requireAtlasAccess answers 404 on these reads: the Atlas was never bootstrapped.
+            else if !isGuest, case SessionFailure.unavailable(404) = error { atlasSetupRequired = true }
             else { router.error = error.localizedDescription }
         }
     }

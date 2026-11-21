@@ -71,7 +71,6 @@ final class NativeSignInTests: XCTestCase {
         XCTAssertEqual(OwnerSignIn.organizationStep([a], active: "gone"), .activate("a"))
         XCTAssertEqual(OwnerSignIn.organizationStep([a, b], active: nil), .choose([a, b]))
         XCTAssertEqual(OwnerSignIn.organizationStep([], active: nil), .none)
-        XCTAssertEqual(OwnerSignIn.Failure.noOrganization.message, "这个账户还没有图谱")
     }
 
     @MainActor

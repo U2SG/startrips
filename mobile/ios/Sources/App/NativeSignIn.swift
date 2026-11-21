@@ -4,7 +4,7 @@ import Foundation
 /// (request, cookie capture, error mapping, Organization choice) are unit tested.
 enum OwnerSignIn {
     enum Failure: Error, Equatable {
-        case invalidCredentials, emailNotVerified, rateLimited, noOrganization, unavailable
+        case invalidCredentials, emailNotVerified, rateLimited, unavailable
 
         /// Short native messages; the web maps the same codes (`authServiceErrorEvent`).
         var message: String {
@@ -12,7 +12,6 @@ enum OwnerSignIn {
             case .invalidCredentials: return "认证信息未通过，请检查后重试。"
             case .emailNotVerified: return "邮箱尚未验证"
             case .rateLimited: return "尝试次数过多，请稍后再试"
-            case .noOrganization: return "这个账户还没有图谱"
             case .unavailable: return "暂时无法登录，请重试"
             }
         }
@@ -103,24 +102,46 @@ enum OwnerSignIn {
 /// still the current owner login for the pinned origin and generation.
 @MainActor
 final class NativeSignInModel: ObservableObject {
+    /// What the sheet shows: credentials, the Atlas chooser, or the Atlas name step.
+    enum Stage: Equatable {
+        case credentials
+        /// A restored session is being checked before the name step.
+        case resuming
+        case choose([OwnerSignIn.Organization])
+        case name(AtlasSetup.Step)
+    }
+
     @Published var email = ""
     @Published var password = ""
+    @Published var atlasName = ""
     @Published private(set) var busy = false
     @Published var message: String?
-    @Published private(set) var organizations: [OwnerSignIn.Organization] = []
+    @Published private(set) var stage: Stage = .credentials
 
     private let session: AtlasSession
     private let origin: URL
     private var generation: UUID
     private var task: Task<Void, Never>?
+    /// A create attempt failed after it may have reached the server.
+    private var createAttempted = false
 
-    init(session: AtlasSession, origin: URL) {
+    init(session: AtlasSession, origin: URL, resuming: Bool = false) {
         self.session = session
         self.origin = origin
         self.generation = session.generation
+        if resuming { stage = .resuming }
+    }
+
+    /// Whether leaving the sheet now abandons Atlas setup for an existing session.
+    var inSetup: Bool {
+        switch stage {
+        case .resuming, .name: return true
+        case .credentials, .choose: return false
+        }
     }
 
     private var current: Bool { session.isOwnerLoginCurrent(generation, at: origin) }
+    private var setup: AtlasSetup { AtlasSetup(session: session) }
 
     func submit() {
         guard !busy else { return }
@@ -140,44 +161,51 @@ final class NativeSignInModel: ObservableObject {
                                                          pending: { [weak self] in self?.current == true }) else { return }
             self.generation = self.session.generation
             self.password = ""
-            try await self.continueWithOrganization()
+            try await self.advance { try await $0.next() }
         }
     }
 
-    /// Called after any owner session exists (email or Google).
+    /// Called after any owner session exists (email, Google, or a restored profile
+    /// whose Atlas was never bootstrapped).
     func sessionInstalled() {
         generation = session.generation
-        run { try await self.continueWithOrganization() }
+        run { try await self.advance { try await $0.next() } }
     }
 
     func choose(_ organization: OwnerSignIn.Organization) {
-        run { try await self.activate(organization.id) }
+        run { try await self.advance { try await $0.choose(organization) } }
     }
 
-    private func continueWithOrganization() async throws {
-        let active = try await session.activeOrganization()
-        guard current else { return }
-        if active != nil { finish(); return }
-        let listed = try JSONDecoder().decode([OwnerSignIn.Organization].self,
-                                              from: await session.ownerAuthCall("/api/auth/organization/list"))
-        guard current else { return }
-        switch OwnerSignIn.organizationStep(listed, active: active) {
-        case .ready: finish()
-        case .activate(let id): try await activate(id)
-        case .choose(let all): organizations = all
-        case .none: throw OwnerSignIn.Failure.noOrganization
+    /// The name step: create the Organization and its Atlas, or bootstrap the missing Atlas.
+    func createAtlas() {
+        guard !busy, case .name(let step) = stage, AtlasSetup.title(atlasName) != nil else { return }
+        let name = atlasName
+        run {
+            switch step {
+            case .createOrganization:
+                let resuming = self.createAttempted
+                self.createAttempted = true
+                try await self.advance { try await $0.create(name: name, resuming: resuming) }
+            case .bootstrap:
+                try await self.advance { try await $0.bootstrap(name: name) }
+            }
         }
     }
 
-    private func activate(_ id: String) async throws {
-        let body = try JSONSerialization.data(withJSONObject: ["organizationId": id])
-        _ = try await session.ownerAuthCall("/api/auth/organization/set-active", method: "POST", body: body)
-        // connectOwner() re-reads the session and verifies the active Atlas.
-        if current { finish() }
+    private func advance(_ work: (AtlasSetup) async throws -> AtlasSetup.Next) async throws {
+        let next = try await work(setup)
+        guard current else { return }
+        switch next {
+        case .ready: finish()
+        case .choose(let all): stage = .choose(all)
+        case .name(let step, let prefill):
+            if stage != .name(step) { atlasName = prefill }
+            stage = .name(step)
+        }
     }
 
     private func finish() {
-        organizations = []
+        stage = .credentials
         // Closing the sheet runs the normal connectOwner() path.
         session.loginPresented = false
     }
@@ -188,9 +216,13 @@ final class NativeSignInModel: ObservableObject {
             defer { busy = false }
             do { try await work() }
             catch let failure as OwnerSignIn.Failure { if current { message = failure.message } }
+            catch let failure as AtlasSetup.Failure { if current { message = failure.message } }
             catch { if current { message = OwnerSignIn.Failure.unavailable.message } }
         }
     }
+
+    /// Lets unit tests await the running step; the view never needs it.
+    func settle() async { await task?.value }
 
     func cancel() { task?.cancel(); task = nil }
 }
