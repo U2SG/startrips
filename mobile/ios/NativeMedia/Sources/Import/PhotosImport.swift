@@ -23,6 +23,8 @@ struct PickedMediaFile: Transferable {
     @Published public private(set) var busy = false
     @Published public private(set) var progress = 0.0
     @Published public private(set) var failure: String?
+    /// This Journey has an unfinished upload in the journal, so recovery is worth offering.
+    @Published public private(set) var hasPending = false
     public let importer: MultipartImporter
     private var task: Task<Void, Never>?
     private var current: ImportRecord?
@@ -35,13 +37,17 @@ struct PickedMediaFile: Transferable {
                 currentPointID: (() -> String?)? = nil, onImported: @escaping ([String]) async throws -> Void) {
         self.importer = importer; self.journeyID = journeyID; self.onImported = onImported
         self.pointForBatch = currentPointID ?? { routePointID }
+        refreshPending()
+    }
+    public func refreshPending() {
+        hasPending = (try? importer.pending().contains { $0.journeyId == journeyID }) ?? false
     }
     public func importItems(_ items: [PhotosPickerItem]) {
         guard !busy, !items.isEmpty else { return }
         let pointID = pointForBatch()
         busy = true; progress = 0; failure = nil
         task = Task {
-            defer { busy = false; current = nil }
+            defer { busy = false; current = nil; refreshPending() }
             do {
                 for (index, item) in items.enumerated() {
                     try Task.checkCancellation()
@@ -65,7 +71,7 @@ struct PickedMediaFile: Transferable {
         guard !busy else { return }
         busy = true; failure = nil
         task = Task {
-            defer { busy = false; current = nil }
+            defer { busy = false; current = nil; refreshPending() }
             do {
                 for record in try importer.pending() where record.journeyId == journeyID {
                     current = record
@@ -82,12 +88,12 @@ struct PickedMediaFile: Transferable {
     public func cancel() {
         task?.cancel()
         guard let record = current else { return }
-        Task { do { try await cancelAndRefresh(record) } catch { failure = error.localizedDescription } }
+        Task { do { try await cancelAndRefresh(record) } catch { failure = error.localizedDescription }; refreshPending() }
     }
     public func cancelPending() {
         guard !busy else { return }; busy = true; failure = nil
         task = Task {
-            defer { busy = false; current = nil }
+            defer { busy = false; current = nil; refreshPending() }
             do {
                 for record in try importer.pending() where record.journeyId == journeyID {
                     current = record; try await cancelAndRefresh(record)
@@ -116,29 +122,42 @@ struct PickedMediaFile: Transferable {
     }
 }
 
-public struct PhotosImportButton: View {
+/// 素材 in the Story tools. Recovery rows only exist while this Journey has an
+/// unfinished upload; progress replaces the picker while an import runs.
+struct PhotosImportSection: View {
     @ObservedObject var model: PhotosImportModel
     @State private var selection: [PhotosPickerItem] = []
-    public init(model: PhotosImportModel) { self.model = model }
-    public var body: some View {
-        VStack {
+    var body: some View {
+        Section("素材") {
             if model.busy {
-                ProgressView("正在读取或上传素材", value: model.progress)
-                Button("取消导入") { model.cancel() }.frame(minHeight: 44)
+                ProgressView(value: model.progress) { Text("正在导入") }
+                    .storyToolRow()
+                Button(role: .destructive) { model.cancel() } label: { Label("取消导入", systemImage: "xmark.circle") }
+                    .storyToolRow()
             } else {
                 // `photoLibrary` only exposes item identifiers; it never asks for library access.
                 PhotosPicker(selection: $selection, maxSelectionCount: 100, matching: .any(of: [.images, .videos]),
                              preferredItemEncoding: .current, photoLibrary: .shared()) {
                     Label("添加照片或视频", systemImage: "photo.on.rectangle.angled")
-                }.frame(minHeight: 44).accessibilityIdentifier("story.import")
-                Button("恢复上传") { model.recover() }.frame(minHeight: 44)
-                Button("取消未完成导入") { model.cancelPending() }.frame(minHeight: 44)
+                }
+                .storyToolRow()
+                .accessibilityIdentifier("story.import")
+                .onAppear { model.refreshPending() }
+                .onChange(of: selection) { items in
+                    if !(items.count > 1 && model.routeBatch?.pick(items) == true) { model.importItems(items) }
+                    selection = []
+                }
+                if model.hasPending {
+                    Button { model.recover() } label: { Label("恢复上传", systemImage: "arrow.clockwise") }
+                        .storyToolRow()
+                        .accessibilityIdentifier("story.import.recover")
+                    Button(role: .destructive) { model.cancelPending() } label: { Label("取消未完成导入", systemImage: "xmark.circle") }
+                        .storyToolRow()
+                        .accessibilityIdentifier("story.import.cancel-pending")
+                }
             }
             if let batch = model.routeBatch { RouteBatchEntry(model: batch) }
-            if let failure = model.failure { Text(failure).font(.callout) }
-        }.onChange(of: selection) { items in
-            if !(items.count > 1 && model.routeBatch?.pick(items) == true) { model.importItems(items) }
-            selection = []
+            if let failure = model.failure { StoryToolNote(text: failure) }
         }
     }
 }

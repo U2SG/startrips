@@ -1,15 +1,14 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The Story tools entry. An import still running shows the same entry; the
-/// sheet reopens on its current stage.
-struct JournalImportEntry: View {
+/// Story-level host of the journal import sheet. The tools sheet's 导入手记 row
+/// only closes the tools; the Story then calls `open()` from the tools sheet's
+/// `onDismiss`, so this sheet never stacks on (or races) the tools sheet. An
+/// import still running reopens on its current stage.
+struct JournalImportPresenter: View {
     @ObservedObject var model: JournalImportModel
     var body: some View {
-        Button { model.open() } label: { Label("导入手记", systemImage: "text.book.closed") }
-            .frame(minHeight: StoryTheme.hitTarget)
-            .accessibilityIdentifier("story.journal-import")
-            .sheet(isPresented: $model.presented) { JournalImportSheet(model: model) }
+        Color.clear.sheet(isPresented: $model.presented) { JournalImportSheet(model: model) }
     }
 }
 
