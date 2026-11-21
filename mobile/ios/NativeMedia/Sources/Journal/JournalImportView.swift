@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 import UniformTypeIdentifiers
 
 /// The Story tools entry. An import still running shows the same entry; the
@@ -128,13 +127,18 @@ struct JournalImportSheet: View {
     }
 
     @ViewBuilder private var sourceButtons: some View {
-        Button {
-            if let text = UIPasteboard.general.string { model.source = text }
-        } label: { Label("粘贴", systemImage: "doc.on.clipboard").frame(maxWidth: .infinity) }
-            .buttonStyle(.bordered).frame(minHeight: StoryTheme.hitTarget)
-            .accessibilityIdentifier("journal-import.paste")
+        // The system paste control reads the pasteboard on the user's tap, so iOS
+        // neither prompts nor hands back an empty string as programmatic reads may.
+        PasteButton(payloadType: String.self) { strings in
+            guard let text = strings.first else { return }
+            Task { @MainActor in model.source = text }
+        }
+        .labelStyle(.titleAndIcon).buttonBorderShape(.roundedRectangle).controlSize(.large)
+        .frame(maxWidth: .infinity, minHeight: StoryTheme.hitTarget)
+        .accessibilityIdentifier("journal-import.paste")
         Button { picking = true } label: { Label("文件", systemImage: "doc.text").frame(maxWidth: .infinity) }
-            .buttonStyle(.bordered).frame(minHeight: StoryTheme.hitTarget)
+            .buttonStyle(.bordered).buttonBorderShape(.roundedRectangle).controlSize(.large)
+            .frame(minHeight: StoryTheme.hitTarget)
             .accessibilityIdentifier("journal-import.file")
     }
 
@@ -244,29 +248,40 @@ private struct JournalChapterReviewSection: View {
     }
 }
 
+/// One line: the text leads. 实际 is the default and shows nothing; any other
+/// status is a trailing tag (待确认 in the accent, its questions beneath).
+/// Status changes by swiping the line, tapping the tag, or a VoiceOver action.
 private struct JournalEventReviewRow: View {
     @ObservedObject var model: JournalImportModel
     let chapterID: String
     let event: JournalEvent
     let questions: [String]
     let muted: Color
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private var tagColor: Color { event.status == .uncertain ? StoryTheme.accent : muted }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: StoryTheme.grid(2)) {
-            HStack(alignment: .firstTextBaseline, spacing: StoryTheme.grid(2)) {
+        // Accessibility sizes stack the time and tag around the text instead of squeezing it.
+        let line = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: StoryTheme.grid(1)))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: StoryTheme.grid(2)))
+        VStack(alignment: .leading, spacing: StoryTheme.grid(1)) {
+            line {
                 if let time = event.localTime { Text(time).font(.footnote.monospacedDigit()).foregroundStyle(muted) }
-                Spacer(minLength: 0)
-                Picker("状态", selection: Binding(get: { event.status }, set: { model.setStatus(chapterID, event.id, $0) })) {
-                    ForEach(JournalEvent.Status.allCases, id: \.self) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.menu)
-                .tint(event.status == .uncertain ? StoryTheme.accent : StoryTheme.ink)
-                .frame(minHeight: StoryTheme.hitTarget)
-                .accessibilityIdentifier("journal-import.status.\(event.id)")
+                TextField("正文", text: Binding(get: { event.text }, set: { model.editText(chapterID, event.id, $0) }), axis: .vertical)
+                    .font(StoryTheme.serif(.body))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // The value stays the text; the label carries the status, the actions change it.
+                    .accessibilityLabel(event.status.label)
+                    .accessibilityActions {
+                        ForEach(event.status.alternatives, id: \.self) { status in
+                            Button("标为\(status.label)") { model.setStatus(chapterID, event.id, status) }
+                        }
+                    }
+                    .accessibilityIdentifier("journal-import.text.\(event.id)")
+                if event.status != .actual { tag }
             }
-            TextField("正文", text: Binding(get: { event.text }, set: { model.editText(chapterID, event.id, $0) }), axis: .vertical)
-                .font(StoryTheme.serif(.body))
-                .accessibilityIdentifier("journal-import.text.\(event.id)")
             if event.status == .uncertain {
                 ForEach(questions, id: \.self) { question in
                     Label(question, systemImage: "questionmark.circle")
@@ -275,6 +290,33 @@ private struct JournalEventReviewRow: View {
                 }
             }
         }
+        .frame(minHeight: StoryTheme.hitTarget)
         .padding(.vertical, StoryTheme.grid(1))
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            ForEach(event.status.alternatives, id: \.self) { status in
+                Button(status.label) { model.setStatus(chapterID, event.id, status) }
+                    .tint(status == .uncertain ? StoryTheme.accent : StoryTheme.muted)
+                    .accessibilityIdentifier("journal-import.status.\(event.id).\(status.rawValue)")
+            }
+        }
+    }
+
+    /// Tapping the tag offers every status with the current one checked.
+    private var tag: some View {
+        Menu {
+            Picker("状态", selection: Binding(get: { event.status }, set: { model.setStatus(chapterID, event.id, $0) })) {
+                ForEach(JournalEvent.Status.allCases, id: \.self) { Text($0.label).tag($0) }
+            }
+        } label: {
+            Text(event.status.label)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(tagColor)
+                .frame(minWidth: StoryTheme.hitTarget, minHeight: StoryTheme.hitTarget)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button).buttonStyle(.borderless)
+        // VoiceOver already hears the status on the line and changes it with its actions.
+        .accessibilityHidden(true)
+        .accessibilityIdentifier("journal-import.status.\(event.id)")
     }
 }

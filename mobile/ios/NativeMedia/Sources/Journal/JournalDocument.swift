@@ -15,6 +15,8 @@ public struct JournalEvent: Codable, Equatable, Identifiable, Sendable {
             case .uncertain: return "待确认"
             }
         }
+        /// The statuses a line can be changed to, in display order.
+        public var alternatives: [Status] { Self.allCases.filter { $0 != self } }
     }
     public var id: String
     public var source: String

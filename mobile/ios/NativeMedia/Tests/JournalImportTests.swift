@@ -128,6 +128,12 @@ final class JournalImportTests: XCTestCase {
         XCTAssertEqual(JournalImportModel.rejected(403), "当前账户不能导入，请重新登录后重试。")
     }
 
+    func testLineStatusOffersEveryOtherStatusInOrder() {
+        XCTAssertEqual(JournalEvent.Status.actual.alternatives, [.planned, .cancelled, .uncertain])
+        XCTAssertEqual(JournalEvent.Status.uncertain.alternatives, [.actual, .planned, .cancelled])
+        XCTAssertEqual(JournalEvent.Status.allCases.map(\.label), ["实际", "计划", "取消", "待确认"])
+    }
+
     func testChaptersRoundTripWithExplicitNullsAndWithoutInventedKeys() throws {
         let data = Data(journal(3, [existing, chapter("b", "2026-05-02", events: [event("x", "y")], batch: "batch-1")]).utf8)
         let decoded = try JSONDecoder().decode(DailyJournal.Envelope.self, from: data).journal
