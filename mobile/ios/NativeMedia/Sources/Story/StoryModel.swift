@@ -16,7 +16,11 @@ import UIKit
     public private(set) var playback: PlaybackClock? {
         willSet { if !PlaybackClock.sameForViews(playback, newValue) { objectWillChange.send() } }
     }
-    @Published public var expanded = true
+    /// Photos-style reading: the header, controls and status bar step aside and only the media
+    /// and its reflection remain. Playing the Journey enters it; pausing or ending brings the chrome back.
+    @Published public private(set) var immersive = false
+    /// What a playback round trip returns to when it ends back in the browsing Story.
+    private var immersiveBeforePlayback = false
     @Published public private(set) var paused = false
     @Published public private(set) var tempo: NarrativeTempo = .standard
     /// Decoded pictures for the book and stream layouts; never signed URLs.
@@ -62,7 +66,7 @@ import UIKit
             guard let self else { return }
             self.epoch += 1; self.loadTask?.cancel(); self.prewarmTask?.cancel()
             self.clockTask?.cancel(); self.soundtrackTask?.cancel()
-            self.paused = true; self.playback?.paused = true
+            self.paused = true; self.playback?.paused = true; self.immersive = false
         }
         commitCurrent()
     }
@@ -276,13 +280,16 @@ import UIKit
     }
     public func cancelPaging() { cursor.cancel(); foreground.setPaused(paused) }
     public func select(_ index: Int) { let token = beginPaging(index); finishPaging(token, completed: true) }
-    public func collapse() { cancelPaging(); expanded = false }
+    public func setImmersive(_ value: Bool) { if immersive != value { immersive = value } }
     public func setPaused(_ value: Bool) {
         paused = value; playback?.paused = value; foreground.setPaused(value)
+        // Playing reads without chrome; a pause hands the controls back.
+        if playback != nil { setImmersive(!value) }
     }
     public func playJourney() {
+        if playback == nil { immersiveBeforePlayback = immersive }
         cursor.cancel(); playback = PlaybackClock(beats: JourneyPlaybackPlan.build(journey, tempo: tempo))
-        paused = false; foreground.setPaused(false); activateBeat(); startClock()
+        paused = false; foreground.setPaused(false); setImmersive(true); activateBeat(); startClock()
     }
     func replaceSoundtrack(_ read: (() async throws -> URL)?) {
         soundtrackTask?.cancel()
@@ -432,6 +439,7 @@ import UIKit
         let present = Set(value.media.map(\.id))
         for id in libraryTasks.keys where !present.contains(id) { cancelLibraryImage(id) }
         library = library.filter { present.contains($0.key) }; libraryOrder.removeAll { !present.contains($0) }
+        if playback != nil { setImmersive(immersiveBeforePlayback) }
         playback = nil; clockTask?.cancel(); commitCurrent(); loadCurrent()
     }
     private func loadCurrent() {
@@ -542,7 +550,8 @@ import UIKit
         guard playback != nil else { finish(); return }
         let live = currentIntent()
         guard let result = resolveMediaReturn(entry: intent, committed: committed, reason: .exited,
-            currentRequestID: live.requestId, currentIntentRevision: live.revision, journey: latestJourney(), expanded: expanded),
+            currentRequestID: live.requestId, currentIntentRevision: live.revision, journey: latestJourney(),
+            immersive: immersiveBeforePlayback),
               result.surface == .story, let journey = latestJourney() else { finish(); return }
         let restored = StoryIntent(journeyId: journey.id, routePointId: result.routePointId, assetId: result.assetId,
                                    revision: journey.revision, requestId: intent.requestId)
@@ -550,7 +559,7 @@ import UIKit
             let restoredCursor = try StoryCursor(journey: journey, intent: restored)
             disappear()
             playback = nil; self.journey = journey; cursor = restoredCursor
-            paused = false; expanded = result.expanded; commitCurrent(); appear()
+            paused = false; setImmersive(result.immersive); commitCurrent(); appear()
         } catch { finish() }
     }
 
@@ -559,7 +568,8 @@ import UIKit
         let current = currentIntent()
         guard current.revision == intent.revision, let result = resolveMediaReturn(entry: intent, committed: committed, reason: reason,
                                               currentRequestID: current.requestId, currentIntentRevision: current.revision,
-                                              journey: latestJourney(), expanded: expanded) else { return }
+                                              journey: latestJourney(),
+                                              immersive: playback == nil ? immersive : immersiveBeforePlayback) else { return }
         closed = true; cursor.cancel(); disappear()
         onReturn(result)
     }

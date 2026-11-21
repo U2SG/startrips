@@ -15,7 +15,7 @@ type Snapshot = {
 type BookMessage =
   | { kind: "picture" | "video"; assetId: string }
   | { kind: "position"; routePointId: string | null; assetId: string | null; isCover: boolean }
-  | { kind: "ready" | "fallback" | "close" };
+  | { kind: "ready" | "fallback" | "close" | "tap" };
 
 type BookWindow = Window & {
   webkit?: { messageHandlers?: { storyBook?: { postMessage: (body: BookMessage) => Promise<unknown> } } };
@@ -49,6 +49,8 @@ const embedded = {
       isCover: page.kind === "cover",
     });
   },
+  // Native Story brings its immersive chrome back on a tap that the book itself does not use.
+  idleTap: () => notify({ kind: "tap" }),
 };
 
 function fallback() {

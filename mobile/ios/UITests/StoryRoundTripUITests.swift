@@ -22,17 +22,24 @@ extension AtlasUITests {
         XCTAssertFalse(app.descendants(matching: .any)["story.import.recover"].exists)
         app.buttons["完成"].firstMatch.tap()
         XCTAssertTrue(addMedia.waitForNonExistence(timeout: 5))
-        // Collapsing the native Story must not render its current reflection twice.
+        // Immersive reading hides the header and controls; the reflection stays, once.
         let reflections = app.staticTexts.matching(
             NSPredicate(format: "label == %@", "Synthetic bridge fixture"))
         XCTAssertEqual(reflections.count, 1)
-        let expand = app.buttons["story.expand"]
-        XCTAssertTrue(expand.exists)
-        expand.tap()
-        XCTAssertEqual(reflections.count, 1)
-        expand.tap()
-
         let first = app.descendants(matching: .any).matching(identifier: "story.photo.media:asset-fixture").firstMatch
+        let immersive = app.buttons["story.expand"]
+        XCTAssertEqual(immersive.label, "沉浸浏览")
+        immersive.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["story.play"].exists)
+        XCTAssertFalse(app.staticTexts["story.title"].exists)
+        XCTAssertEqual(reflections.count, 1)
+        // One tap on the content brings the chrome back.
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        first.tap()
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["story.next"].exists)
+
         let second = app.descendants(matching: .any).matching(identifier: "story.photo.media:asset-second").firstMatch
         let cover = app.descendants(matching: .any)
             .matching(identifier: "story.photo.journey-cover:journey-fixture:asset-fixture").firstMatch
@@ -51,7 +58,10 @@ extension AtlasUITests {
         XCTAssertFalse(first.exists)
         app.buttons["story.previous"].tap()
         XCTAssertTrue(first.waitForExistence(timeout: 10))
+        // Playing goes immersive by itself; a tap shows the controls while it keeps playing.
         app.buttons["story.play"].tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)).tap()
         XCTAssertTrue(app.buttons["story.pause"].waitForExistence(timeout: 5))
         close.tap()
         XCTAssertTrue(app.buttons["story.play"].waitForExistence(timeout: 5))

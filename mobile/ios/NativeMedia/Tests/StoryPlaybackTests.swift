@@ -51,20 +51,20 @@ final class StoryPlaybackTests: XCTestCase {
         journey.media[1].routePointId = "point-two"
         let entry = MediaFixtures.intent()
         let result = resolveMediaReturn(entry: entry, committed: nil, reason: .exited,
-                                        currentRequestID: entry.requestId, currentIntentRevision: 7, journey: journey, expanded: true)
+                                        currentRequestID: entry.requestId, currentIntentRevision: 7, journey: journey, immersive: true)
         XCTAssertEqual(result?.surface, .story); XCTAssertEqual(result?.routePointId, "point-two")
         let completed = resolveMediaReturn(entry: entry, committed: nil, reason: .completed,
-                                           currentRequestID: entry.requestId, currentIntentRevision: 7, journey: journey, expanded: true)
-        XCTAssertEqual(completed?.surface, .atlas); XCTAssertNil(completed?.assetId); XCTAssertEqual(completed?.expanded, false)
-        XCTAssertNil(resolveMediaReturn(entry: entry, committed: nil, reason: .exited, currentRequestID: "new", currentIntentRevision: 7, journey: journey, expanded: true))
-        XCTAssertNil(resolveMediaReturn(entry: entry, committed: nil, reason: .exited, currentRequestID: entry.requestId, currentIntentRevision: 8, journey: journey, expanded: true))
+                                           currentRequestID: entry.requestId, currentIntentRevision: 7, journey: journey, immersive: true)
+        XCTAssertEqual(completed?.surface, .atlas); XCTAssertNil(completed?.assetId); XCTAssertEqual(completed?.immersive, false)
+        XCTAssertNil(resolveMediaReturn(entry: entry, committed: nil, reason: .exited, currentRequestID: "new", currentIntentRevision: 7, journey: journey, immersive: true))
+        XCTAssertNil(resolveMediaReturn(entry: entry, committed: nil, reason: .exited, currentRequestID: entry.requestId, currentIntentRevision: 8, journey: journey, immersive: true))
     }
     func testDeletedAssetPointAndJourneyHaveDistinctFallbacks() throws {
         var journey = try MediaFixtures.journey(); journey.media.removeAll { $0.id == "photo-one" }
         let entry = MediaFixtures.intent()
         func resolve(_ value: MediaJourney?) -> MediaReturn? {
             resolveMediaReturn(entry: entry, committed: nil, reason: .exited, currentRequestID: entry.requestId,
-                               currentIntentRevision: 7, journey: value, expanded: false)
+                               currentIntentRevision: 7, journey: value, immersive: false)
         }
         XCTAssertEqual(resolve(journey)?.fallback, .assetUnavailable)
         journey.routePoints.removeAll { $0.id == "point-one" }
@@ -138,9 +138,9 @@ final class StoryPlaybackTests: XCTestCase {
         let second = try StoryModel(journey: journey, intent: intent, session: session, ownership: owner,
             currentIntent: { intent }, latestJourney: { journey }, onReturn: { _ in })
         first.playJourney()
-        XCTAssertFalse(first.paused)
+        XCTAssertFalse(first.paused); XCTAssertTrue(first.immersive)
         second.foreground.takeOwnership()
-        XCTAssertTrue(first.paused)
+        XCTAssertTrue(first.paused); XCTAssertFalse(first.immersive, "a lost owner gets its controls back")
         XCTAssertEqual(first.playback?.paused, true)
         first.disappear(); second.disappear()
     }
@@ -178,6 +178,42 @@ final class StoryPlaybackTests: XCTestCase {
         try await waitFor { model.image(for: "photo-one") != nil }
         model.streamPlayback = true    // and back: the stream reads the same picture
         XCTAssertNotNil(model.image(for: "photo-one"))
+    }
+    @MainActor func testPlayingIsImmersiveAndPausingOrLeavingBringsTheChromeBack() throws {
+        let journey = try MediaFixtures.journey(), intent = MediaFixtures.intent()
+        let session = ScopedMediaSession(scopeID: "owner", access: .owner,
+            read: { _ in throw MediaFailure.unavailable }, request: { _, _, _ in Data() }, revalidate: {})
+        let model = try StoryModel(journey: journey, intent: intent, session: session, ownership: PlaybackOwnership(),
+            currentIntent: { intent }, latestJourney: { journey }, onReturn: { _ in })
+        defer { model.disappear() }
+        XCTAssertFalse(model.immersive)
+        model.setImmersive(true); XCTAssertTrue(model.immersive)
+        model.setPaused(true); XCTAssertTrue(model.immersive, "pausing while browsing keeps the reading mode")
+        model.setImmersive(false); model.setPaused(false)
+        model.playJourney(); XCTAssertTrue(model.immersive)
+        model.setPaused(true); XCTAssertFalse(model.immersive)
+        model.setPaused(false); XCTAssertTrue(model.immersive)
+        model.setImmersive(false)   // a tap on the content during playback
+        XCTAssertFalse(model.immersive); XCTAssertFalse(model.paused); XCTAssertNotNil(model.playback)
+        model.setImmersive(true)
+        model.leave()
+        XCTAssertNil(model.playback); XCTAssertFalse(model.immersive, "ending playback returns to the chrome it started from")
+    }
+    @MainActor func testPlaybackRoundTripReturnsToTheImmersiveStateItStartedFrom() throws {
+        let journey = try MediaFixtures.journey(), intent = MediaFixtures.intent()
+        let session = ScopedMediaSession(scopeID: "owner", access: .owner,
+            read: { _ in throw MediaFailure.unavailable }, request: { _, _, _ in Data() }, revalidate: {})
+        var returns: [MediaReturn] = []
+        let model = try StoryModel(journey: journey, intent: intent, session: session, ownership: PlaybackOwnership(),
+            currentIntent: { intent }, latestJourney: { journey }, onReturn: { returns.append($0) })
+        model.setImmersive(true)
+        model.playJourney()
+        model.setPaused(true); XCTAssertFalse(model.immersive)
+        model.leave()
+        XCTAssertNil(model.playback); XCTAssertTrue(model.immersive)
+        model.finish()
+        XCTAssertEqual(returns.count, 1); XCTAssertEqual(returns.first?.surface, .story)
+        XCTAssertEqual(returns.first?.immersive, true)
     }
     @MainActor func testTappingAnotherClipSeeksPlaybackAndPlaysItEvenWhenPaused() throws {
         let journey = try MediaFixtures.journey(), intent = MediaFixtures.intent()

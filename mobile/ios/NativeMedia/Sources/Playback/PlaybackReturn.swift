@@ -19,19 +19,20 @@ public struct MediaReturn: Equatable, Sendable {
     public let journeyId: String?
     public let routePointId: String?
     public let assetId: String?
-    public let expanded: Bool
+    /// The immersive state the browsing Story had; a playback round trip returns to it.
+    public let immersive: Bool
     public let requestId: String
     public let revision: Int
 }
 
 public func resolveMediaReturn(entry: StoryIntent, committed: PlaybackPosition?, reason: MediaReturn.Reason,
                                currentRequestID: String, currentIntentRevision: Int,
-                               journey: MediaJourney?, expanded: Bool) -> MediaReturn? {
+                               journey: MediaJourney?, immersive: Bool) -> MediaReturn? {
     guard entry.requestId == currentRequestID, entry.revision >= currentIntentRevision else { return nil }
     func result(_ surface: MediaReturn.Surface, _ fallback: MediaReturn.Fallback,
                 _ journeyID: String?, _ pointID: String? = nil, _ assetID: String? = nil) -> MediaReturn {
         MediaReturn(surface: surface, reason: reason, fallback: fallback, journeyId: journeyID,
-                    routePointId: pointID, assetId: assetID, expanded: surface == .story && expanded, requestId: entry.requestId, revision: entry.revision)
+                    routePointId: pointID, assetId: assetID, immersive: surface == .story && immersive, requestId: entry.requestId, revision: entry.revision)
     }
     guard let journey, journey.id == entry.journeyId else { return result(.atlas, .journeyUnavailable, nil) }
     if reason == .completed { return result(.atlas, .none, journey.id) }

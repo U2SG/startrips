@@ -64,8 +64,9 @@ final class StoryPresentationUITests: XCTestCase {
         assertTempoBeforePlay(app)
 
         // Play flows down the stream itself: no pager, the content keeps moving, pause freezes it.
+        // Playing is immersive, so the controls step aside until the stream is touched.
         app.buttons["story.play"].tap()
-        XCTAssertTrue(app.buttons["story.pause"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["story.close"].waitForNonExistence(timeout: 5))
         // Few snapshots while the flow moves every frame: each query walks the whole tree,
         // and a slow CI simulator times out when they are fired back to back.
         var samples: [CGFloat] = []
@@ -77,7 +78,11 @@ final class StoryPresentationUITests: XCTestCase {
         XCTAssertFalse(element(app, "story.photo.media:asset-fixture").exists, "no page-by-page player")
         XCTAssertGreaterThan((samples.max() ?? 0) - (samples.min() ?? 0), 40, "the stream flows while playing")
         capture(app, "story-style-stream-playing")
-        app.buttons["story.pause"].tap()
+        // A finger on the playing stream takes it over (pause) and brings the chrome back.
+        element(app, "story.stream").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let pause = app.buttons["story.pause"]
+        XCTAssertTrue(pause.waitForExistence(timeout: 5))
+        if pause.label == "暂停" { pause.tap() }
         RunLoop.current.run(until: Date().addingTimeInterval(1))
         let frozen = streamed.frame.minY
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
@@ -145,6 +150,11 @@ final class StoryPresentationUITests: XCTestCase {
         next.tap()
         let second = book.images["second.png"].firstMatch
         XCTAssertTrue(second.waitForExistence(timeout: 10))
+        // Immersive reading reaches the web book too: a tap on its middle brings the chrome back.
+        app.buttons["story.expand"].tap()
+        XCTAssertTrue(app.buttons["story.close"].waitForNonExistence(timeout: 5))
+        book.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 5))
 
         XCUIDevice.shared.orientation = .landscapeLeft
         let deadline = Date().addingTimeInterval(10)
