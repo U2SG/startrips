@@ -1,6 +1,7 @@
 import AVFoundation
 import SwiftUI
 import UIKit
+import WebKit
 
 /// The app owns the bundled WebKit renderer and its lifetime.
 public typealias Story3DBookBuilder = @MainActor (StoryModel, @escaping () -> Void) -> AnyView
@@ -33,12 +34,17 @@ public struct NativeStoryDestination: View {
     private var pagesBook: Bool { model.playback == nil && style == .book }
     public var body: some View {
         VStack(spacing: 0) {
-            header
+            // Immersive reading, as in Photos: the chrome steps aside and the media with its
+            // reflection takes the room. One tap on the content brings the chrome back.
+            if !model.immersive { header.transition(.opacity) }
             content.frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Each StoryPage already owns its caption/notes. A second,
-            // collapsed-mode text panel repeats the same reflection.
-            controls
+                .background { ImmersiveTapCatcher(active: model.immersive) { model.setImmersive(false) } }
+            if !model.immersive { controls.transition(.opacity) }
         }
+        .overlay(alignment: .top) { if model.immersive { immersiveExit } }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: model.immersive)
+        .statusBarHidden(model.immersive)
+        .persistentSystemOverlays(model.immersive ? .hidden : .automatic)
         .foregroundStyle(StoryTheme.ink).tint(StoryTheme.ink)
         .background(StoryTheme.background.ignoresSafeArea())
         .onAppear {
@@ -121,12 +127,23 @@ public struct NativeStoryDestination: View {
                     .frame(width: StoryTheme.hitTarget, height: StoryTheme.hitTarget).contentShape(Rectangle())
             }
             .accessibilityLabel("展示方式").accessibilityValue(style.label).accessibilityIdentifier("story.style")
-            StoryIconButton(symbol: model.expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
-                            label: model.expanded ? "收起" : "全屏", id: "story.expand") {
-                if model.expanded { model.collapse() } else { model.expanded = true }
+            StoryIconButton(symbol: model.immersive ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                            label: model.immersive ? "退出沉浸" : "沉浸浏览", id: "story.expand") {
+                model.setImmersive(!model.immersive)
             }
             }.frame(width: StoryTheme.hitTarget * 2)
         }.frame(minHeight: StoryTheme.hitTarget).padding(.horizontal, StoryTheme.slotInset)
+    }
+
+    /// VoiceOver's way out of immersive reading: an unseen button where the header was, plus the
+    /// escape gesture. Its clear face is not hit-testable, so a finger tap still lands on the content.
+    private var immersiveExit: some View {
+        Button { model.setImmersive(false) } label: {
+            Color.clear.frame(maxWidth: .infinity).frame(height: StoryTheme.hitTarget)
+        }
+        .accessibilityLabel("退出沉浸").accessibilityIdentifier("story.immersive.exit")
+        .accessibilityAction(.escape) { model.setImmersive(false) }
+        .accessibilitySortPriority(1)
     }
 
     @ViewBuilder private var content: some View {
@@ -443,6 +460,68 @@ struct StoryPager: UIViewControllerRepresentable {
             defer { pending = nil }
             guard generation == model.pageGeneration, let pending else { return }
             model.finishPaging(pending, completed: completed)
+        }
+    }
+}
+
+/// While immersive, one tap on the Story content brings the chrome back. The recognizer sits on the
+/// hosting view, so it also sees taps on UIKit pages; it never cancels their touches, recognizes
+/// alongside swipes, and waits for a double-tap zoom or a page-curl tap to fail first. The 3D book's
+/// web view reports its own idle taps through its bridge, so its controls keep their taps.
+private struct ImmersiveTapCatcher: UIViewRepresentable {
+    let active: Bool
+    let reveal: () -> Void
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> Anchor {
+        let view = Anchor()
+        view.isUserInteractionEnabled = false; view.isAccessibilityElement = false
+        view.coordinator = context.coordinator; context.coordinator.region = view
+        return view
+    }
+    func updateUIView(_ view: Anchor, context: Context) {
+        context.coordinator.reveal = reveal
+        context.coordinator.recognizer.isEnabled = active
+    }
+    static func dismantleUIView(_ view: Anchor, coordinator: Coordinator) { coordinator.detach() }
+
+    final class Anchor: UIView {
+        weak var coordinator: Coordinator?
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if window == nil { coordinator?.detach() } else { coordinator?.attach(above: self) }
+        }
+    }
+    @MainActor final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        weak var region: UIView?
+        var reveal: () -> Void = {}
+        private(set) lazy var recognizer: UITapGestureRecognizer = {
+            let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
+            tap.cancelsTouchesInView = false; tap.delaysTouchesEnded = false; tap.delegate = self
+            return tap
+        }()
+        /// The root view of the controller that hosts the Story: the content's UIKit views live under it.
+        func attach(above view: UIView) {
+            var host = view.superview
+            while let candidate = host, !(candidate.next is UIViewController) { host = candidate.superview }
+            guard let host, recognizer.view !== host else { return }
+            detach(); host.addGestureRecognizer(recognizer)
+        }
+        func detach() { recognizer.view?.removeGestureRecognizer(recognizer) }
+        @objc private func tapped() { reveal() }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard let region else { return false }
+            var view = touch.view
+            while let current = view {
+                if current is WKWebView { return false }
+                view = current.superview
+            }
+            return region.bounds.contains(touch.location(in: region))
+        }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRequireFailureOf other: UIGestureRecognizer) -> Bool {
+            guard let tap = other as? UITapGestureRecognizer, tap !== recognizer else { return false }
+            return tap.numberOfTapsRequired > 1 || tap.view?.next is UIPageViewController
         }
     }
 }

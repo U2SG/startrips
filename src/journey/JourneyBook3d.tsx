@@ -269,6 +269,8 @@ export function JourneyBook3dReader({
     picture: (assetId: string) => Promise<string>;
     playVideo: (assetId: string) => void;
     position: (page: JourneyBookPage) => void;
+    /** A tap on the book's middle that turns no page and plays nothing. */
+    idleTap?: () => void;
   };
   /** The presentation picker offers the editor only to editors. */
   canEdit?: boolean;
@@ -895,6 +897,7 @@ export function JourneyBook3dReader({
     }
     if (x < stage.width / 3) step(-1);
     else if (x > (stage.width * 2) / 3) step(1);
+    else embedded?.idleTap?.();
   }
 
   function onPointerLeave(event: ReactPointerEvent<HTMLDivElement>) {

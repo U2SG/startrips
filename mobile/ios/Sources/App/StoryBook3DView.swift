@@ -250,6 +250,9 @@ private struct BookScene: UIViewRepresentable {
             case "close":
                 replyHandler(true, nil)
                 model.leave()
+            case "tap":
+                replyHandler(true, nil)
+                model.setImmersive(false)
             case "video":
                 guard let asset = snapshot.journey.media.first(where: { $0.id == assetID && $0.mimeType.hasPrefix("video/") }) else {
                     replyHandler(nil, "Video unavailable"); return
