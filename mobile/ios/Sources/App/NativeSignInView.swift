@@ -89,7 +89,8 @@ struct NativeSignInView: View {
                     .submitLabel(.done).focused($focus, equals: .atlasName)
                     .onSubmit { model.createAtlas() }
                     .onChange(of: model.atlasName) { _, value in
-                        if value.count > AtlasSetup.titleLimit { model.atlasName = String(value.prefix(AtlasSetup.titleLimit)) }
+                        let clamped = AtlasSetup.clamped(value)
+                        if clamped != value { model.atlasName = clamped }
                     }
                     .frame(minHeight: NightFlight.hitTarget)
                     .accessibilityIdentifier("atlas.setup.name")

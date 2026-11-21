@@ -46,10 +46,17 @@ struct AtlasSetup {
         return (base.isEmpty ? "atlas" : base) + "-" + suffix
     }
 
-    /// The server's Atlas title rule: trimmed, 1...80 characters.
+    /// The server's Atlas title rule: trimmed, 1...80 JavaScript (UTF-16) code units.
     static func title(_ name: String) -> String? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty || trimmed.count > titleLimit ? nil : trimmed
+        return trimmed.isEmpty || trimmed.utf16.count > titleLimit ? nil : trimmed
+    }
+
+    /// The longest whole-character prefix within the server's UTF-16 limit.
+    static func clamped(_ name: String) -> String {
+        var result = name
+        while result.utf16.count > titleLimit { result.removeLast() }
+        return result
     }
 
     /// Mirrors `gateFromOrganizationList` + `gateFromCurrentAtlas`.
@@ -117,7 +124,7 @@ struct AtlasSetup {
         if (200..<300).contains(status) { return .ready }
         struct Refusal: Decodable { let error: String? }
         if status == 404, (try? JSONDecoder().decode(Refusal.self, from: data))?.error == "ATLAS_NOT_FOUND" {
-            return .name(.bootstrap, prefill: String((organization?.name ?? "").prefix(Self.titleLimit)))
+            return .name(.bootstrap, prefill: Self.clamped(organization?.name ?? ""))
         }
         throw status == 429 ? Failure.rateLimited : Failure.unavailable
     }

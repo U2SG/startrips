@@ -109,20 +109,15 @@ final class AtlasSetupTests: XCTestCase {
     override func setUp() async throws { AtlasServer.reset(); AtlasSession.testProtocolClasses = [AtlasServer.self] }
     override func tearDown() async throws { AtlasSession.testProtocolClasses = []; AtlasServer.reset() }
 
-    private func signedIn() async throws -> AtlasSession {
+    /// An owner session on the fake server. The server does not check cookies, so no
+    /// cookie is written: publishing one would start WebKit's network process from the
+    /// default off-main cookie writer, which traps when this suite runs first.
+    private func signedIn() throws -> AtlasSession {
         let session = AtlasSession()
         try session.configureTestOrigin(origin)
         try session.configureOwner()
         session.loginPresented = true
-        let cookie = HTTPCookie.cookies(withResponseHeaderFields: ["Set-Cookie": "__Secure-startrips.session_token=tok.sig; Path=/; HttpOnly; Secure; Max-Age=600"], for: origin)[0]
-        let published = await session.publishGoogleSession(cookie, at: origin, generation: session.generation, pending: { true })
-        XCTAssertTrue(published)
         return session
-    }
-
-    private func cleanUp(_ session: AtlasSession) async {
-        let store = session.cookieStore.httpCookieStore
-        for cookie in await store.allCookies() { await store.deleteCookie(cookie) }
     }
 
     func testSlugAndTitleFollowTheWebGate() {
@@ -133,10 +128,16 @@ final class AtlasSetupTests: XCTestCase {
         XCTAssertNil(AtlasSetup.title(" "))
         XCTAssertNil(AtlasSetup.title(String(repeating: "图", count: 81)))
         XCTAssertEqual(AtlasSetup.title(String(repeating: "图", count: 80))?.count, 80)
+        // The server counts JavaScript UTF-16 code units: 41 emoji are 82 units.
+        XCTAssertNil(AtlasSetup.title(String(repeating: "🌍", count: 41)))
+        XCTAssertNotNil(AtlasSetup.title(String(repeating: "🌍", count: 40)))
+        XCTAssertEqual(AtlasSetup.clamped(String(repeating: "🌍", count: 41)), String(repeating: "🌍", count: 40))
+        XCTAssertEqual(AtlasSetup.clamped("a" + String(repeating: "🌍", count: 40)), "a" + String(repeating: "🌍", count: 39),
+                       "never splits a character")
     }
 
     func testAnEmptyAccountCreatesActivatesAndBootstrapsInOrder() async throws {
-        let session = try await signedIn()
+        let session = try signedIn()
         let setup = AtlasSetup(session: session, suffix: { "1a2b3c4d" })
         let first = try await setup.next()
         XCTAssertEqual(first, .name(.createOrganization, prefill: ""))
@@ -153,11 +154,10 @@ final class AtlasSetupTests: XCTestCase {
         }
         let ready = try await setup.next()
         XCTAssertEqual(ready, .ready, "the active Organization now has its Atlas")
-        await cleanUp(session)
     }
 
     func testALostCreateResponseResumesTheSameOrganization() async throws {
-        let session = try await signedIn()
+        let session = try signedIn()
         let setup = AtlasSetup(session: session)
         AtlasServer.fault(create, .lost)
         do { _ = try await setup.create(name: "Our Trip", resuming: false); XCTFail("lost response") }
@@ -169,11 +169,10 @@ final class AtlasSetupTests: XCTestCase {
         XCTAssertEqual(AtlasServer.calls(create).count, 1, "the retry re-listed instead of creating again")
         XCTAssertEqual(AtlasServer.organizations.count, 1)
         XCTAssertEqual(AtlasServer.atlases, ["org-1"])
-        await cleanUp(session)
     }
 
     func testAFailedBootstrapResumesAfterRelaunchWithTheOrganizationName() async throws {
-        let session = try await signedIn()
+        let session = try signedIn()
         AtlasServer.fault(bootstrap, .status(500))
         do { _ = try await AtlasSetup(session: session).create(name: "Our Trip", resuming: false); XCTFail("bootstrap failed") }
         catch { XCTAssertEqual(error as? AtlasSetup.Failure, .bootstrap) }
@@ -195,11 +194,10 @@ final class AtlasSetupTests: XCTestCase {
         XCTAssertEqual(done, .ready)
         XCTAssertEqual(AtlasServer.calls(create).count, 1, "no second Organization")
         XCTAssertEqual(AtlasServer.atlases, ["org-1"])
-        await cleanUp(session)
     }
 
     func testRefusalsMapToShortStatusText() async throws {
-        let session = try await signedIn()
+        let session = try signedIn()
         let setup = AtlasSetup(session: session)
         AtlasServer.fault(create, .status(429))
         do { _ = try await setup.create(name: "Trip", resuming: false); XCTFail() }
@@ -218,11 +216,10 @@ final class AtlasSetupTests: XCTestCase {
         XCTAssertEqual(AtlasSetup.Failure.activate.message, "无法切换私人图谱")
         XCTAssertEqual(AtlasSetup.Failure.bootstrap.message, "无法完成图谱初始化")
         XCTAssertEqual(AtlasSetup.Failure.rateLimited.message, "尝试次数过多，请稍后再试")
-        await cleanUp(session)
     }
 
     func testTheSignInSheetRetriesALostCreateWithoutASecondOrganization() async throws {
-        let session = try await signedIn()
+        let session = try signedIn()
         let model = NativeSignInModel(session: session, origin: origin)
         model.sessionInstalled()
         await model.settle()
@@ -241,6 +238,5 @@ final class AtlasSetupTests: XCTestCase {
         XCTAssertFalse(session.loginPresented, "the sheet closes into the normal connectOwner() path")
         XCTAssertEqual(AtlasServer.calls(create).count, 1)
         XCTAssertEqual(AtlasServer.atlases, ["org-1"])
-        await cleanUp(session)
     }
 }
