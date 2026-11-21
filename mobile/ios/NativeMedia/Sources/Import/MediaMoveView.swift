@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @MainActor public final class MediaMoveModel: ObservableObject {
     @Published public var selected = Set<String>()
@@ -53,30 +54,106 @@ import SwiftUI
     }
 }
 
-public struct MediaMoveView: View {
+/// 整理 in the Story tools: pick media by picture; the destination and the move
+/// button only appear once something is picked.
+struct MediaMoveSection: View {
     @ObservedObject var model: MediaMoveModel
-    public init(model: MediaMoveModel) { self.model = model }
-    public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("移动素材").font(.headline)
-            ForEach(model.source.media.filter(\.isVisual)) { asset in
-                Toggle(asset.fileName, isOn: Binding(get: { model.selected.contains(asset.id) }, set: { selected in
-                    if selected { model.selected.insert(asset.id) } else { model.selected.remove(asset.id) }
-                })).frame(minHeight: 44)
+    let thumbnail: (MediaAsset) async -> UIImage?
+    @ScaledMetric(relativeTo: .body) private var cell: CGFloat = 72
+    private var visual: [MediaAsset] { model.source.media.filter(\.isVisual) }
+    private var points: [MediaRoutePoint] {
+        model.journeys.first(where: { $0.id == model.targetJourneyID })?.routePoints ?? []
+    }
+
+    var body: some View {
+        if !visual.isEmpty || model.canUndo || model.failure != nil {
+            Section("整理") {
+                if !visual.isEmpty { grid }
+                if !model.selected.isEmpty {
+                    Picker("旅程", selection: $model.targetJourneyID) {
+                        ForEach(model.journeys, id: \.id) { journey in Text(journey.title).tag(journey.id) }
+                    }
+                    .storyToolRow()
+                    .accessibilityIdentifier("story.move.journey")
+                    .onChange(of: model.targetJourneyID) { _ in model.targetPointID = nil }
+                    Picker("途径点", selection: $model.targetPointID) {
+                        Text("整个旅程").tag(String?.none)
+                        ForEach(points, id: \.id) { point in Text(point.label).tag(Optional(point.id)) }
+                    }
+                    .storyToolRow()
+                    .accessibilityIdentifier("story.move.point")
+                    Button { Task { await model.move() } } label: {
+                        Label("移动 \(model.selected.count) 项", systemImage: "arrow.right.circle")
+                    }
+                    .disabled(model.busy)
+                    .storyToolRow()
+                    .accessibilityIdentifier("story.move")
+                }
+                if model.canUndo {
+                    Button { Task { await model.undo() } } label: { Label("撤销移动", systemImage: "arrow.uturn.backward") }
+                        .disabled(model.busy)
+                        .storyToolRow()
+                        .accessibilityIdentifier("story.move.undo")
+                }
+                if let failure = model.failure { StoryToolNote(text: failure) }
             }
-            Picker("旅程", selection: $model.targetJourneyID) {
-                ForEach(model.journeys, id: \.id) { journey in Text(journey.title).tag(journey.id) }
+        }
+    }
+
+    private var grid: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: cell), spacing: StoryTheme.grid(2))], spacing: StoryTheme.grid(2)) {
+            ForEach(Array(visual.enumerated()), id: \.element.id) { index, asset in
+                let chosen = model.selected.contains(asset.id)
+                Button {
+                    if chosen { model.selected.remove(asset.id) } else { model.selected.insert(asset.id) }
+                } label: {
+                    MoveThumbnail(asset: asset, load: thumbnail)
+                        .aspectRatio(1, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: StoryTheme.grid(2), style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: StoryTheme.grid(2), style: .continuous)
+                            .strokeBorder(chosen ? StoryTheme.accent : Color.clear, lineWidth: 2))
+                        .overlay(alignment: .topTrailing) {
+                            Image(systemName: chosen ? "checkmark.circle.fill" : "circle")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(chosen ? StoryTheme.accent : StoryTheme.ink)
+                                .shadow(color: .black.opacity(0.5), radius: 2)
+                                .padding(StoryTheme.grid(1))
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(asset.isVideo ? "视频" : "照片") \(index + 1)")
+                .accessibilityAddTraits(chosen ? .isSelected : [])
+                .accessibilityIdentifier("story.move.asset." + asset.id)
             }
-            Picker("途径点", selection: $model.targetPointID) {
-                Text("整个旅程").tag(String?.none)
-                ForEach(model.journeys.first(where: { $0.id == model.targetJourneyID })?.routePoints ?? [], id: \.id) { point in
-                    Text(point.label).tag(Optional(point.id))
+        }
+        .padding(.vertical, StoryTheme.grid(2))
+        .listRowBackground(StoryTheme.surface)
+        .task { await model.load() }
+    }
+}
+
+/// A square picture of one asset, read through the Story's own image loading.
+private struct MoveThumbnail: View {
+    let asset: MediaAsset
+    let load: (MediaAsset) async -> UIImage?
+    @State private var image: UIImage?
+    var body: some View {
+        Rectangle().fill(StoryTheme.line)
+            .overlay {
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFill()
+                } else {
+                    Image(systemName: asset.isVideo ? "video" : "photo").foregroundStyle(StoryTheme.muted)
                 }
             }
-            Button("移动所选素材") { Task { await model.move() } }.disabled(model.busy || model.selected.isEmpty).frame(minHeight: 44)
-            if model.canUndo { Button("撤销移动") { Task { await model.undo() } }.disabled(model.busy).frame(minHeight: 44) }
-            if let failure = model.failure { Text(failure).font(.callout) }
-        }.task { await model.load() }
-            .onChange(of: model.targetJourneyID) { _ in model.targetPointID = nil }
+            .overlay(alignment: .bottomLeading) {
+                if asset.isVideo, image != nil {
+                    Image(systemName: "video.fill").font(.caption).foregroundStyle(StoryTheme.ink)
+                        .shadow(color: .black.opacity(0.5), radius: 2).padding(StoryTheme.grid(1))
+                }
+            }
+            .clipped()
+            .task(id: asset.id) { if image == nil { image = await load(asset) } }
     }
 }

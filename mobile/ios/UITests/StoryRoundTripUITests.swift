@@ -15,6 +15,13 @@ extension AtlasUITests {
         XCTAssertEqual(app.buttons["story.previous"].label, "上一页")
         XCTAssertEqual(app.buttons["story.next"].label, "下一页")
         XCTAssertTrue(app.buttons["整理与导出"].exists)
+        // The tools list leads with 素材; recovery rows only appear with an unfinished upload.
+        app.buttons["整理与导出"].tap()
+        let addMedia = app.descendants(matching: .any)["story.import"]
+        XCTAssertTrue(addMedia.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.descendants(matching: .any)["story.import.recover"].exists)
+        app.buttons["完成"].firstMatch.tap()
+        XCTAssertTrue(addMedia.waitForNonExistence(timeout: 5))
         // Collapsing the native Story must not render its current reflection twice.
         let reflections = app.staticTexts.matching(
             NSPredicate(format: "label == %@", "Synthetic bridge fixture"))

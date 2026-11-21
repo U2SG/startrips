@@ -222,6 +222,22 @@ import UIKit
         }
     }
     public func image(for assetID: String) -> UIImage? { images[assetID] ?? library[assetID] }
+
+    /// A small picture for the tools' media grid. Uses an already decoded page or library
+    /// image when there is one; otherwise reads the display rendition at thumbnail size,
+    /// at most `libraryConcurrency` at a time (server rate limits). Videos without a
+    /// decoded poster stay a glyph. Nil on failure: the grid keeps its placeholder.
+    func thumbnail(for asset: MediaAsset) async -> UIImage? {
+        if let image = image(for: asset.id) { return image }
+        guard asset.isVisual, !asset.isVideo, !closed else { return nil }
+        if thumbnailSlots > 0 { thumbnailSlots -= 1 } else { await withCheckedContinuation { thumbnailWaiters.append($0) } }
+        defer { if thumbnailWaiters.isEmpty { thumbnailSlots += 1 } else { thumbnailWaiters.removeFirst().resume() } }
+        guard !Task.isCancelled, !closed else { return nil }
+        return try? await loadImage(asset, maxPixel: 240, display: true)
+    }
+    private var thumbnailSlots = StoryModel.libraryConcurrency
+    private var thumbnailWaiters: [CheckedContinuation<Void, Never>] = []
+
     private func clearLibrary() {
         libraryEpoch += 1; libraryTasks.values.forEach { $0.cancel() }; libraryTasks.removeAll(); libraryQueue.removeAll()
         library.removeAll(); libraryOrder.removeAll()

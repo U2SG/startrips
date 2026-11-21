@@ -199,43 +199,67 @@ import UIKit
     }
 }
 
-public struct FilmExportButton: View {
+/// 导出 in the Story tools: standard picker and toggle rows, then 生成 MP4 as the
+/// sheet's one primary button. Sharing hands the file to the Story (`share`),
+/// which presents it after the tools sheet has closed.
+struct FilmExportSection: View {
     @ObservedObject var model: FilmExportModel
-    @State private var sharing = false
-    @State private var shareURL: URL?
-    public init(model: FilmExportModel) { self.model = model }
-    public var body: some View {
-        VStack {
+    let share: (URL) -> Void
+    var body: some View {
+        Section("导出") {
             if model.busy {
-                ProgressView("正在生成影片", value: model.progress)
-                Button("取消导出") { model.cancel() }.frame(minHeight: 44)
+                ProgressView(value: model.progress) { Text("正在生成影片") }
+                    .storyToolRow()
+                Button(role: .destructive) { model.cancel() } label: { Label("取消导出", systemImage: "xmark.circle") }
+                    .storyToolRow()
             } else {
                 if model.canConfigureNotes {
                     Picker("画面比例", selection: $model.portrait) {
                         Text("竖屏 9:16").tag(true)
                         Text("横屏 16:9").tag(false)
-                    }.accessibilityIdentifier("story.export.aspect")
+                    }
+                    .storyToolRow()
+                    .accessibilityIdentifier("story.export.aspect")
                     Picker("目标时长", selection: $model.presetSeconds) {
                         ForEach([15, 30, 60], id: \.self) { seconds in Text("\(seconds) 秒").tag(seconds) }
-                    }.accessibilityIdentifier("story.export.duration")
-                    Toggle("包含感想字幕", isOn: $model.includeNotes).accessibilityIdentifier("story.export.captions")
-                    Toggle("使用已生成的艺术封面", isOn: $model.includeCover).accessibilityIdentifier("story.export.cover")
+                    }
+                    .storyToolRow()
+                    .accessibilityIdentifier("story.export.duration")
+                    Toggle("包含感想字幕", isOn: $model.includeNotes)
+                        .tint(StoryTheme.accent).storyToolRow()
+                        .accessibilityIdentifier("story.export.captions")
+                    Toggle("使用已生成的艺术封面", isOn: $model.includeCover)
+                        .tint(StoryTheme.accent).storyToolRow()
+                        .accessibilityIdentifier("story.export.cover")
                 }
                 if model.hasSoundtrack {
-                    Toggle("包含旅程配乐", isOn: $model.includeSoundtrack).accessibilityIdentifier("story.export.soundtrack")
+                    Toggle("包含旅程配乐", isOn: $model.includeSoundtrack)
+                        .tint(StoryTheme.accent).storyToolRow()
+                        .accessibilityIdentifier("story.export.soundtrack")
                 }
-                Button("生成 MP4") { model.start() }.frame(minHeight: 44).accessibilityIdentifier("story.export")
                 if model.file != nil {
-                    Button("保存或分享影片") {
-                        Task { do { shareURL = try await model.authorizeShare(); sharing = true } catch { /* Model displays the failure. */ } }
-                    }.frame(minHeight: 44)
+                    Button {
+                        Task { do { share(try await model.authorizeShare()) } catch { /* Model displays the failure. */ } }
+                    } label: { Label("保存或分享影片", systemImage: "square.and.arrow.up") }
+                    .storyToolRow()
+                    .accessibilityIdentifier("story.export.share")
                 }
             }
-            if let failure = model.failure { Text(failure).font(.callout) }
-        }.sheet(isPresented: $sharing) { if let shareURL { FilmShareSheet(file: shareURL) } }
+            if let failure = model.failure { StoryToolNote(text: failure) }
+        }
+        if !model.busy {
+            Section {
+                Button { model.start() } label: { Label("生成 MP4", systemImage: "film") }
+                    .buttonStyle(StoryPrimaryButtonStyle())
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .accessibilityIdentifier("story.export")
+            }
+        }
     }
 }
-private struct FilmShareSheet: UIViewControllerRepresentable {
+
+struct FilmShareSheet: UIViewControllerRepresentable {
     let file: URL
     func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: [file], applicationActivities: nil) }
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}

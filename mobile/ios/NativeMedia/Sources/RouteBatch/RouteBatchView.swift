@@ -8,8 +8,8 @@ struct RouteBatchEntry: View {
     @ObservedObject var model: RoutePointBatchModel
     var body: some View {
         if model.showsReopen {
-            Button("继续整理照片") { model.requestReview() }
-                .frame(minHeight: StoryTheme.hitTarget)
+            Button { model.requestReview() } label: { Label("继续整理照片", systemImage: "rectangle.stack") }
+                .storyToolRow()
                 .accessibilityIdentifier("route-batch.reopen")
         }
     }

@@ -273,6 +273,23 @@ final class ImportScopeTests: XCTestCase {
         }
     }
 
+    @MainActor func testRecoveryIsOfferedOnlyForThisJourneysUnfinishedUploads() throws {
+        let session = ScopedMediaSession(scopeID: "owner", access: .owner, read: { _ in throw MediaFailure.unavailable },
+                                         request: { _, _, _ in throw MediaFailure.unavailable }, revalidate: {})
+        let root = try directory(), source = root.appendingPathComponent("original")
+        try Data([1]).write(to: source)
+        let importer = try MultipartImporter(session: session, directory: root.appendingPathComponent("journal"), uploader: RecordingUploader())
+        func model(_ journeyID: String) -> PhotosImportModel {
+            PhotosImportModel(importer: importer, journeyID: journeyID, routePointID: nil) { _ in }
+        }
+        let quiet = model("j")
+        XCTAssertFalse(quiet.hasPending, "Nothing unfinished: no 恢复上传 or 取消未完成导入")
+        _ = try importer.stage(file: source, fileName: "one.jpg", mimeType: "image/jpeg", journeyId: "j", routePointId: nil)
+        XCTAssertTrue(model("j").hasPending)
+        XCTAssertFalse(model("other").hasPending, "Another Journey's upload is not offered here")
+        quiet.refreshPending()
+        XCTAssertTrue(quiet.hasPending)
+    }
     @MainActor func testChangedAccountCannotResumePreviousJournal() async throws {
         let root = try directory(), source = root.appendingPathComponent("original")
         try Data([1]).write(to: source)

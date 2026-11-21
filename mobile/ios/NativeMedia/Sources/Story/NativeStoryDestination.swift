@@ -14,6 +14,8 @@ public struct NativeStoryDestination: View {
     private let journalImport: JournalImportModel?
     private let book3D: Story3DBookBuilder?
     @State private var toolsPresented = false
+    @State private var handOff: StoryToolsHandOff?
+    @State private var sharedFilm: SharedFilm?
     @StateObject private var book = StoryBookState()
     @AppStorage(StoryPresentationStyle.defaultsKey) private var storedStyle = StoryPresentationStyle.classic.rawValue
     @Environment(\.scenePhase) private var scenePhase
@@ -67,22 +69,32 @@ public struct NativeStoryDestination: View {
         .onChange(of: storedStyle) { _ in model.cancelPaging() }
         .onChange(of: shows3DBook) { reading in model.setReading3DBook(reading) }
         .background {
-            if model.session.access == .owner, let batch = importer?.routeBatch {
-                RouteBatchPresenter(model: batch, toolsPresented: $toolsPresented)
+            if model.session.access == .owner {
+                if let batch = importer?.routeBatch { RouteBatchPresenter(model: batch, toolsPresented: $toolsPresented) }
+                if let journalImport { JournalImportPresenter(model: journalImport) }
+                Color.clear.sheet(item: $sharedFilm) { film in FilmShareSheet(file: film.url) }
             }
         }
-        .sheet(isPresented: $toolsPresented, onDismiss: { importer?.routeBatch?.presentRequestedReview() }) {
-            NavigationStack {
-                ScrollView {
-                    VStack(spacing: StoryTheme.grid(6)) {
-                        if model.session.access == .owner, let importer { PhotosImportButton(model: importer) }
-                        if model.session.access == .owner, let moveModel { MediaMoveView(model: moveModel) }
-                        if model.session.access == .owner, let journalImport { JournalImportEntry(model: journalImport) }
-                        if model.session.access == .owner, let exporter { FilmExportButton(model: exporter) }
-                    }.padding(StoryTheme.grid(6))
-                }.navigationTitle("整理与导出")
-                    .toolbar { Button("完成") { toolsPresented = false } }
-            }
+        .sheet(isPresented: $toolsPresented, onDismiss: presentHandOff) {
+            let owner = model.session.access == .owner
+            StoryToolsSheet(importer: owner ? importer : nil, moveModel: owner ? moveModel : nil,
+                            journalImport: owner ? journalImport : nil, exporter: owner ? exporter : nil,
+                            thumbnail: { [model] asset in await model.thumbnail(for: asset) },
+                            handOff: { handOff = $0; toolsPresented = false },
+                            close: { toolsPresented = false })
+        }
+    }
+
+    /// Runs once the tools sheet is gone, so whatever it asked for is presented
+    /// from the Story and never on top of (or racing) the tools sheet.
+    private func presentHandOff() {
+        importer?.routeBatch?.presentRequestedReview()
+        let request = handOff
+        handOff = nil
+        switch request {
+        case .journalImport?: journalImport?.open()
+        case .shareFilm(let url)?: sharedFilm = SharedFilm(url: url)
+        case nil: break
         }
     }
 
