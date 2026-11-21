@@ -2,18 +2,36 @@ import ImageIO
 import SwiftUI
 import UIKit
 
-/// Reopens a batch that is still open, and presents the review sheet.
+/// Reopens a batch that is still open. The review sheet itself is presented
+/// by `RouteBatchPresenter` at Story level, never from inside the tools sheet.
 struct RouteBatchEntry: View {
     @ObservedObject var model: RoutePointBatchModel
     var body: some View {
-        Group {
-            if model.stage != .idle && !model.presented {
-                Button("继续整理照片") { model.presented = true }
-                    .frame(minHeight: StoryTheme.hitTarget)
-                    .accessibilityIdentifier("route-batch.reopen")
-            }
+        if model.showsReopen {
+            Button("继续整理照片") { model.requestReview() }
+                .frame(minHeight: StoryTheme.hitTarget)
+                .accessibilityIdentifier("route-batch.reopen")
         }
-        .sheet(isPresented: $model.presented) { RouteBatchSheet(model: model) }
+    }
+}
+
+/// Story-level host of the review sheet. A review request first closes the
+/// tools sheet (and the photo picker above it); the tools sheet's `onDismiss`
+/// then calls `presentRequestedReview()`, so the review never races another
+/// presentation.
+struct RouteBatchPresenter: View {
+    @ObservedObject var model: RoutePointBatchModel
+    @Binding var toolsPresented: Bool
+    var body: some View {
+        Color.clear
+            .onChange(of: model.reviewRequests) { _ in
+                if toolsPresented { toolsPresented = false } else { model.presentRequestedReview() }
+            }
+            .sheet(isPresented: $model.presented) {
+                RouteBatchSheet(model: model)
+                    .onAppear { model.sheetVisibilityChanged(true) }
+                    .onDisappear { model.sheetVisibilityChanged(false) }
+            }
     }
 }
 

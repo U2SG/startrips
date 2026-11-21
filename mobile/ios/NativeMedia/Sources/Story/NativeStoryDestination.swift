@@ -66,7 +66,12 @@ public struct NativeStoryDestination: View {
         .onChange(of: scenePhase) { phase in if phase != .active { model.setPaused(true) } }
         .onChange(of: storedStyle) { _ in model.cancelPaging() }
         .onChange(of: shows3DBook) { reading in model.setReading3DBook(reading) }
-        .sheet(isPresented: $toolsPresented) {
+        .background {
+            if model.session.access == .owner, let batch = importer?.routeBatch {
+                RouteBatchPresenter(model: batch, toolsPresented: $toolsPresented)
+            }
+        }
+        .sheet(isPresented: $toolsPresented, onDismiss: { importer?.routeBatch?.presentRequestedReview() }) {
             NavigationStack {
                 ScrollView {
                     VStack(spacing: StoryTheme.grid(6)) {

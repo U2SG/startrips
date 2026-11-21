@@ -120,7 +120,14 @@ public struct RouteBatchJournalStore {
     @Published public private(set) var operation: RouteBatchOperation?
     @Published public private(set) var message: String?
     @Published public private(set) var busy = false
+    /// Drives the Story-level review sheet. Never set it while another sheet
+    /// is on screen; `requestReview()` hands the presentation off instead.
     @Published public var presented = false
+    /// Whether the review sheet is actually on screen, reported by the sheet itself.
+    @Published public private(set) var visible = false
+    /// Bumped by `requestReview()`; the Story closes its tools sheet, then presents.
+    @Published public private(set) var reviewRequests = 0
+    private var reviewPending = false
     public private(set) var files: [String: RouteBatchFile] = [:]
     private let journeyID: String
     private let backend: RouteBatchBackend
@@ -142,13 +149,39 @@ public struct RouteBatchJournalStore {
         }
     }
 
+    // MARK: Presentation
+
+    /// An open batch whose sheet is not on screen can always be reopened,
+    /// whatever `presented` says.
+    public var showsReopen: Bool { stage != .idle && !visible }
+
+    /// Asks the Story to show the review sheet once nothing else is presented.
+    public func requestReview() {
+        guard stage != .idle else { return }
+        presented = false; reviewPending = true; reviewRequests += 1
+    }
+
+    /// Called by the Story when its presenter is free (no tools sheet on screen).
+    public func presentRequestedReview() {
+        guard reviewPending else { return }
+        reviewPending = false
+        if stage != .idle { presented = true }
+    }
+
+    /// Reported by the review sheet's own appearance.
+    public func sheetVisibilityChanged(_ isVisible: Bool) {
+        visible = isVisible
+        if !isVisible { presented = false }
+    }
+
     // MARK: Review
 
     /// False when a batch is already open; the caller imports the items plainly.
     @discardableResult public func pick(_ items: [PhotosPickerItem]) -> Bool {
         guard !busy, stage == .idle || isFinished, items.count > 1 else { return false }
         discardFiles(); draft = nil; journey = nil; operation = nil
-        stage = .reading; presented = true; message = nil
+        stage = .reading; message = nil
+        requestReview()
         Task {
             var picked: [RouteBatchFile] = []
             do {
