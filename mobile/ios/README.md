@@ -17,7 +17,10 @@ sign-in is native (email/password against `/api/auth/sign-in/email`, or Google
 through `ASWebAuthenticationSession` and `/api/native-auth`). The returned
 host-only Secure session cookies go into a fresh owner profile; with no active
 Organization the app lists them, activates the only one, or shows a native
-picker. Registration and password reset open the web page in Safari View
+picker. An account without an Organization gets a native Atlas-name step that
+runs the web gate's create → set-active → bootstrap calls; an Organization
+without an Atlas (also found on a later launch) gets the same step, prefilled,
+for bootstrap only. Registration and password reset open the web page in Safari View
 Controller. There is no in-app web sign-in page. A later launch reopens the Atlas directly while the persistent owner
 profile still holds a session; a missing or expired session returns to the
 welcome screen instead of showing an error.

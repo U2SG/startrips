@@ -11,35 +11,107 @@ struct NativeSignInView: View {
     @State private var google: NativeGoogleLogin?
     @State private var safariURL: WebAccountPage?
     @FocusState private var focus: Field?
-    private enum Field { case email, password }
+    private enum Field { case email, password, atlasName }
+    private let resuming: Bool
 
-    init(session: AtlasSession, origin: URL) {
+    init(session: AtlasSession, origin: URL, resuming: Bool = false) {
         self.session = session
         self.origin = origin
-        _model = StateObject(wrappedValue: NativeSignInModel(session: session, origin: origin))
+        self.resuming = resuming
+        _model = StateObject(wrappedValue: NativeSignInModel(session: session, origin: origin, resuming: resuming))
     }
 
     var body: some View {
         NavigationStack {
             Group {
-                if model.organizations.isEmpty { form } else { organizations }
+                switch model.stage {
+                case .credentials: form
+                case .resuming: checking
+                case .choose(let all): organizations(all)
+                case .name: atlasNameStep
+                }
             }
             .scrollContentBackground(.hidden)
             .background(NightFlight.background.ignoresSafeArea())
             .foregroundStyle(NightFlight.ink)
-            .navigationTitle(model.organizations.isEmpty ? "登录" : "选择图谱")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { session.loginPresented = false }.accessibilityIdentifier("login.cancel")
+                    Button("取消") {
+                        if model.inSetup { session.atlasSetupCancelled = true }
+                        session.loginPresented = false
+                    }.accessibilityIdentifier("login.cancel")
                 }
             }
             .disabled(model.busy)
         }
         .tint(NightFlight.ink)
         .presentationBackground(NightFlight.background)
+        // Setup ends only through 取消 or a created Atlas, never a swipe that reopens it.
+        .interactiveDismissDisabled(model.inSetup)
         .sheet(item: $safariURL) { SafariView(url: $0.url).ignoresSafeArea() }
+        .task { if resuming { model.sessionInstalled() } }
         .onDisappear { model.cancel(); google?.invalidate() }
+    }
+
+    private var title: String {
+        switch model.stage {
+        case .credentials: return "登录"
+        case .choose: return "选择图谱"
+        case .resuming, .name: return "创建图谱"
+        }
+    }
+
+    private var checking: some View {
+        Form {
+            if let message = model.message {
+                Section { Text(message).accessibilityIdentifier("login.message") }
+                Section {
+                    Button("重试") { model.sessionInstalled() }
+                        .buttonStyle(NightFlightPillButtonStyle())
+                        .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+                        .accessibilityIdentifier("atlas.setup.retry")
+                }
+            } else {
+                Section {
+                    ProgressView().frame(maxWidth: .infinity, minHeight: NightFlight.hitTarget)
+                        .listRowBackground(Color.clear)
+                }
+            }
+        }
+    }
+
+    private var atlasNameStep: some View {
+        Form {
+            Section {
+                TextField("图谱名称", text: $model.atlasName)
+                    .submitLabel(.done).focused($focus, equals: .atlasName)
+                    .onSubmit { model.createAtlas() }
+                    .onChange(of: model.atlasName) { _, value in
+                        let clamped = AtlasSetup.clamped(value)
+                        if clamped != value { model.atlasName = clamped }
+                    }
+                    .frame(minHeight: NightFlight.hitTarget)
+                    .accessibilityIdentifier("atlas.setup.name")
+            }
+            if let message = model.message {
+                Section { Text(message).accessibilityIdentifier("login.message") }
+            }
+            Section {
+                Button { focus = nil; model.createAtlas() } label: {
+                    HStack {
+                        Text("创建")
+                        if model.busy { Spacer(); ProgressView().tint(NightFlight.background) }
+                    }
+                }
+                .buttonStyle(NightFlightPillButtonStyle())
+                .disabled(AtlasSetup.title(model.atlasName) == nil)
+                .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+                .accessibilityIdentifier("atlas.setup.create")
+            }
+        }
+        .onAppear { if model.atlasName.isEmpty { focus = .atlasName } }
     }
 
     private var form: some View {
@@ -92,10 +164,10 @@ struct NativeSignInView: View {
         }
     }
 
-    private var organizations: some View {
+    private func organizations(_ all: [OwnerSignIn.Organization]) -> some View {
         Form {
             Section {
-                ForEach(model.organizations) { organization in
+                ForEach(all) { organization in
                     Button(organization.name) { model.choose(organization) }
                         .frame(maxWidth: .infinity, minHeight: NightFlight.hitTarget, alignment: .leading)
                         .accessibilityIdentifier("login.organization." + organization.id)

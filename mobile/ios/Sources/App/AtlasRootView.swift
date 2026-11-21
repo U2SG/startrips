@@ -128,9 +128,9 @@ struct AtlasRootView: View {
         .alert("撤销失败", isPresented: Binding(get: { undoFailure != nil }, set: { if !$0 { undoFailure = nil } })) {
             Button("关闭", role: .cancel) { undoFailure = nil }
         } message: { Text(undoFailure ?? "") }
-        .sheet(isPresented: $session.loginPresented, onDismiss: { connectOwner() }) {
+        .sheet(isPresented: $session.loginPresented, onDismiss: loginDismissed) {
             if let origin = session.origin {
-                NativeSignInView(session: session, origin: origin)
+                NativeSignInView(session: session, origin: origin, resuming: session.loginResumesSetup)
             }
         }
         .alert("图谱暂不可用", isPresented: Binding(get: { router.error != nil }, set: { if !$0 { router.error = nil } })) {
@@ -144,6 +144,14 @@ struct AtlasRootView: View {
         .onChange(of: router.scopeId) { _, _ in covers.reset() }
         .onChange(of: router.rendered) { _, rendered in
             if rendered { sceneRecoveryRequired = false }
+        }
+        .onChange(of: session.atlasSetupRequired) { _, required in
+            // A signed-in owner without an Atlas continues on the create-Atlas step.
+            guard required else { return }
+            session.atlasSetupRequired = false
+            guard !session.loginPresented else { return }
+            session.loginResumesSetup = true
+            session.loginPresented = true
         }
         .onChange(of: session.signInRequired) { _, required in
             // An expired or missing owner session returns to sign-in, not an error alert.
@@ -287,6 +295,18 @@ struct AtlasRootView: View {
         sceneRecoveryRequired = false
         sceneIdentity = UUID()
         connected = false
+    }
+
+    private func loginDismissed() {
+        session.loginResumesSetup = false
+        guard !session.atlasSetupCancelled else {
+            // Leaving the create-Atlas step returns to the welcome screen; the next
+            // launch resumes it from the kept session.
+            session.atlasSetupCancelled = false
+            leaveAtlas { session.disconnect() }
+            return
+        }
+        connectOwner()
     }
 
     private func connectOwner() {
