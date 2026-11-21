@@ -345,6 +345,45 @@ final class RouteBatchTests: XCTestCase {
         return (model, backend, store)
     }
 
+    @MainActor func testReviewIsHandedOffUntilThePresenterIsFree() async throws {
+        let (model, _, _) = try await self.model(case: 1, root: try directory())
+        XCTAssertTrue(model.showsReopen, "An open batch with no sheet on screen offers reopening")
+        let requests = model.reviewRequests
+        model.requestReview()
+        XCTAssertEqual(model.reviewRequests, requests + 1)
+        XCTAssertFalse(model.presented, "Nothing is presented while the tools sheet is still up")
+        model.presentRequestedReview()
+        XCTAssertTrue(model.presented)
+        model.sheetVisibilityChanged(true)
+        XCTAssertFalse(model.showsReopen)
+        model.presented = false
+        model.presentRequestedReview()
+        XCTAssertFalse(model.presented, "A dismissed tools sheet without a request presents nothing")
+    }
+
+    @MainActor func testADroppedPresentationNeverHidesTheReopenEntry() async throws {
+        let (model, _, _) = try await self.model(case: 1, root: try directory())
+        model.requestReview()
+        model.presentRequestedReview()
+        // The system dropped the sheet: `presented` is true but it never appeared.
+        XCTAssertTrue(model.presented)
+        XCTAssertTrue(model.showsReopen)
+        model.requestReview()
+        XCTAssertFalse(model.presented, "Reopening resets the stale flag so the next present is a real change")
+        model.presentRequestedReview()
+        XCTAssertTrue(model.presented)
+        model.sheetVisibilityChanged(true)
+        model.sheetVisibilityChanged(false)
+        XCTAssertFalse(model.presented)
+        XCTAssertTrue(model.showsReopen, "A hidden review stays reachable")
+
+        model.cancelReview()
+        XCTAssertFalse(model.showsReopen)
+        let requests = model.reviewRequests
+        model.requestReview()
+        XCTAssertEqual(model.reviewRequests, requests, "An idle batch has nothing to review")
+    }
+
     @MainActor func testConfirmPersistsTheOperationBeforeUploadingAndAppliesOnce() async throws {
         let root = try directory()
         let (model, backend, store) = try await self.model(case: 1, root: root)
